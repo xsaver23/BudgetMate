@@ -315,10 +315,10 @@ struct SettingsView: View {
     }
 
     private var profileDisplayName: String {
-        let profileId = UUID(uuidString: authStore.currentUserScopeId)
-        return memberViewModel.members
-            .first(where: { $0.id == profileId })?
-            .displayName ?? memberViewModel.activeMember.displayName
+        memberViewModel.profileMember(
+            userScopeId: authStore.currentUserScopeId,
+            email: authStore.userEmail
+        )?.displayName ?? memberViewModel.activeMember.displayName
     }
 
     private var currentMembership: BudgetMembership? {

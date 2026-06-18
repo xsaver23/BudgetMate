@@ -39,6 +39,7 @@ final class MemberViewModel: ObservableObject {
     private var repository: BudgetRepository
     private let userDefaults: UserDefaults
     private var currentUserScopeId: String
+    private var currentUserEmail: String?
     private let memberPalette = ["#3B82F6", "#F97316", "#10B981", "#8B5CF6", "#EF4444", "#06B6D4"]
 
     init(
@@ -54,6 +55,7 @@ final class MemberViewModel: ObservableObject {
         self.members = resolvedMembers
         self.userDefaults = userDefaults
         self.currentUserScopeId = userScopeId
+        self.currentUserEmail = nil
         self.isProfileComplete = userDefaults.bool(
             forKey: Self.profileCompletedKey(baseKey: profileCompletedKey, userScopeId: userScopeId)
         )
@@ -90,16 +92,26 @@ final class MemberViewModel: ObservableObject {
 
     func replaceMembers(with cloudMembers: [BudgetMember]) {
         guard !cloudMembers.isEmpty else { return }
-        members = cloudMembers.sorted { lhs, rhs in
+        let sortedMembers = cloudMembers.sorted { lhs, rhs in
             if lhs.role != rhs.role {
                 return lhs.role == .owner
             }
             return lhs.createdDate < rhs.createdDate
         }
+        members = sortedMembers
+        if let signedInMember = signedInMember(in: sortedMembers) {
+            activeMemberId = signedInMember.id
+        }
     }
 
     func switchUser(to userScopeId: String, email: String?) {
-        guard currentUserScopeId != userScopeId else { return }
+        currentUserEmail = email
+        guard currentUserScopeId != userScopeId else {
+            if let signedInMember = signedInMember(in: members) {
+                activeMemberId = signedInMember.id
+            }
+            return
+        }
         currentUserScopeId = userScopeId
         repository = LocalBudgetRepository(
             userDefaults: userDefaults,
@@ -124,6 +136,14 @@ final class MemberViewModel: ObservableObject {
         } else {
             activeMemberId = members.first?.id ?? UUID()
         }
+
+        if let signedInMember = signedInMember(in: members) {
+            activeMemberId = signedInMember.id
+        }
+    }
+
+    func profileMember(userScopeId: String, email: String?) -> BudgetMember? {
+        signedInMember(in: members, userScopeId: userScopeId, email: email)
     }
 
     @discardableResult
@@ -183,8 +203,18 @@ final class MemberViewModel: ObservableObject {
         let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return false }
 
-        let profileId = UUID(uuidString: userScopeId) ?? activeMemberId
-        guard let index = members.firstIndex(where: { $0.id == profileId }) else { return false }
+        let profileId = UUID(uuidString: userScopeId)
+        let normalizedEmail = Self.normalizedEmail(currentUserEmail)
+        guard let index = members.firstIndex(where: { member in
+            if let profileId, member.id == profileId {
+                return true
+            }
+
+            guard let normalizedEmail else { return false }
+            return Self.normalizedEmail(member.email) == normalizedEmail
+        }) else {
+            return false
+        }
 
         let current = members[index]
         let updatedProfile = BudgetMember(
@@ -263,10 +293,35 @@ final class MemberViewModel: ObservableObject {
     }
 
     private func ensureActiveMemberIsValid() {
-        if !members.contains(where: { $0.id == activeMemberId }),
-           let firstMemberId = members.first?.id {
+        if let signedInMember = signedInMember(in: members),
+           activeMemberId != signedInMember.id {
+            activeMemberId = signedInMember.id
+        } else if !members.contains(where: { $0.id == activeMemberId }),
+                  let firstMemberId = members.first?.id {
             activeMemberId = firstMemberId
         }
+    }
+
+    private func signedInMember(in members: [BudgetMember]) -> BudgetMember? {
+        signedInMember(in: members, userScopeId: currentUserScopeId, email: currentUserEmail)
+    }
+
+    private func signedInMember(in members: [BudgetMember], userScopeId: String, email: String?) -> BudgetMember? {
+        if let userId = UUID(uuidString: userScopeId),
+           let member = members.first(where: { $0.id == userId }) {
+            return member
+        }
+
+        guard let normalizedEmail = Self.normalizedEmail(email) else { return nil }
+        return members.first { Self.normalizedEmail($0.email) == normalizedEmail }
+    }
+
+    private static func normalizedEmail(_ email: String?) -> String? {
+        let normalized = email?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard let normalized, !normalized.isEmpty else { return nil }
+        return normalized
     }
 
     private func activeMemberKey(for userScopeId: String) -> String {
