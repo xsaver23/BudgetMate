@@ -147,6 +147,19 @@ final class MemberViewModel: ObservableObject {
     }
 
     @discardableResult
+    func restoreProfileIfPresent(from cloudMembers: [BudgetMember], userScopeId: String, email: String?) -> Bool {
+        guard let cloudProfile = signedInMember(in: cloudMembers, userScopeId: userScopeId, email: email) else {
+            return false
+        }
+
+        replaceMembers(with: cloudMembers)
+        activeMemberId = cloudProfile.id
+        isProfileComplete = true
+        persistProfileCompleted()
+        return true
+    }
+
+    @discardableResult
     func inviteMember(displayName: String, email: String?) -> BudgetMember? {
         let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return nil }

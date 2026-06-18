@@ -13,6 +13,8 @@ struct BudgetMateApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var appliedUserScopeId: String?
     @State private var lastAutoSyncedAtByScope: [String: Date] = [:]
+    @State private var checkedCloudProfileUserScopeId: String?
+    @State private var isCheckingCloudProfile = false
     private let persistenceController = PersistenceController.shared
 
     init() {
@@ -38,6 +40,8 @@ struct BudgetMateApp: App {
                         .transition(.opacity)
                         .preferredColorScheme(settingsStore.settings.appearance.colorScheme)
                         .task(id: authStore.currentUserScopeId + authStore.currentBudgetScopeId + String(memberViewModel.isProfileComplete)) {
+                            applyUserScope(authStore.currentUserScopeId, budgetScopeId: authStore.currentBudgetScopeId)
+                            await restoreCloudProfileIfNeeded(authStore.currentUserScopeId)
                             await selectSharedBudgetIfNeeded(authStore.currentUserScopeId)
                             applyUserScope(authStore.currentUserScopeId, budgetScopeId: authStore.currentBudgetScopeId)
                             appliedUserScopeId = authStore.currentUserScopeId
@@ -93,7 +97,7 @@ struct BudgetMateApp: App {
 
     @ViewBuilder
     private var authenticatedContent: some View {
-        if appliedUserScopeId != authStore.currentUserScopeId {
+        if appliedUserScopeId != authStore.currentUserScopeId || isCheckingCloudProfile {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(AppTheme.background)
@@ -124,6 +128,32 @@ struct BudgetMateApp: App {
             }
         } catch {
             // Keep the personal budget if membership lookup fails.
+        }
+    }
+
+    @MainActor
+    private func restoreCloudProfileIfNeeded(_ userScopeId: String) async {
+        guard !memberViewModel.isProfileComplete,
+              checkedCloudProfileUserScopeId != userScopeId else {
+            return
+        }
+
+        checkedCloudProfileUserScopeId = userScopeId
+        isCheckingCloudProfile = true
+        defer { isCheckingCloudProfile = false }
+
+        do {
+            let cloudMembers = try await cloudSyncStore.fetchMembers(
+                userScopeId: userScopeId,
+                budgetScopeId: userScopeId
+            )
+            _ = memberViewModel.restoreProfileIfPresent(
+                from: cloudMembers,
+                userScopeId: userScopeId,
+                email: authStore.userEmail
+            )
+        } catch {
+            // If the cloud lookup fails, keep the local profile flow available.
         }
     }
 
