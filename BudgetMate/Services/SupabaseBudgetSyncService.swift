@@ -427,8 +427,13 @@ final class SupabaseBudgetSyncService {
         let existingSettings = try await fetchSettings(userScopeId: userScopeId, budgetScopeId: budgetId.uuidString)
         let settingsRow = CloudBudgetSettingsRow(settings: settings, userId: userId, budgetId: budgetId)
         let memberRows = members.map { CloudBudgetMemberRow(member: $0, userId: userId, budgetId: budgetId) }
-        let transactionRows = transactions.map { CloudTransactionRow(transaction: $0, userId: userId, budgetId: budgetId) }
-        let settlementRows = settlements.map { CloudSettlementRow(settlement: $0, userId: userId, budgetId: budgetId) }
+        let signedInMemberIds = signedInMemberIds(for: userId, in: members)
+        let transactionRows = transactions
+            .filter { shouldBulkPush(transaction: $0, signedInMemberIds: signedInMemberIds) }
+            .map { CloudTransactionRow(transaction: $0, userId: userId, budgetId: budgetId) }
+        let settlementRows = settlements
+            .filter { shouldBulkPush(settlement: $0, signedInMemberIds: signedInMemberIds) }
+            .map { CloudSettlementRow(settlement: $0, userId: userId, budgetId: budgetId) }
 
         if budgetId == userId && (existingSettings == nil || settings != .default) {
             try await client
@@ -772,6 +777,25 @@ final class SupabaseBudgetSyncService {
         let memberIds = Set(members.map(\.id))
         let sampleIds = Set(BudgetSampleData.members.map(\.id))
         return memberIds == sampleIds
+    }
+
+    private func signedInMemberIds(for userId: UUID, in members: [BudgetMember]) -> Set<UUID> {
+        let matchingIds = members.compactMap { member -> UUID? in
+            if member.id == userId || member.authUserId == userId {
+                return member.id
+            }
+            return nil
+        }
+
+        return Set(matchingIds.isEmpty ? [userId] : matchingIds)
+    }
+
+    private func shouldBulkPush(transaction: Transaction, signedInMemberIds: Set<UUID>) -> Bool {
+        signedInMemberIds.contains(transaction.createdByMemberId)
+    }
+
+    private func shouldBulkPush(settlement: Settlement, signedInMemberIds: Set<UUID>) -> Bool {
+        signedInMemberIds.contains(settlement.fromMemberId) || signedInMemberIds.contains(settlement.toMemberId)
     }
 
     private func merge(
