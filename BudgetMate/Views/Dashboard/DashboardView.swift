@@ -13,6 +13,7 @@ struct DashboardView: View {
     @State private var selectedTransaction: Transaction?
     @State private var pendingSettlement: SettlementSuggestion?
     @State private var breakdownPresentation: BreakdownPresentation?
+    @State private var isShowingSettlementList = false
     @State private var derivedMetrics = DashboardDerivedMetrics()
 
     @Query(sort: \Transaction.date, order: .reverse)
@@ -101,6 +102,21 @@ struct DashboardView: View {
                     members: memberViewModel.members,
                     currencySymbol: currencySymbol,
                     onSettle: { settle(presentation.suggestion) }
+                )
+            }
+            .sheet(isPresented: $isShowingSettlementList) {
+                SettlementListView(
+                    suggestions: derivedMetrics.settlementCache.suggestions,
+                    currencySymbol: currencySymbol,
+                    onClose: { isShowingSettlementList = false },
+                    onBreakdown: { settlement in
+                        isShowingSettlementList = false
+                        breakdownPresentation = derivedMetrics.settlementCache.makeBreakdownPresentation(for: settlement)
+                    },
+                    onSettle: { settlement in
+                        isShowingSettlementList = false
+                        pendingSettlement = settlement
+                    }
                 )
             }
             .overlay {
@@ -331,7 +347,10 @@ struct DashboardView: View {
     // MARK: - Who owes whom
 
     private var oweCard: some View {
-        VStack(spacing: 10) {
+        let suggestions = derivedMetrics.settlementCache.suggestions
+        let displayedSuggestions = Array(suggestions.prefix(3))
+
+        return VStack(spacing: 10) {
             HStack {
                 HStack(spacing: 8) {
                     Text("$")
@@ -347,16 +366,28 @@ struct DashboardView: View {
 
                 Spacer()
 
-                Text("SPLIT BILL")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.6))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(BudgetBeaverPalette.bank, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                HStack(spacing: 8) {
+                    if suggestions.count > 1 {
+                        Button("More") {
+                            isShowingSettlementList = true
+                        }
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(BudgetBeaverPalette.water)
+                    }
+
+                    Text("SPLIT BILL")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.6))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(BudgetBeaverPalette.bank, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
             }
 
-            if let settlement = derivedMetrics.settlementCache.suggestions.first {
-                beaverSettlementCard(settlement)
+            if !displayedSuggestions.isEmpty {
+                ForEach(displayedSuggestions) { settlement in
+                    beaverSettlementRow(settlement)
+                }
             } else {
                 HStack(spacing: 10) {
                     Image(systemName: "checkmark.circle.fill")
@@ -375,70 +406,54 @@ struct DashboardView: View {
         .shadow(color: Color.black.opacity(0.08), radius: 16, x: 0, y: 8)
     }
 
-    private func beaverSettlementCard(_ settlement: SettlementSuggestion) -> some View {
-        VStack(spacing: 10) {
+    private func beaverSettlementRow(_ settlement: SettlementSuggestion) -> some View {
+        HStack(alignment: .center, spacing: 12) {
             Button {
                 breakdownPresentation = derivedMetrics.settlementCache.makeBreakdownPresentation(for: settlement)
             } label: {
-                ZStack(alignment: .topTrailing) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text("\(firstName(settlement.from).uppercased()) OWES \(firstName(settlement.to).uppercased())")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(BudgetBeaverPalette.muted)
-                            .padding(.bottom, 6)
+                HStack(spacing: 10) {
+                    HStack(spacing: -8) {
+                        settlementAvatar(member: settlement.from, color: avatarColor(for: settlement.from), borderColor: BudgetBeaverPalette.innerSurface)
+                        settlementAvatar(member: settlement.to, color: avatarColor(for: settlement.to), borderColor: BudgetBeaverPalette.innerSurface)
+                    }
 
-                        Text(amount(settlement.amount))
-                            .font(.largeTitle.weight(.black))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("\(firstName(settlement.from)) owes \(firstName(settlement.to))")
+                            .font(.subheadline.weight(.bold))
                             .foregroundStyle(BudgetBeaverPalette.ink)
                             .lineLimit(1)
-                            .minimumScaleFactor(0.55)
-                            .padding(.bottom, 2)
+                            .minimumScaleFactor(0.75)
 
                         Text("Tap for breakdown")
-                            .font(.subheadline.weight(.bold))
+                            .font(.caption.weight(.bold))
                             .foregroundStyle(BudgetBeaverPalette.jenBlue)
-
-                        Spacer(minLength: 0)
                     }
-                    .frame(maxWidth: .infinity, minHeight: 82, alignment: .leading)
-                    .padding(.trailing, 90)
 
-                    HStack(spacing: -8) {
-                        settlementAvatar(
-                            member: settlement.from,
-                            color: BudgetBeaverPalette.rebBrown,
-                            borderColor: BudgetBeaverPalette.innerSurface
-                        )
-                        settlementAvatar(
-                            member: settlement.to,
-                            color: BudgetBeaverPalette.jenBlue,
-                            borderColor: BudgetBeaverPalette.innerSurface
-                        )
-                    }
+                    Spacer(minLength: 6)
+
+                    Text(amount(settlement.amount))
+                        .font(.title3.weight(.black))
+                        .foregroundStyle(BudgetBeaverPalette.amountRed)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
                 }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(BudgetBeaverPalette.innerSurface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             }
             .buttonStyle(.plain)
 
             Button {
                 pendingSettlement = settlement
             } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 18, weight: .bold))
-
-                    Text("Settle Balance")
-                        .font(.headline.weight(.bold))
-                }
-                .foregroundStyle(Color.white)
-                .frame(maxWidth: .infinity, minHeight: 46)
-                .background(BudgetBeaverPalette.darkButton, in: Capsule())
+                Image(systemName: "checkmark")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(Color.white)
+                    .frame(width: 34, height: 34)
+                    .background(BudgetBeaverPalette.darkButton, in: Circle())
             }
             .buttonStyle(.plain)
         }
+        .padding(12)
+        .background(BudgetBeaverPalette.innerSurface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(settlement.from.displayName) owes \(settlement.to.displayName) \(amount(settlement.amount)). Tap for breakdown.")
     }
@@ -450,6 +465,10 @@ struct DashboardView: View {
             .frame(width: 44, height: 44)
             .background(color, in: Circle())
             .overlay(Circle().stroke(borderColor, lineWidth: 3))
+    }
+
+    private func avatarColor(for member: BudgetMember) -> Color {
+        Color(hex: member.colorHex)
     }
 
     private func settlementConfirmationOverlay(_ settlement: SettlementSuggestion) -> some View {
@@ -861,6 +880,130 @@ struct DashboardView: View {
         // Segmented controls are tight; prefer first name for readability.
         let firstWord = trimmed.split(separator: " ").first.map(String.init) ?? trimmed
         return firstWord
+    }
+}
+
+private struct SettlementListView: View {
+    let suggestions: [SettlementSuggestion]
+    let currencySymbol: String
+    let onClose: () -> Void
+    let onBreakdown: (SettlementSuggestion) -> Void
+    let onSettle: (SettlementSuggestion) -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 14) {
+                    if suggestions.isEmpty {
+                        VStack(spacing: 10) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 34, weight: .semibold))
+                                .foregroundStyle(BudgetBeaverPalette.forest)
+                            Text("No split balances right now.")
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(BudgetBeaverPalette.ink)
+                            Text("When people owe each other money, each balance will show here.")
+                                .font(.subheadline)
+                                .foregroundStyle(BudgetBeaverPalette.grayText)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding(24)
+                        .frame(maxWidth: .infinity)
+                        .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                                .stroke(BudgetBeaverPalette.border, lineWidth: 1)
+                        )
+                    } else {
+                        ForEach(suggestions) { settlement in
+                            settlementListRow(settlement)
+                        }
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 18)
+            }
+            .background(AppTheme.background)
+            .navigationTitle("Who Owes Who")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done", action: onClose)
+                        .font(.headline.weight(.semibold))
+                }
+            }
+        }
+    }
+
+    private func settlementListRow(_ settlement: SettlementSuggestion) -> some View {
+        VStack(spacing: 12) {
+            Button {
+                onBreakdown(settlement)
+            } label: {
+                HStack(spacing: 12) {
+                    HStack(spacing: -8) {
+                        avatar(for: settlement.from)
+                        avatar(for: settlement.to)
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(firstName(settlement.from)) owes \(firstName(settlement.to))")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(BudgetBeaverPalette.ink)
+
+                        Text("Tap for breakdown")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(BudgetBeaverPalette.jenBlue)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Text(amount(settlement.amount))
+                        .font(.title3.weight(.black))
+                        .foregroundStyle(BudgetBeaverPalette.amountRed)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.65)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                onSettle(settlement)
+            } label: {
+                Label("Settle Balance", systemImage: "checkmark")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(Color.white)
+                    .frame(maxWidth: .infinity, minHeight: 46)
+                    .background(BudgetBeaverPalette.darkButton, in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(16)
+        .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .stroke(BudgetBeaverPalette.border, lineWidth: 1)
+        )
+    }
+
+    private func avatar(for member: BudgetMember) -> some View {
+        Text(String(member.initials.prefix(1)).uppercased())
+            .font(.system(size: 20, weight: .black, design: .rounded))
+            .foregroundStyle(Color.white)
+            .frame(width: 44, height: 44)
+            .background(Color(hex: member.colorHex), in: Circle())
+            .overlay(Circle().stroke(BudgetBeaverPalette.paper, lineWidth: 3))
+    }
+
+    private func amount(_ value: Double) -> String {
+        CurrencyFormatter.amountString(value, symbol: currencySymbol)
+    }
+
+    private func firstName(_ member: BudgetMember) -> String {
+        let first = member.displayName.split(separator: " ").first.map(String.init) ?? member.displayName
+        let trimmed = first.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? member.displayName : trimmed
     }
 }
 
