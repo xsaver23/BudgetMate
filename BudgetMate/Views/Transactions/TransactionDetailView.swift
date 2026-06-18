@@ -1,0 +1,362 @@
+import SwiftData
+import SwiftUI
+
+/// Optional context when opening from a balance breakdown line.
+struct TransactionBalanceContext {
+    let explanation: String
+    let signedAmount: Double
+}
+
+struct TransactionDetailView: View {
+    let transaction: Transaction
+    let members: [BudgetMember]
+    let currencySymbol: String
+    var balanceContext: TransactionBalanceContext? = nil
+    private let membersById: [UUID: BudgetMember]
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var authStore: AuthSessionStore
+    @EnvironmentObject private var cloudSyncStore: CloudSyncStore
+    @Query private var allTransactions: [Transaction]
+    @State private var isEditing = false
+    @State private var isShowingDeleteOptions = false
+
+    init(
+        transaction: Transaction,
+        members: [BudgetMember],
+        currencySymbol: String,
+        balanceContext: TransactionBalanceContext? = nil
+    ) {
+        self.transaction = transaction
+        self.members = members
+        self.currencySymbol = currencySymbol
+        self.balanceContext = balanceContext
+        self.membersById = Dictionary(uniqueKeysWithValues: members.map { ($0.id, $0) })
+    }
+
+    private var payer: BudgetMember? {
+        membersById[transaction.createdByMemberId]
+    }
+
+    private var sourceTransaction: Transaction {
+        let sourceId = transaction.recurringSourceId ?? transaction.id
+        return allTransactions.first {
+            $0.id == sourceId &&
+                $0.ownerUserId == authStore.currentBudgetScopeId
+        } ?? transaction
+    }
+
+    private var shouldShowRecurringActions: Bool {
+        transaction.isMonthlyRecurring || transaction.isGeneratedRecurringOccurrence
+    }
+
+    private var sortedSplits: [TransactionSplit] {
+        transaction.splits.sorted { $0.amount > $1.amount }
+    }
+
+    private var amountTint: Color {
+        transaction.type == .income ? AppTheme.income : AppTheme.expense
+    }
+
+    private var signedAmount: String {
+        let sign = transaction.type == .income ? "+" : "-"
+        return "\(sign)\(CurrencyFormatter.amountString(transaction.amount, symbol: currencySymbol))"
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(spacing: 16) {
+                    headerCard
+                    if let balanceContext {
+                        balanceContextCard(balanceContext)
+                    }
+                    detailsCard
+                    if transaction.isSplit {
+                        splitCard
+                    }
+                    deleteButton
+                }
+                .padding()
+            }
+            .background(AppTheme.background)
+            .navigationTitle("Transaction")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .fontWeight(.semibold)
+                }
+
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Edit") {
+                        isEditing = true
+                    }
+                }
+            }
+            .sheet(isPresented: $isEditing) {
+                AddTransactionView(transactionToEdit: sourceTransaction)
+            }
+            .confirmationDialog("Recurring Transaction", isPresented: $isShowingDeleteOptions) {
+                Button("Stop Future Occurrences", role: .destructive) {
+                    stopFutureOccurrences()
+                }
+
+                Button("Delete Entire Series", role: .destructive) {
+                    deleteTransaction(sourceTransaction)
+                }
+
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("Choose what should happen to this monthly recurring transaction.")
+            }
+        }
+    }
+
+    private func balanceContextCard(_ context: TransactionBalanceContext) -> some View {
+        CardContainer(showsShadow: false) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("In this balance")
+                    .font(.roundedBold(16))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Text(context.explanation)
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.textSecondary)
+                Text(signedBalanceAmount(context.signedAmount))
+                    .font(.roundedBold(22))
+                    .foregroundStyle(context.signedAmount >= 0 ? AppTheme.expense : AppTheme.income)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func signedBalanceAmount(_ value: Double) -> String {
+        let sign = value >= 0 ? "+" : "−"
+        return "\(sign)\(CurrencyFormatter.amountString(abs(value), symbol: currencySymbol))"
+    }
+
+    private var headerCard: some View {
+        CardContainer(showsShadow: false) {
+            VStack(spacing: 10) {
+                Text(transaction.title)
+                    .font(.roundedBold(20))
+                    .foregroundStyle(AppTheme.textPrimary)
+                    .multilineTextAlignment(.center)
+
+                Text(signedAmount)
+                    .font(.roundedBold(40))
+                    .foregroundStyle(amountTint)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+
+                Text(transaction.type == .expense ? "Expense" : "Income")
+                    .font(.caption.weight(.semibold))
+                    .tracking(0.5)
+                    .foregroundStyle(amountTint)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(amountTint.opacity(0.14)))
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var detailsCard: some View {
+        CardContainer(showsShadow: false) {
+            VStack(spacing: 0) {
+                detailRow(label: "Category") {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(CategoryColor.color(for: transaction.category))
+                            .frame(width: 10, height: 10)
+                        Text(transaction.category.displayName)
+                            .foregroundStyle(AppTheme.textPrimary)
+                    }
+                }
+
+                Divider()
+
+                if let paymentMethod = transaction.paymentMethod {
+                    detailRow(label: "Payment") {
+                        Text(paymentMethod.displayName)
+                            .foregroundStyle(AppTheme.textPrimary)
+                    }
+                    Divider()
+                }
+
+                detailRow(label: "Date") {
+                    Text(transaction.date, format: .dateTime.weekday(.wide).month().day().year())
+                        .foregroundStyle(AppTheme.textPrimary)
+                }
+
+                Divider()
+
+                if transaction.isMonthlyRecurring {
+                    detailRow(label: "Repeats") {
+                        Text("Monthly")
+                            .foregroundStyle(AppTheme.textPrimary)
+                    }
+
+                    Divider()
+                }
+
+                detailRow(label: transaction.type == .expense ? "Paid by" : "Logged by") {
+                    HStack(spacing: 8) {
+                        if let payer {
+                            MemberInitialsBadge(
+                                initials: String(payer.initials.prefix(1)).uppercased(),
+                                colorHex: payer.colorHex,
+                                size: 24,
+                                accessibilityLabel: "Member \(payer.displayName)",
+                                showsShadow: false
+                            )
+                            Text(payer.displayName)
+                                .foregroundStyle(AppTheme.textPrimary)
+                        } else {
+                            Text("Unknown")
+                                .foregroundStyle(AppTheme.textSecondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var splitCard: some View {
+        CardContainer(showsShadow: false) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Split \(transaction.splits.count) ways")
+                    .font(.roundedBold(18))
+                    .foregroundStyle(AppTheme.textPrimary)
+
+                if let payer {
+                    Text("\(firstName(payer)) paid \(CurrencyFormatter.amountString(transaction.amount, symbol: currencySymbol)). Each person below shows their share.")
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                ForEach(sortedSplits, id: \.id) { split in
+                    splitRow(split)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func splitRow(_ split: TransactionSplit) -> some View {
+        let member = membersById[split.memberId]
+        let isPayer = split.memberId == transaction.createdByMemberId
+        let percent = transaction.amount > 0 ? Int((split.amount / transaction.amount * 100).rounded()) : 0
+        return HStack(spacing: 10) {
+            MemberInitialsBadge(
+                initials: String((member?.initials ?? "?").prefix(1)).uppercased(),
+                colorHex: member?.colorHex ?? "#9CA3AF",
+                size: 30,
+                accessibilityLabel: member.map { "Member \($0.displayName)" },
+                showsShadow: false
+            )
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(member?.displayName ?? "Unknown")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Text(splitCaption(for: member, isPayer: isPayer))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(isPayer ? AppTheme.brand : AppTheme.textSecondary)
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(CurrencyFormatter.amountString(split.amount, symbol: currencySymbol))
+                    .font(.roundedBold(15))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Text("\(percent)%")
+                    .font(.caption2)
+                    .foregroundStyle(AppTheme.textSecondary)
+            }
+        }
+    }
+
+    private func splitCaption(for member: BudgetMember?, isPayer: Bool) -> String {
+        if isPayer { return "Paid the bill" }
+        if let payer {
+            return "Owes \(firstName(payer))"
+        }
+        return "Owes payer"
+    }
+
+    private func firstName(_ member: BudgetMember) -> String {
+        let first = member.displayName.split(separator: " ").first.map(String.init) ?? member.displayName
+        let trimmed = first.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? member.displayName : trimmed
+    }
+
+    private var deleteButton: some View {
+        Button(role: .destructive) {
+            if shouldShowRecurringActions {
+                isShowingDeleteOptions = true
+            } else {
+                deleteTransaction(transaction)
+            }
+        } label: {
+            Label(shouldShowRecurringActions ? "Manage Recurring Transaction" : "Delete Transaction", systemImage: "trash")
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+        }
+        .buttonStyle(.bordered)
+        .tint(AppTheme.expense)
+        .controlSize(.large)
+    }
+
+    private func stopFutureOccurrences() {
+        let calendar = Calendar.current
+        let source = sourceTransaction
+        let stopDate = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: transaction.date)) ?? .now
+        source.recurrenceRule = Transaction.monthlyRecurrenceRule(until: stopDate)
+        try? modelContext.save()
+        cloudSyncStore.saveTransaction(
+            source,
+            userScopeId: authStore.currentUserScopeId,
+            budgetScopeId: authStore.currentBudgetScopeId
+        )
+        dismiss()
+    }
+
+    private func deleteTransaction(_ transactionToDelete: Transaction) {
+        cloudSyncStore.deleteTransaction(
+            transactionToDelete,
+            userScopeId: authStore.currentUserScopeId,
+            budgetScopeId: authStore.currentBudgetScopeId
+        )
+        modelContext.delete(transactionToDelete)
+        dismiss()
+    }
+
+    private func detailRow<Trailing: View>(
+        label: String,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        HStack {
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.textSecondary)
+            Spacer()
+            trailing()
+                .font(.subheadline.weight(.medium))
+        }
+        .padding(.vertical, 12)
+    }
+}
+
+#Preview {
+    TransactionDetailView(
+        transaction: PreviewTransactions.samples[1],
+        members: MemberSampleData.members,
+        currencySymbol: "$"
+    )
+    .environmentObject(AuthSessionStore())
+    .environmentObject(CloudSyncStore())
+}

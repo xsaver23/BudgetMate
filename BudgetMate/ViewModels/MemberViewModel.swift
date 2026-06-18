@@ -1,0 +1,353 @@
+import Foundation
+
+enum MemberMutationError: LocalizedError {
+    case cannotDeleteLastMember
+    case cannotDeleteLastOwner
+
+    var errorDescription: String? {
+        switch self {
+        case .cannotDeleteLastMember:
+            return "You cannot remove the last budget member."
+        case .cannotDeleteLastOwner:
+            return "You cannot remove the last owner. Assign another owner first."
+        }
+    }
+}
+
+struct MemberRemovalResult {
+    let removedMemberIds: Set<UUID>
+    let didReassignActiveMember: Bool
+}
+
+@MainActor
+final class MemberViewModel: ObservableObject {
+    @Published private(set) var currentBudget: Budget
+    @Published private(set) var isProfileComplete: Bool
+    @Published var members: [BudgetMember] {
+        didSet {
+            persistMembers()
+            ensureActiveMemberIsValid()
+        }
+    }
+
+    @Published var activeMemberId: UUID {
+        didSet { persistActiveMemberId() }
+    }
+
+    private let activeMemberKey = "budgetmate.activeMemberId"
+    private let profileCompletedKey = "budgetmate.profileCompleted"
+    private var repository: BudgetRepository
+    private let userDefaults: UserDefaults
+    private var currentUserScopeId: String
+    private let memberPalette = ["#3B82F6", "#F97316", "#10B981", "#8B5CF6", "#EF4444", "#06B6D4"]
+
+    init(
+        repository: BudgetRepository = LocalBudgetRepository(),
+        userDefaults: UserDefaults = .standard,
+        userScopeId: String = "local"
+    ) {
+        let loadedBudget = repository.loadCurrentBudget()
+        let resolvedMembers = loadedBudget.members
+
+        self.repository = repository
+        self.currentBudget = loadedBudget
+        self.members = resolvedMembers
+        self.userDefaults = userDefaults
+        self.currentUserScopeId = userScopeId
+        self.isProfileComplete = userDefaults.bool(
+            forKey: Self.profileCompletedKey(baseKey: profileCompletedKey, userScopeId: userScopeId)
+        )
+
+        if let storedId = userDefaults.string(forKey: Self.activeMemberKey(baseKey: activeMemberKey, userScopeId: userScopeId)),
+           let uuid = UUID(uuidString: storedId),
+           resolvedMembers.contains(where: { $0.id == uuid }) {
+            activeMemberId = uuid
+        } else {
+            activeMemberId = resolvedMembers.first?.id ?? UUID()
+        }
+    }
+
+    var budgetName: String { currentBudget.name }
+    var syncMode: BudgetSyncMode { repository.syncMode }
+
+    var activeMember: BudgetMember {
+        members.first(where: { $0.id == activeMemberId }) ?? members.first ?? BudgetMember(
+            name: "Unknown User",
+            initials: "?",
+            colorHex: "#9CA3AF"
+        )
+    }
+
+    /// Adds any demo members that are not already in the budget (matched by id).
+    func mergeDemoMembers(_ demoMembers: [BudgetMember]) {
+        var updated = members
+        for demo in demoMembers where !updated.contains(where: { $0.id == demo.id }) {
+            updated.append(demo)
+        }
+        guard updated.count != members.count else { return }
+        members = updated
+    }
+
+    func replaceMembers(with cloudMembers: [BudgetMember]) {
+        guard !cloudMembers.isEmpty else { return }
+        members = cloudMembers.sorted { lhs, rhs in
+            if lhs.role != rhs.role {
+                return lhs.role == .owner
+            }
+            return lhs.createdDate < rhs.createdDate
+        }
+    }
+
+    func switchUser(to userScopeId: String, email: String?) {
+        guard currentUserScopeId != userScopeId else { return }
+        currentUserScopeId = userScopeId
+        repository = LocalBudgetRepository(
+            userDefaults: userDefaults,
+            userScopeId: userScopeId,
+            fallbackBudget: Self.defaultBudget(userScopeId: userScopeId, email: email)
+        )
+
+        var loadedBudget = repository.loadCurrentBudget()
+        let fallbackBudget = Self.defaultBudget(userScopeId: userScopeId, email: email)
+        if Self.shouldReplaceSampleBudget(loadedBudget, forUserScopeId: userScopeId) {
+            loadedBudget = fallbackBudget
+            repository.saveCurrentBudget(loadedBudget)
+        }
+        currentBudget = loadedBudget
+        members = loadedBudget.members
+        isProfileComplete = userDefaults.bool(forKey: profileCompletedKey(for: userScopeId))
+
+        if let storedId = userDefaults.string(forKey: activeMemberKey(for: userScopeId)),
+           let uuid = UUID(uuidString: storedId),
+           members.contains(where: { $0.id == uuid }) {
+            activeMemberId = uuid
+        } else {
+            activeMemberId = members.first?.id ?? UUID()
+        }
+    }
+
+    @discardableResult
+    func inviteMember(displayName: String, email: String?) -> BudgetMember? {
+        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return nil }
+
+        let trimmedEmail = email?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedEmail = (trimmedEmail?.isEmpty == true) ? nil : trimmedEmail
+
+        let newMember = BudgetMember(
+            displayName: trimmedName,
+            email: normalizedEmail,
+            initials: initials(from: trimmedName),
+            color: nextColor(),
+            role: .member,
+            inviteStatus: .invited,
+            joinedDate: nil
+        )
+
+        members.append(newMember)
+        return newMember
+    }
+
+    func completeProfile(displayName: String) {
+        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+
+        let current = activeMember
+        let profileMember = BudgetMember(
+            id: current.id,
+            displayName: trimmedName,
+            email: current.email,
+            initials: initials(from: trimmedName),
+            color: current.color,
+            role: .owner,
+            inviteStatus: .active,
+            joinedDate: current.joinedDate ?? .now,
+            createdDate: current.createdDate
+        )
+
+        var updatedMembers = members
+        if let index = updatedMembers.firstIndex(where: { $0.id == current.id }) {
+            updatedMembers[index] = profileMember
+        } else {
+            updatedMembers.insert(profileMember, at: 0)
+        }
+
+        activeMemberId = profileMember.id
+        members = updatedMembers
+        isProfileComplete = true
+        persistProfileCompleted()
+    }
+
+    @discardableResult
+    func updateProfileName(_ displayName: String, userScopeId: String) -> Bool {
+        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return false }
+
+        let profileId = UUID(uuidString: userScopeId) ?? activeMemberId
+        guard let index = members.firstIndex(where: { $0.id == profileId }) else { return false }
+
+        let current = members[index]
+        let updatedProfile = BudgetMember(
+            id: current.id,
+            displayName: trimmedName,
+            email: current.email,
+            initials: initials(from: trimmedName),
+            color: current.color,
+            role: current.role,
+            inviteStatus: current.inviteStatus,
+            joinedDate: current.joinedDate,
+            createdDate: current.createdDate
+        )
+
+        var updatedMembers = members
+        updatedMembers[index] = updatedProfile
+        members = updatedMembers
+        return true
+    }
+
+    @discardableResult
+    func removeMembers(at offsets: IndexSet) throws -> MemberRemovalResult {
+        let idsToRemove = Set(offsets.compactMap { members[safe: $0]?.id })
+        let remainingMembers = members.filter { !idsToRemove.contains($0.id) }
+
+        if remainingMembers.isEmpty {
+            throw MemberMutationError.cannotDeleteLastMember
+        }
+
+        if !remainingMembers.contains(where: { $0.role == .owner }) {
+            throw MemberMutationError.cannotDeleteLastOwner
+        }
+
+        let activeMemberRemoved = idsToRemove.contains(activeMemberId)
+        if activeMemberRemoved {
+            activeMemberId = remainingMembers[0].id
+        }
+
+        members = remainingMembers
+        return MemberRemovalResult(
+            removedMemberIds: idsToRemove,
+            didReassignActiveMember: activeMemberRemoved
+        )
+    }
+
+    private func persistActiveMemberId() {
+        userDefaults.set(activeMemberId.uuidString, forKey: activeMemberKey(for: currentUserScopeId))
+    }
+
+    private func persistProfileCompleted() {
+        userDefaults.set(isProfileComplete, forKey: profileCompletedKey(for: currentUserScopeId))
+    }
+
+    private func persistMembers() {
+        currentBudget.members = members
+        repository.saveCurrentBudget(currentBudget)
+    }
+
+    private func initials(from displayName: String) -> String {
+        let parts = displayName
+            .split(separator: " ")
+            .filter { !$0.isEmpty }
+
+        if parts.count >= 2 {
+            let first = String(parts[0].prefix(1))
+            let second = String(parts[1].prefix(1))
+            return (first + second).uppercased()
+        }
+
+        return String(displayName.prefix(2)).uppercased()
+    }
+
+    private func nextColor() -> String {
+        let index = members.count % memberPalette.count
+        return memberPalette[index]
+    }
+
+    private func ensureActiveMemberIsValid() {
+        if !members.contains(where: { $0.id == activeMemberId }),
+           let firstMemberId = members.first?.id {
+            activeMemberId = firstMemberId
+        }
+    }
+
+    private func activeMemberKey(for userScopeId: String) -> String {
+        Self.activeMemberKey(baseKey: activeMemberKey, userScopeId: userScopeId)
+    }
+
+    private func profileCompletedKey(for userScopeId: String) -> String {
+        Self.profileCompletedKey(baseKey: profileCompletedKey, userScopeId: userScopeId)
+    }
+
+    private static func activeMemberKey(baseKey: String, userScopeId: String) -> String {
+        "\(baseKey).\(userScopeId)"
+    }
+
+    private static func profileCompletedKey(baseKey: String, userScopeId: String) -> String {
+        "\(baseKey).\(userScopeId)"
+    }
+
+    private static func defaultBudget(userScopeId: String, email: String?) -> Budget {
+        let memberId = UUID(uuidString: userScopeId) ?? UUID()
+        let displayName = defaultDisplayName(from: email)
+        let member = BudgetMember(
+            id: memberId,
+            displayName: displayName,
+            email: email,
+            initials: initials(from: displayName),
+            color: "#3B82F6",
+            role: .owner,
+            inviteStatus: .active,
+            joinedDate: .now
+        )
+
+        return Budget(
+            id: memberId,
+            name: "My Budget",
+            createdByUserId: memberId,
+            members: [member]
+        )
+    }
+
+    private static func shouldReplaceSampleBudget(_ budget: Budget, forUserScopeId userScopeId: String) -> Bool {
+        guard let userId = UUID(uuidString: userScopeId) else { return false }
+        let memberIds = Set(budget.members.map(\.id))
+        let sampleIds = Set(BudgetSampleData.members.map(\.id))
+        return memberIds == sampleIds && !memberIds.contains(userId)
+    }
+
+    private static func defaultDisplayName(from email: String?) -> String {
+        let localPart = email?
+            .split(separator: "@")
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let localPart, !localPart.isEmpty else {
+            return "Me"
+        }
+
+        return localPart
+            .replacingOccurrences(of: ".", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+            .split(separator: " ")
+            .map { part in part.prefix(1).uppercased() + part.dropFirst() }
+            .joined(separator: " ")
+    }
+
+    private static func initials(from displayName: String) -> String {
+        let parts = displayName
+            .split(separator: " ")
+            .filter { !$0.isEmpty }
+
+        if parts.count >= 2 {
+            return (parts[0].prefix(1) + parts[1].prefix(1)).uppercased()
+        }
+
+        return String(displayName.prefix(2)).uppercased()
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
+}
