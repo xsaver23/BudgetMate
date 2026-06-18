@@ -47,6 +47,12 @@ struct BudgetMateApp: App {
                                 force: true
                             )
                         }
+                        .task(id: "auto-sync-\(authStore.currentUserScopeId)-\(authStore.currentBudgetScopeId)-\(memberViewModel.isProfileComplete)") {
+                            await runAutoSyncLoop(
+                                userScopeId: authStore.currentUserScopeId,
+                                budgetScopeId: authStore.currentBudgetScopeId
+                            )
+                        }
                 } else {
                     LoginView()
                         .transition(.opacity)
@@ -162,5 +168,27 @@ struct BudgetMateApp: App {
         guard !force else { return true }
         guard let lastSyncedAt = lastAutoSyncedAtByScope[syncKey] else { return true }
         return Date().timeIntervalSince(lastSyncedAt) > 45
+    }
+
+    @MainActor
+    private func runAutoSyncLoop(userScopeId: String, budgetScopeId: String) async {
+        guard memberViewModel.isProfileComplete else { return }
+
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(for: .seconds(60))
+            } catch {
+                return
+            }
+
+            guard scenePhase == .active,
+                  authStore.isAuthenticated,
+                  authStore.currentUserScopeId == userScopeId,
+                  authStore.currentBudgetScopeId == budgetScopeId else {
+                continue
+            }
+
+            await autoSyncAuthenticatedUser(userScopeId, budgetScopeId: budgetScopeId, force: false)
+        }
     }
 }

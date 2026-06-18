@@ -248,10 +248,14 @@ struct SettingsView: View {
             .statusBarScrim()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
-            .onAppear(perform: syncFieldsFromStore)
-            .task(id: authStore.userEmail ?? "") {
-                await loadPendingInvites()
-                await loadMemberships()
+            .onAppear {
+                syncFieldsFromStore()
+                Task {
+                    await refreshSharedBudgetSection()
+                }
+            }
+            .task(id: "\(authStore.userEmail ?? "")-\(authStore.currentBudgetScopeId)") {
+                await refreshSharedBudgetSection()
             }
             .fullScreenCover(isPresented: $isShowingClearConfirmation) {
                 ClearTransactionsConfirmationView(
@@ -487,14 +491,21 @@ struct SettingsView: View {
         }
     }
 
+    private func refreshSharedBudgetSection() async {
+        await loadPendingInvites()
+        await loadMemberships()
+    }
+
     private var activeBudgetSelection: Binding<String> {
         Binding(
             get: { authStore.currentBudgetScopeId },
             set: { budgetScopeId in
                 authStore.switchBudgetScope(to: budgetScopeId)
+                settingsStore.switchUser(to: budgetScopeId)
                 clearFeedbackMessage = "Switched budget. Syncing now."
                 Task {
                     await syncCloudData()
+                    await refreshSharedBudgetSection()
                 }
             }
         )
@@ -505,8 +516,9 @@ struct SettingsView: View {
             do {
                 try await cloudSyncStore.acceptInvite(invite, userScopeId: authStore.currentUserScopeId)
                 authStore.switchBudgetScope(to: invite.budgetId.uuidString)
+                settingsStore.switchUser(to: invite.budgetId.uuidString)
                 pendingInvites.removeAll { $0.id == invite.id }
-                await loadMemberships()
+                await refreshSharedBudgetSection()
                 await syncCloudData()
                 clearFeedbackMessage = "Invite accepted. You are now viewing the shared budget."
             } catch {
