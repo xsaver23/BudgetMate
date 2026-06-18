@@ -864,29 +864,6 @@ struct DashboardView: View {
     }
 }
 
-private enum BudgetBeaverPalette {
-    static let warmBackground = Color(hex: "#E8E4DC")
-    static let ink = Color(hex: "#4A3B32")
-    static let wood = Color(hex: "#8B5A2B")
-    static let paper = Color(hex: "#FEFDFB")
-    static let bank = Color(hex: "#F4F1EA")
-    static let innerSurface = Color(hex: "#F5F3F0")
-    static let pill = Color(hex: "#F1ECE2")
-    static let border = Color(hex: "#E8E3D9")
-    static let water = Color(hex: "#4A90E2")
-    static let rebBrown = Color(hex: "#7B5A3E")
-    static let jenBlue = Color(hex: "#5B93E8")
-    static let darkButton = Color(hex: "#4A3F35")
-    static let amountDark = Color(hex: "#3D3D3D")
-    static let amountRed = Color(hex: "#D4183D")
-    static let grayText = Color(hex: "#717182")
-    static let muted = Color(hex: "#B4A592")
-    static let forest = Color(hex: "#3E885B")
-    static let forestText = Color(hex: "#2C6341")
-    static let forestSoft = Color(hex: "#F2F7F4")
-    static let clay = Color(hex: "#D97757")
-}
-
 private struct DamProgressBar: View {
     let progress: Double
 
