@@ -8,7 +8,14 @@ final class AddTransactionViewModel: ObservableObject {
         }
     }
     @Published var title: String = ""
-    @Published var amountText: String = ""
+    @Published var amountText: String = "" {
+        didSet {
+            let sanitized = Self.sanitizedMoneyText(amountText)
+            if sanitized != amountText {
+                amountText = sanitized
+            }
+        }
+    }
     @Published var category: TransactionCategory = .other
     @Published var paymentMethod: PaymentMethod = .card
     @Published var date: Date = .now
@@ -22,7 +29,14 @@ final class AddTransactionViewModel: ObservableObject {
     @Published var isSplit: Bool = false
     @Published var splitMethod: SplitMethod = .equally
     @Published var participants: Set<UUID> = []
-    @Published var customAmounts: [UUID: String] = [:]
+    @Published var customAmounts: [UUID: String] = [:] {
+        didSet {
+            let sanitized = customAmounts.mapValues(Self.sanitizedMoneyText)
+            if sanitized != customAmounts {
+                customAmounts = sanitized
+            }
+        }
+    }
 
     var availableCategories: [TransactionCategory] {
         if type == .expense {
@@ -192,5 +206,27 @@ final class AddTransactionViewModel: ObservableObject {
         if !availableCategories.contains(category) {
             category = availableCategories.first ?? .other
         }
+    }
+
+    private static func sanitizedMoneyText(_ text: String) -> String {
+        var result = ""
+        var hasDecimalSeparator = false
+        var fractionalDigitCount = 0
+
+        for character in text {
+            if character.isNumber {
+                if hasDecimalSeparator {
+                    guard fractionalDigitCount < 2 else { continue }
+                    fractionalDigitCount += 1
+                }
+                result.append(character)
+            } else if character == "." || character == "," {
+                guard !hasDecimalSeparator else { continue }
+                hasDecimalSeparator = true
+                result.append(".")
+            }
+        }
+
+        return result
     }
 }
