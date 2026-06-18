@@ -6,6 +6,7 @@ struct BudgetMember: Identifiable, Codable, Hashable {
     let email: String?
     let initials: String
     let color: String
+    let authUserId: UUID?
     let role: BudgetMemberRole
     let inviteStatus: InviteStatus
     let joinedDate: Date?
@@ -17,6 +18,7 @@ struct BudgetMember: Identifiable, Codable, Hashable {
         email: String? = nil,
         initials: String,
         color: String,
+        authUserId: UUID? = nil,
         role: BudgetMemberRole = .member,
         inviteStatus: InviteStatus = .active,
         joinedDate: Date? = .now,
@@ -27,6 +29,7 @@ struct BudgetMember: Identifiable, Codable, Hashable {
         self.email = email
         self.initials = initials
         self.color = color
+        self.authUserId = authUserId
         self.role = role
         self.inviteStatus = inviteStatus
         self.joinedDate = joinedDate

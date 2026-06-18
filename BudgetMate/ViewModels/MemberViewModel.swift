@@ -165,7 +165,7 @@ final class MemberViewModel: ObservableObject {
         guard !trimmedName.isEmpty else { return nil }
 
         let trimmedEmail = email?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedEmail = (trimmedEmail?.isEmpty == true) ? nil : trimmedEmail
+        let normalizedEmail = (trimmedEmail?.isEmpty == true) ? nil : trimmedEmail?.lowercased()
 
         let newMember = BudgetMember(
             displayName: trimmedName,
@@ -192,6 +192,7 @@ final class MemberViewModel: ObservableObject {
             email: current.email,
             initials: initials(from: trimmedName),
             color: current.color,
+            authUserId: UUID(uuidString: currentUserScopeId) ?? current.authUserId,
             role: .owner,
             inviteStatus: .active,
             joinedDate: current.joinedDate ?? .now,
@@ -236,6 +237,7 @@ final class MemberViewModel: ObservableObject {
             email: current.email,
             initials: initials(from: trimmedName),
             color: current.color,
+            authUserId: current.authUserId,
             role: current.role,
             inviteStatus: current.inviteStatus,
             joinedDate: current.joinedDate,
@@ -321,7 +323,7 @@ final class MemberViewModel: ObservableObject {
 
     private func signedInMember(in members: [BudgetMember], userScopeId: String, email: String?) -> BudgetMember? {
         if let userId = UUID(uuidString: userScopeId),
-           let member = members.first(where: { $0.id == userId }) {
+           let member = members.first(where: { $0.id == userId || $0.authUserId == userId }) {
             return member
         }
 
@@ -362,6 +364,7 @@ final class MemberViewModel: ObservableObject {
             email: email,
             initials: initials(from: displayName),
             color: "#3B82F6",
+            authUserId: memberId,
             role: .owner,
             inviteStatus: .active,
             joinedDate: .now

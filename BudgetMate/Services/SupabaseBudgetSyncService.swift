@@ -80,6 +80,7 @@ struct CloudBudgetMemberRow: Codable {
     let email: String?
     let initials: String
     let color: String
+    let authUserId: UUID?
     let role: String
     let inviteStatus: String
     let joinedDate: String?
@@ -93,6 +94,7 @@ struct CloudBudgetMemberRow: Codable {
         case email
         case initials
         case color
+        case authUserId = "auth_user_id"
         case role
         case inviteStatus = "invite_status"
         case joinedDate = "joined_date"
@@ -107,6 +109,7 @@ struct CloudBudgetMemberRow: Codable {
         email = member.email
         initials = member.initials
         color = member.color
+        authUserId = member.authUserId
         role = member.role.rawValue
         inviteStatus = member.inviteStatus.rawValue
         joinedDate = member.joinedDate.map(Self.string(from:))
@@ -120,6 +123,7 @@ struct CloudBudgetMemberRow: Codable {
             email: email,
             initials: initials,
             color: color,
+            authUserId: authUserId,
             role: BudgetMemberRole(rawValue: role) ?? .member,
             inviteStatus: InviteStatus(rawValue: inviteStatus) ?? .active,
             joinedDate: joinedDate.map(Self.date(from:)),
@@ -216,15 +220,36 @@ private struct CloudBudgetInviteRow: Codable {
 private struct CloudBudgetInviteUpdateRow: Codable {
     let status: String
     let acceptedAt: String
+    let acceptedByUserId: UUID?
 
     enum CodingKeys: String, CodingKey {
         case status
         case acceptedAt = "accepted_at"
+        case acceptedByUserId = "accepted_by_user_id"
     }
 
-    init(status: String) {
+    init(status: String, acceptedByUserId: UUID? = nil) {
         self.status = status
+        self.acceptedByUserId = acceptedByUserId
         acceptedAt = ISO8601DateFormatter().string(from: .now)
+    }
+}
+
+private struct CloudBudgetMemberAcceptedUpdateRow: Codable {
+    let authUserId: UUID
+    let inviteStatus: String
+    let joinedDate: String
+
+    enum CodingKeys: String, CodingKey {
+        case authUserId = "auth_user_id"
+        case inviteStatus = "invite_status"
+        case joinedDate = "joined_date"
+    }
+
+    init(authUserId: UUID) {
+        self.authUserId = authUserId
+        inviteStatus = InviteStatus.active.rawValue
+        joinedDate = ISO8601DateFormatter().string(from: .now)
     }
 }
 
@@ -595,8 +620,15 @@ final class SupabaseBudgetSyncService {
             .execute()
 
         try await client
+            .from("budget_members")
+            .update(CloudBudgetMemberAcceptedUpdateRow(authUserId: userId))
+            .eq("budget_id", value: invite.budgetId)
+            .eq("email", value: invite.email.lowercased())
+            .execute()
+
+        try await client
             .from("budget_invites")
-            .update(CloudBudgetInviteUpdateRow(status: "accepted"))
+            .update(CloudBudgetInviteUpdateRow(status: "accepted", acceptedByUserId: userId))
             .eq("id", value: invite.id)
             .execute()
     }
@@ -619,13 +651,27 @@ final class SupabaseBudgetSyncService {
     func deleteMember(_ member: BudgetMember, userScopeId: String, budgetScopeId: String? = nil) async throws {
         guard let userId = UUID(uuidString: userScopeId) else { return }
         let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
-        guard budgetId == userId else { return }
 
         try await client
             .from("budget_members")
             .delete()
             .eq("id", value: member.id)
             .eq("budget_id", value: budgetId)
+            .execute()
+    }
+
+    func revokeMembership(memberUserId: UUID, userScopeId: String, budgetScopeId: String? = nil) async throws {
+        guard let ownerId = UUID(uuidString: userScopeId) else {
+            throw SupabaseBudgetSyncError.missingUser
+        }
+        let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? ownerId
+        guard memberUserId != ownerId else { return }
+
+        try await client
+            .from("budget_memberships")
+            .delete()
+            .eq("budget_id", value: budgetId)
+            .eq("user_id", value: memberUserId)
             .execute()
     }
 

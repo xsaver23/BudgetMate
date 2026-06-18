@@ -153,6 +153,18 @@ final class CloudSyncStore: ObservableObject {
         }
     }
 
+    func revokeMembership(memberUserId: UUID, userScopeId: String, budgetScopeId: String? = nil) {
+        Task {
+            await runSave {
+                try await self.service.revokeMembership(
+                    memberUserId: memberUserId,
+                    userScopeId: userScopeId,
+                    budgetScopeId: budgetScopeId
+                )
+            }
+        }
+    }
+
     func deleteTransaction(_ transaction: Transaction, userScopeId: String, budgetScopeId: String? = nil) {
         Task {
             await runSave {

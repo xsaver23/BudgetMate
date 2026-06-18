@@ -126,6 +126,13 @@ struct BudgetMembersView: View {
                     userScopeId: authStore.currentUserScopeId,
                     budgetScopeId: authStore.currentBudgetScopeId
                 )
+                if let authUserId = $0.authUserId {
+                    cloudSyncStore.revokeMembership(
+                        memberUserId: authUserId,
+                        userScopeId: authStore.currentUserScopeId,
+                        budgetScopeId: authStore.currentBudgetScopeId
+                    )
+                }
             }
             cloudSyncStore.saveMembers(
                 memberViewModel.members,

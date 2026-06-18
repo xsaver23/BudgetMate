@@ -73,6 +73,7 @@ enum BudgetSampleData {
             email: owner.email,
             initials: owner.initials,
             color: owner.color,
+            authUserId: owner.authUserId,
             role: .owner,
             inviteStatus: .active,
             joinedDate: owner.joinedDate,

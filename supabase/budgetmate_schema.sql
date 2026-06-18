@@ -3,6 +3,7 @@ create table if not exists public.budget_members (
   user_id uuid not null references auth.users(id) on delete cascade,
   display_name text not null,
   email text,
+  auth_user_id uuid references auth.users(id) on delete set null,
   initials text not null,
   color text not null,
   role text not null check (role in ('owner', 'member')),
@@ -556,5 +557,128 @@ with check (
     where membership.budget_id = budget_settlements.budget_id
       and membership.user_id = auth.uid()
       and membership.status = 'active'
+  )
+);
+
+-- Migration: harden shared-budget membership access and support real revocation.
+--
+-- Important: budget_members.id is the app's profile/member id. It is not always
+-- the same as auth.users.id for invited members, so auth_user_id stores the real
+-- login user id once an invite is accepted.
+alter table public.budget_members
+add column if not exists auth_user_id uuid references auth.users(id) on delete set null;
+
+alter table public.budget_invites
+add column if not exists accepted_by_user_id uuid references auth.users(id) on delete set null;
+
+update public.budget_members
+set auth_user_id = user_id
+where auth_user_id is null
+  and id = user_id;
+
+drop policy if exists "Users can insert their budget memberships" on public.budget_memberships;
+create policy "Users can insert their budget memberships"
+on public.budget_memberships
+for insert
+to authenticated
+with check (
+  user_id = auth.uid()
+  and (
+    exists (
+      select 1
+      from public.budgets budget
+      where budget.id = budget_memberships.budget_id
+        and budget.owner_user_id = auth.uid()
+        and budget_memberships.role = 'owner'
+        and budget_memberships.status = 'active'
+    )
+    or (
+      budget_memberships.role = 'member'
+      and budget_memberships.status = 'active'
+      and exists (
+        select 1
+        from public.budget_invites invite
+        where invite.budget_id = budget_memberships.budget_id
+          and invite.status in ('pending', 'accepted')
+          and lower(invite.email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+      )
+    )
+  )
+);
+
+drop policy if exists "Users can update their budget memberships" on public.budget_memberships;
+create policy "Users can update their budget memberships"
+on public.budget_memberships
+for update
+to authenticated
+using (
+  user_id = auth.uid()
+  or exists (
+    select 1
+    from public.budgets budget
+    where budget.id = budget_memberships.budget_id
+      and budget.owner_user_id = auth.uid()
+  )
+)
+with check (
+  exists (
+    select 1
+    from public.budgets budget
+    where budget.id = budget_memberships.budget_id
+      and budget.owner_user_id = auth.uid()
+  )
+  or (
+    user_id = auth.uid()
+    and role <> 'owner'
+    and exists (
+      select 1
+      from public.budget_invites invite
+      where invite.budget_id = budget_memberships.budget_id
+        and invite.status in ('pending', 'accepted')
+        and lower(invite.email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+    )
+  )
+);
+
+drop policy if exists "Owners can remove members" on public.budget_memberships;
+create policy "Owners can remove members"
+on public.budget_memberships
+for delete
+to authenticated
+using (
+  user_id <> auth.uid()
+  and exists (
+    select 1
+    from public.budgets budget
+    where budget.id = budget_memberships.budget_id
+      and budget.owner_user_id = auth.uid()
+  )
+);
+
+drop policy if exists "Invitees can activate their budget member profile" on public.budget_members;
+create policy "Invitees can activate their budget member profile"
+on public.budget_members
+for update
+to authenticated
+using (
+  exists (
+    select 1
+    from public.budget_invites invite
+    where invite.budget_id = budget_members.budget_id
+      and invite.status in ('pending', 'accepted')
+      and lower(invite.email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+      and lower(invite.email) = lower(coalesce(budget_members.email, ''))
+  )
+)
+with check (
+  auth_user_id = auth.uid()
+  and invite_status = 'active'
+  and exists (
+    select 1
+    from public.budget_invites invite
+    where invite.budget_id = budget_members.budget_id
+      and invite.status in ('pending', 'accepted')
+      and lower(invite.email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+      and lower(invite.email) = lower(coalesce(budget_members.email, ''))
   )
 );
