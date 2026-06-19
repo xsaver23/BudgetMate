@@ -253,6 +253,21 @@ private struct CloudBudgetMemberAcceptedUpdateRow: Codable {
     }
 }
 
+private struct CloudBudgetMemberRepairUpdateRow: Codable {
+    let authUserId: UUID
+    let inviteStatus: String
+
+    enum CodingKeys: String, CodingKey {
+        case authUserId = "auth_user_id"
+        case inviteStatus = "invite_status"
+    }
+
+    init(authUserId: UUID) {
+        self.authUserId = authUserId
+        inviteStatus = InviteStatus.active.rawValue
+    }
+}
+
 struct CloudTransactionSplitRow: Codable {
     let id: UUID
     let memberId: UUID
@@ -424,6 +439,13 @@ final class SupabaseBudgetSyncService {
         let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
 
         try await ensurePersonalBudget(userId: userId)
+        if let userEmail {
+            try? await repairMemberProfileIfNeeded(
+                userScopeId: userScopeId,
+                userEmail: userEmail,
+                budgetScopeId: budgetId.uuidString
+            )
+        }
 
         let existingSettings = try await fetchSettings(userScopeId: userScopeId, budgetScopeId: budgetId.uuidString)
         let settingsRow = CloudBudgetSettingsRow(settings: settings, userId: userId, budgetId: budgetId)
@@ -606,6 +628,24 @@ final class SupabaseBudgetSyncService {
             .value
 
         return rows.map { $0.makeMembership() }
+    }
+
+    func repairMemberProfileIfNeeded(userScopeId: String, userEmail: String, budgetScopeId: String? = nil) async throws {
+        guard let userId = UUID(uuidString: userScopeId) else {
+            throw SupabaseBudgetSyncError.missingUser
+        }
+        guard let normalizedEmail = Self.normalizedEmail(userEmail) else {
+            return
+        }
+
+        let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
+
+        try await client
+            .from("budget_members")
+            .update(CloudBudgetMemberRepairUpdateRow(authUserId: userId))
+            .eq("budget_id", value: budgetId)
+            .eq("email", value: normalizedEmail)
+            .execute()
     }
 
     func acceptInvite(_ invite: BudgetInvite, userScopeId: String) async throws {

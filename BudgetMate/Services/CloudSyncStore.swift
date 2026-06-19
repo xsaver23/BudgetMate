@@ -100,6 +100,20 @@ final class CloudSyncStore: ObservableObject {
         }
     }
 
+    func repairMemberProfileIfNeeded(userScopeId: String, userEmail: String?, budgetScopeId: String? = nil) async {
+        guard let userEmail else { return }
+
+        do {
+            try await service.repairMemberProfileIfNeeded(
+                userScopeId: userScopeId,
+                userEmail: userEmail,
+                budgetScopeId: budgetScopeId
+            )
+        } catch {
+            markFailed(error)
+        }
+    }
+
     func acceptInvite(_ invite: BudgetInvite, userScopeId: String) async throws {
         do {
             try await service.acceptInvite(invite, userScopeId: userScopeId)
