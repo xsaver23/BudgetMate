@@ -472,14 +472,14 @@ final class SupabaseBudgetSyncService {
                 .execute()
         }
 
-        if budgetId == userId && !transactionRows.isEmpty {
+        if !transactionRows.isEmpty {
             try await client
                 .from("budget_transactions")
                 .upsert(transactionRows, onConflict: "id")
                 .execute()
         }
 
-        if budgetId == userId && !settlementRows.isEmpty {
+        if !settlementRows.isEmpty {
             try await client
                 .from("budget_settlements")
                 .upsert(settlementRows, onConflict: "id")
