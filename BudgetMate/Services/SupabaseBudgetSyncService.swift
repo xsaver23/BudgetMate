@@ -268,6 +268,10 @@ private struct CloudBudgetMemberRepairUpdateRow: Codable {
     }
 }
 
+private struct CloudRecordIDRow: Codable {
+    let id: UUID
+}
+
 struct CloudTransactionSplitRow: Codable {
     let id: UUID
     let memberId: UUID
@@ -451,11 +455,37 @@ final class SupabaseBudgetSyncService {
         let settingsRow = CloudBudgetSettingsRow(settings: settings, userId: userId, budgetId: budgetId)
         let memberRows = members.map { CloudBudgetMemberRow(member: $0, userId: userId, budgetId: budgetId) }
         let signedInMemberIds = signedInMemberIds(for: userId, userEmail: userEmail, in: members)
+        let cloudTransactionIDRows: [CloudRecordIDRow] = try await client
+            .from("budget_transactions")
+            .select("id")
+            .eq("budget_id", value: budgetId)
+            .execute()
+            .value
+        let cloudTransactionIDs = Set(cloudTransactionIDRows.map(\.id))
+        let cloudSettlementIDRows: [CloudRecordIDRow] = try await client
+            .from("budget_settlements")
+            .select("id")
+            .eq("budget_id", value: budgetId)
+            .execute()
+            .value
+        let cloudSettlementIDs = Set(cloudSettlementIDRows.map(\.id))
         let transactionRows = transactions
-            .filter { shouldBulkPush(transaction: $0, signedInMemberIds: signedInMemberIds) }
+            .filter {
+                shouldBulkPush(
+                    transaction: $0,
+                    signedInMemberIds: signedInMemberIds,
+                    cloudTransactionIDs: cloudTransactionIDs
+                )
+            }
             .map { CloudTransactionRow(transaction: $0, userId: userId, budgetId: budgetId) }
         let settlementRows = settlements
-            .filter { shouldBulkPush(settlement: $0, signedInMemberIds: signedInMemberIds) }
+            .filter {
+                shouldBulkPush(
+                    settlement: $0,
+                    signedInMemberIds: signedInMemberIds,
+                    cloudSettlementIDs: cloudSettlementIDs
+                )
+            }
             .map { CloudSettlementRow(settlement: $0, userId: userId, budgetId: budgetId) }
 
         if budgetId == userId && (existingSettings == nil || settings != .default) {
@@ -842,12 +872,22 @@ final class SupabaseBudgetSyncService {
         return normalized.isEmpty ? nil : normalized
     }
 
-    private func shouldBulkPush(transaction: Transaction, signedInMemberIds: Set<UUID>) -> Bool {
-        signedInMemberIds.contains(transaction.createdByMemberId)
+    private func shouldBulkPush(
+        transaction: Transaction,
+        signedInMemberIds: Set<UUID>,
+        cloudTransactionIDs: Set<UUID>
+    ) -> Bool {
+        signedInMemberIds.contains(transaction.createdByMemberId) || !cloudTransactionIDs.contains(transaction.id)
     }
 
-    private func shouldBulkPush(settlement: Settlement, signedInMemberIds: Set<UUID>) -> Bool {
-        signedInMemberIds.contains(settlement.fromMemberId) || signedInMemberIds.contains(settlement.toMemberId)
+    private func shouldBulkPush(
+        settlement: Settlement,
+        signedInMemberIds: Set<UUID>,
+        cloudSettlementIDs: Set<UUID>
+    ) -> Bool {
+        signedInMemberIds.contains(settlement.fromMemberId)
+            || signedInMemberIds.contains(settlement.toMemberId)
+            || !cloudSettlementIDs.contains(settlement.id)
     }
 
     private func merge(
