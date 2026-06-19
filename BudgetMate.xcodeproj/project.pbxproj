@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		00B7B6C4A4B747928095F295 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8193DE58AE5D4F869D585E51 /* Assets.xcassets */; };
 		01C45EA17D4867C98032DDEC /* BudgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A1FC905A9F16321E1F78B89 /* BudgetView.swift */; };
 		04EBBEF2DC5D653E00C11553 /* CloudSyncStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C1FF8CAF3956F5439C907B /* CloudSyncStore.swift */; };
 		0CFD806005C4C0E4C5A5E519 /* Settlement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5236CAB74F2EBB8C4E6B245E /* Settlement.swift */; };
@@ -105,6 +106,7 @@
 		655F029369B1D6B368219EF2 /* CategoryColor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CategoryColor.swift; path = Utilities/CategoryColor.swift; sourceTree = "<group>"; };
 		6BF98EC498AB7E1950ABDEEC /* AppTheme.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppTheme.swift; path = Utilities/AppTheme.swift; sourceTree = "<group>"; };
 		75FF374F1C21C21061DB2859 /* SettlementBreakdownView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettlementBreakdownView.swift; path = Views/Dashboard/SettlementBreakdownView.swift; sourceTree = "<group>"; };
+		8193DE58AE5D4F869D585E51 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8BC2C9B2263946600047CBBC /* AppearanceOption.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppearanceOption.swift; path = Models/AppearanceOption.swift; sourceTree = "<group>"; };
 		8BCF11CF07DBEC8EEDD50EF2 /* PaymentMethod.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PaymentMethod.swift; path = Models/PaymentMethod.swift; sourceTree = "<group>"; };
 		8BE177D8067EBA5736F264DE /* InviteMemberView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = InviteMemberView.swift; path = Views/Settings/InviteMemberView.swift; sourceTree = "<group>"; };
@@ -166,6 +168,7 @@
 				B05A29B5030921EE8EB351EA /* Services */,
 				8FE59481596AAF14D44FAAC1 /* Components */,
 				AC4B4098F624AFDB1A4E650E /* Utilities */,
+				8193DE58AE5D4F869D585E51 /* Assets.xcassets */,
 				1B4AB1F07664F0CBFCC1990B /* BudgetMateApp.swift */,
 				49CB0E4EE5030D3F448943D9 /* CardContainer.swift */,
 				FD0042F80975DBA8B9B0E38E /* ExpenseCategoryPieChartView.swift */,
@@ -371,6 +374,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				00B7B6C4A4B747928095F295 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -519,7 +523,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = SXJFQUGK67;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -602,7 +606,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = SXJFQUGK67;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

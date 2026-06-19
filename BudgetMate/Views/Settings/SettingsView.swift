@@ -6,6 +6,7 @@ struct SettingsView: View {
     @EnvironmentObject private var memberViewModel: MemberViewModel
     @EnvironmentObject private var authStore: AuthSessionStore
     @EnvironmentObject private var cloudSyncStore: CloudSyncStore
+    @EnvironmentObject private var appRefreshStore: AppRefreshStore
     @Environment(\.modelContext) private var modelContext
     @Query private var transactions: [Transaction]
     @Query private var settlements: [Settlement]
@@ -202,24 +203,24 @@ struct SettingsView: View {
                     HStack {
                         Text("Cloud backup")
                         Spacer()
-                        Text(cloudSyncStatusText)
+                        Text(cloudSyncStore.statusText())
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(cloudSyncStore.lastErrorMessage == nil ? .secondary : AppTheme.expense)
+                            .foregroundStyle(cloudSyncStore.hasSyncIssue ? AppTheme.expense : .secondary)
                     }
 
-                    if let lastErrorMessage = cloudSyncStore.lastErrorMessage {
-                        Text("Last sync failed: \(lastErrorMessage)")
-                            .font(.caption)
-                            .foregroundStyle(AppTheme.expense)
-                    }
+                    Text(cloudSyncStore.syncHelpText)
+                        .font(.caption)
+                        .foregroundStyle(cloudSyncStore.hasSyncIssue ? AppTheme.expense : AppTheme.textSecondary)
 
                     Button {
                         Task {
-                            await syncCloudData()
+                            await refreshAllData(showFeedback: true, forceSync: true)
                         }
                     } label: {
                         if cloudSyncStore.isSyncing {
-                            Label("Syncing", systemImage: "arrow.triangle.2.circlepath")
+                            Label("Syncing Now", systemImage: "arrow.triangle.2.circlepath")
+                        } else if cloudSyncStore.hasSyncIssue {
+                            Label("Retry Sync", systemImage: "icloud.and.arrow.up")
                         } else {
                             Label("Sync Now", systemImage: "icloud.and.arrow.up")
                         }
@@ -242,6 +243,9 @@ struct SettingsView: View {
                         isShowingClearConfirmation = true
                     }
                 }
+            }
+            .refreshable {
+                await refreshAllData(showFeedback: false, forceSync: true)
             }
             .scrollContentBackground(.hidden)
             .background(AppTheme.background)
@@ -430,7 +434,7 @@ struct SettingsView: View {
                 authStore.switchBudgetScope(to: authStore.currentUserScopeId)
                 settingsStore.switchUser(to: authStore.currentUserScopeId)
                 await loadMemberships()
-                await syncCloudData()
+                await refreshAllData(showFeedback: false, forceSync: true)
                 clearFeedbackMessage = "You left the shared budget. You are now viewing your personal budget."
             } catch {
                 clearFeedbackMessage = "Could not leave shared budget: \(error.localizedDescription)"
@@ -438,18 +442,27 @@ struct SettingsView: View {
         }
     }
 
-    private func syncCloudData() async {
+    private func refreshAllData(showFeedback: Bool, forceSync: Bool) async {
         do {
-            let summary = try await cloudSyncStore.sync(
-                settings: settingsStore.settings,
-                members: memberViewModel.members,
-                transactions: scopedTransactions,
-                settlements: scopedSettlements,
-                into: modelContext,
-                userScopeId: authStore.currentUserScopeId,
-                userEmail: authStore.userEmail,
-                budgetScopeId: authStore.currentBudgetScopeId
-            )
+            if forceSync {
+                let summary = try await cloudSyncStore.sync(
+                    settings: settingsStore.settings,
+                    members: memberViewModel.members,
+                    transactions: scopedTransactions,
+                    settlements: scopedSettlements,
+                    into: modelContext,
+                    userScopeId: authStore.currentUserScopeId,
+                    userEmail: authStore.userEmail,
+                    budgetScopeId: authStore.currentBudgetScopeId
+                )
+
+                if showFeedback {
+                    clearFeedbackMessage = summary.message
+                }
+            } else {
+                await appRefreshStore.refreshCurrentBudget(forceSync: false)
+            }
+
             if let cloudSettings = try await cloudSyncStore.fetchSettings(
                 userScopeId: authStore.currentUserScopeId,
                 budgetScopeId: authStore.currentBudgetScopeId
@@ -462,9 +475,11 @@ struct SettingsView: View {
                 budgetScopeId: authStore.currentBudgetScopeId
             )
             memberViewModel.replaceMembers(with: cloudMembers)
-            clearFeedbackMessage = summary.message
+            await refreshSharedBudgetSection()
         } catch {
-            clearFeedbackMessage = cloudSyncErrorMessage(for: error)
+            if showFeedback {
+                clearFeedbackMessage = cloudSyncErrorMessage(for: error)
+            }
         }
     }
 
@@ -505,8 +520,7 @@ struct SettingsView: View {
                 settingsStore.switchUser(to: budgetScopeId)
                 clearFeedbackMessage = "Switched budget. Syncing now."
                 Task {
-                    await syncCloudData()
-                    await refreshSharedBudgetSection()
+                    await refreshAllData(showFeedback: false, forceSync: true)
                 }
             }
         )
@@ -519,8 +533,7 @@ struct SettingsView: View {
                 authStore.switchBudgetScope(to: invite.budgetId.uuidString)
                 settingsStore.switchUser(to: invite.budgetId.uuidString)
                 pendingInvites.removeAll { $0.id == invite.id }
-                await refreshSharedBudgetSection()
-                await syncCloudData()
+                await refreshAllData(showFeedback: false, forceSync: true)
                 clearFeedbackMessage = "Invite accepted. You are now viewing the shared budget."
             } catch {
                 clearFeedbackMessage = "Could not accept invite: \(error.localizedDescription)"
@@ -537,29 +550,8 @@ struct SettingsView: View {
         }
     }
 
-    private var cloudSyncStatusText: String {
-        if cloudSyncStore.isSyncing {
-            return "Syncing..."
-        }
-
-        if cloudSyncStore.lastErrorMessage != nil {
-            return "Needs attention"
-        }
-
-        if let lastSyncedAt = cloudSyncStore.lastSyncedAt {
-            return lastSyncedAt.formatted(.dateTime.month(.abbreviated).day().hour().minute())
-        }
-
-        return "Not synced yet"
-    }
-
     private func cloudSyncErrorMessage(for error: Error) -> String {
-        let message = error.localizedDescription
-        if message.localizedCaseInsensitiveContains("budget_transactions") ||
-            message.localizedCaseInsensitiveContains("Could not find the table") {
-            return "Supabase tables are not set up yet. Run the budgetmate_schema.sql file in Supabase first."
-        }
-        return "Cloud sync failed: \(message)"
+        cloudSyncStore.userFacingMessage(for: error)
     }
 
     private func recurringExpenseRow(_ transaction: Transaction) -> some View {
@@ -678,6 +670,7 @@ struct SettingsView: View {
         .environmentObject(MemberViewModel())
         .environmentObject(AuthSessionStore())
         .environmentObject(CloudSyncStore())
+        .environmentObject(AppRefreshStore())
         .modelContainer(PreviewContainer.seeded)
 }
 

@@ -8,6 +8,7 @@ struct BudgetView: View {
     @EnvironmentObject private var monthSelectionStore: MonthSelectionStore
     @EnvironmentObject private var authStore: AuthSessionStore
     @EnvironmentObject private var cloudSyncStore: CloudSyncStore
+    @EnvironmentObject private var appRefreshStore: AppRefreshStore
     var onOpenSettings: () -> Void = {}
 
     @Query private var transactions: [Transaction]
@@ -80,6 +81,9 @@ struct BudgetView: View {
                     .padding(.horizontal)
                 }
                 .padding(.bottom, 24)
+            }
+            .refreshable {
+                await appRefreshStore.refreshCurrentBudget(forceSync: true)
             }
             .background(AppTheme.background)
             .statusBarScrim()
@@ -584,6 +588,7 @@ struct BudgetView: View {
         .environmentObject(MonthSelectionStore())
         .environmentObject(AuthSessionStore())
         .environmentObject(CloudSyncStore())
+        .environmentObject(AppRefreshStore())
         .modelContainer(PreviewContainer.seeded)
 }
 

@@ -7,6 +7,7 @@ struct DashboardView: View {
     @EnvironmentObject private var monthSelectionStore: MonthSelectionStore
     @EnvironmentObject private var authStore: AuthSessionStore
     @EnvironmentObject private var cloudSyncStore: CloudSyncStore
+    @EnvironmentObject private var appRefreshStore: AppRefreshStore
     var onOpenSettings: () -> Void = {}
     @Environment(\.modelContext) private var modelContext
     @State private var selectedMemberId: UUID? = nil
@@ -76,6 +77,9 @@ struct DashboardView: View {
                     .padding(.horizontal)
                 }
                 .padding(.bottom, 24)
+            }
+            .refreshable {
+                await appRefreshStore.refreshCurrentBudget(forceSync: true)
             }
             .background(AppTheme.background)
             .statusBarScrim()
@@ -1033,5 +1037,8 @@ private struct DamProgressBar: View {
         .environmentObject(SettingsStore())
         .environmentObject(MemberViewModel())
         .environmentObject(MonthSelectionStore())
+        .environmentObject(AuthSessionStore())
+        .environmentObject(CloudSyncStore())
+        .environmentObject(AppRefreshStore())
         .modelContainer(PreviewContainer.seeded)
 }

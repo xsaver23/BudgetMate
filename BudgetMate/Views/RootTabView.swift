@@ -101,5 +101,6 @@ private struct ScalePressButtonStyle: ButtonStyle {
         .environmentObject(MonthSelectionStore())
         .environmentObject(AuthSessionStore())
         .environmentObject(CloudSyncStore())
+        .environmentObject(AppRefreshStore())
         .modelContainer(PreviewContainer.seeded)
 }

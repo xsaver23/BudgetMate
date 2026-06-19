@@ -8,6 +8,7 @@ struct TransactionsView: View {
     @EnvironmentObject private var monthSelectionStore: MonthSelectionStore
     @EnvironmentObject private var authStore: AuthSessionStore
     @EnvironmentObject private var cloudSyncStore: CloudSyncStore
+    @EnvironmentObject private var appRefreshStore: AppRefreshStore
     @Environment(\.modelContext) private var modelContext
     var onOpenSettings: () -> Void = {}
     @State private var selectedMemberId: UUID? = nil
@@ -86,6 +87,9 @@ struct TransactionsView: View {
                     }
                 }
                 .padding(.bottom, 24)
+            }
+            .refreshable {
+                await appRefreshStore.refreshCurrentBudget(forceSync: true)
             }
             .background(AppTheme.background)
             .statusBarScrim()
@@ -217,5 +221,6 @@ struct TransactionsView: View {
         .environmentObject(MonthSelectionStore())
         .environmentObject(AuthSessionStore())
         .environmentObject(CloudSyncStore())
+        .environmentObject(AppRefreshStore())
         .modelContainer(PreviewContainer.seeded)
 }

@@ -10,6 +10,7 @@ struct BudgetMateApp: App {
     @StateObject private var monthSelectionStore = MonthSelectionStore()
     @StateObject private var authStore = AuthSessionStore()
     @StateObject private var cloudSyncStore = CloudSyncStore()
+    @StateObject private var appRefreshStore = AppRefreshStore()
     @Environment(\.scenePhase) private var scenePhase
     @State private var appliedUserScopeId: String?
     @State private var lastAutoSyncedAtByScope: [String: Date] = [:]
@@ -29,47 +30,54 @@ struct BudgetMateApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if hasSeenIntro {
-                if authStore.isLoading {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(AppTheme.background)
-                        .preferredColorScheme(settingsStore.settings.appearance.colorScheme)
-                } else if authStore.isAuthenticated {
-                    authenticatedContent
-                        .transition(.opacity)
-                        .preferredColorScheme(settingsStore.settings.appearance.colorScheme)
-                        .task(id: authStore.currentUserScopeId + authStore.currentBudgetScopeId + String(memberViewModel.isProfileComplete)) {
-                            applyUserScope(authStore.currentUserScopeId, budgetScopeId: authStore.currentBudgetScopeId)
-                            await restoreCloudProfileIfNeeded(authStore.currentUserScopeId)
-                            await selectSharedBudgetIfNeeded(authStore.currentUserScopeId)
-                            applyUserScope(authStore.currentUserScopeId, budgetScopeId: authStore.currentBudgetScopeId)
-                            appliedUserScopeId = authStore.currentUserScopeId
-                            await autoSyncAuthenticatedUser(
-                                authStore.currentUserScopeId,
-                                budgetScopeId: authStore.currentBudgetScopeId,
-                                force: true
-                            )
-                        }
-                        .task(id: "auto-sync-\(authStore.currentUserScopeId)-\(authStore.currentBudgetScopeId)-\(memberViewModel.isProfileComplete)") {
-                            await runAutoSyncLoop(
-                                userScopeId: authStore.currentUserScopeId,
-                                budgetScopeId: authStore.currentBudgetScopeId
-                            )
-                        }
-                } else {
-                    LoginView()
-                        .transition(.opacity)
-                        .preferredColorScheme(settingsStore.settings.appearance.colorScheme)
-                }
-            } else {
-                FirstRunIntroView {
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        hasSeenIntro = true
+            Group {
+                if hasSeenIntro {
+                    if authStore.isLoading {
+                        ProgressView()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(AppTheme.background)
+                            .preferredColorScheme(settingsStore.settings.appearance.colorScheme)
+                    } else if authStore.isAuthenticated {
+                        authenticatedContent
+                            .transition(.opacity)
+                            .preferredColorScheme(settingsStore.settings.appearance.colorScheme)
+                            .task(id: authStore.currentUserScopeId + authStore.currentBudgetScopeId + String(memberViewModel.isProfileComplete)) {
+                                applyUserScope(authStore.currentUserScopeId, budgetScopeId: authStore.currentBudgetScopeId)
+                                await restoreCloudProfileIfNeeded(authStore.currentUserScopeId)
+                                await selectSharedBudgetIfNeeded(authStore.currentUserScopeId)
+                                applyUserScope(authStore.currentUserScopeId, budgetScopeId: authStore.currentBudgetScopeId)
+                                appliedUserScopeId = authStore.currentUserScopeId
+                                await autoSyncAuthenticatedUser(
+                                    authStore.currentUserScopeId,
+                                    budgetScopeId: authStore.currentBudgetScopeId,
+                                    force: true
+                                )
+                            }
+                            .task(id: "auto-sync-\(authStore.currentUserScopeId)-\(authStore.currentBudgetScopeId)-\(memberViewModel.isProfileComplete)") {
+                                await runAutoSyncLoop(
+                                    userScopeId: authStore.currentUserScopeId,
+                                    budgetScopeId: authStore.currentBudgetScopeId
+                                )
+                            }
+                    } else {
+                        LoginView()
+                            .transition(.opacity)
+                            .preferredColorScheme(settingsStore.settings.appearance.colorScheme)
                     }
+                } else {
+                    FirstRunIntroView {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            hasSeenIntro = true
+                        }
+                    }
+                    .transition(.opacity)
+                    .preferredColorScheme(settingsStore.settings.appearance.colorScheme)
                 }
-                .transition(.opacity)
-                .preferredColorScheme(settingsStore.settings.appearance.colorScheme)
+            }
+            .onAppear {
+                appRefreshStore.configure { forceSync in
+                    await refreshCurrentBudget(forceSync: forceSync)
+                }
             }
         }
         .environmentObject(settingsStore)
@@ -78,6 +86,7 @@ struct BudgetMateApp: App {
         .environmentObject(monthSelectionStore)
         .environmentObject(authStore)
         .environmentObject(cloudSyncStore)
+        .environmentObject(appRefreshStore)
         .modelContainer(persistenceController.container)
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active,
@@ -86,11 +95,7 @@ struct BudgetMateApp: App {
             }
 
             Task {
-                await autoSyncAuthenticatedUser(
-                    authStore.currentUserScopeId,
-                    budgetScopeId: authStore.currentBudgetScopeId,
-                    force: false
-                )
+                await refreshCurrentBudget(forceSync: false)
             }
         }
     }
@@ -112,6 +117,22 @@ struct BudgetMateApp: App {
     private func applyUserScope(_ userScopeId: String, budgetScopeId: String) {
         settingsStore.switchUser(to: budgetScopeId)
         memberViewModel.switchUser(to: userScopeId, email: authStore.userEmail)
+    }
+
+    @MainActor
+    private func refreshCurrentBudget(forceSync: Bool) async {
+        guard authStore.isAuthenticated else { return }
+
+        applyUserScope(
+            authStore.currentUserScopeId,
+            budgetScopeId: authStore.currentBudgetScopeId
+        )
+
+        await autoSyncAuthenticatedUser(
+            authStore.currentUserScopeId,
+            budgetScopeId: authStore.currentBudgetScopeId,
+            force: forceSync
+        )
     }
 
     @MainActor
