@@ -682,3 +682,22 @@ with check (
       and lower(invite.email) = lower(coalesce(budget_members.email, ''))
   )
 );
+
+-- Backfill legacy invited member rows that were accepted before auth_user_id
+-- existed. Without this, older shared members can still appear as "Invited"
+-- and device-to-device sync may drift until each row is linked to auth.users.
+update public.budget_members member
+set
+  auth_user_id = auth_user.id,
+  invite_status = 'active',
+  joined_date = coalesce(member.joined_date, now())
+from auth.users auth_user
+where lower(coalesce(member.email, '')) = lower(auth_user.email)
+  and member.auth_user_id is null;
+
+update public.budget_invites invite
+set accepted_by_user_id = auth_user.id
+from auth.users auth_user
+where lower(invite.email) = lower(auth_user.email)
+  and invite.status = 'accepted'
+  and invite.accepted_by_user_id is null;
