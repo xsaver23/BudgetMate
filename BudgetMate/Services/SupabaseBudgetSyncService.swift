@@ -415,6 +415,7 @@ final class SupabaseBudgetSyncService {
         settlements: [Settlement],
         into context: ModelContext,
         userScopeId: String,
+        userEmail: String? = nil,
         budgetScopeId: String? = nil
     ) async throws -> CloudBudgetSyncSummary {
         guard let userId = UUID(uuidString: userScopeId) else {
@@ -427,7 +428,7 @@ final class SupabaseBudgetSyncService {
         let existingSettings = try await fetchSettings(userScopeId: userScopeId, budgetScopeId: budgetId.uuidString)
         let settingsRow = CloudBudgetSettingsRow(settings: settings, userId: userId, budgetId: budgetId)
         let memberRows = members.map { CloudBudgetMemberRow(member: $0, userId: userId, budgetId: budgetId) }
-        let signedInMemberIds = signedInMemberIds(for: userId, in: members)
+        let signedInMemberIds = signedInMemberIds(for: userId, userEmail: userEmail, in: members)
         let transactionRows = transactions
             .filter { shouldBulkPush(transaction: $0, signedInMemberIds: signedInMemberIds) }
             .map { CloudTransactionRow(transaction: $0, userId: userId, budgetId: budgetId) }
@@ -779,15 +780,26 @@ final class SupabaseBudgetSyncService {
         return memberIds == sampleIds
     }
 
-    private func signedInMemberIds(for userId: UUID, in members: [BudgetMember]) -> Set<UUID> {
+    private func signedInMemberIds(for userId: UUID, userEmail: String?, in members: [BudgetMember]) -> Set<UUID> {
+        let normalizedSignedInEmail = Self.normalizedEmail(userEmail)
         let matchingIds = members.compactMap { member -> UUID? in
             if member.id == userId || member.authUserId == userId {
+                return member.id
+            }
+            if let normalizedSignedInEmail,
+               Self.normalizedEmail(member.email) == normalizedSignedInEmail {
                 return member.id
             }
             return nil
         }
 
         return Set(matchingIds.isEmpty ? [userId] : matchingIds)
+    }
+
+    private static func normalizedEmail(_ email: String?) -> String? {
+        guard let email else { return nil }
+        let normalized = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized.isEmpty ? nil : normalized
     }
 
     private func shouldBulkPush(transaction: Transaction, signedInMemberIds: Set<UUID>) -> Bool {

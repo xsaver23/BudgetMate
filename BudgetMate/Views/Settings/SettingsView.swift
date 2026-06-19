@@ -447,6 +447,7 @@ struct SettingsView: View {
                 settlements: scopedSettlements,
                 into: modelContext,
                 userScopeId: authStore.currentUserScopeId,
+                userEmail: authStore.userEmail,
                 budgetScopeId: authStore.currentBudgetScopeId
             )
             if let cloudSettings = try await cloudSyncStore.fetchSettings(

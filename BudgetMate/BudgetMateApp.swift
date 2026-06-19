@@ -180,6 +180,7 @@ struct BudgetMateApp: App {
             settlements: settlements,
             into: context,
             userScopeId: userScopeId,
+            userEmail: authStore.userEmail,
             budgetScopeId: budgetScopeId
         )
 

@@ -20,6 +20,7 @@ final class CloudSyncStore: ObservableObject {
         settlements: [Settlement],
         into context: ModelContext,
         userScopeId: String,
+        userEmail: String? = nil,
         budgetScopeId: String? = nil
     ) async throws -> CloudBudgetSyncSummary {
         isSyncing = true
@@ -33,6 +34,7 @@ final class CloudSyncStore: ObservableObject {
                 settlements: settlements,
                 into: context,
                 userScopeId: userScopeId,
+                userEmail: userEmail,
                 budgetScopeId: budgetScopeId
             )
             try? context.save()
@@ -51,6 +53,7 @@ final class CloudSyncStore: ObservableObject {
         settlements: [Settlement],
         into context: ModelContext,
         userScopeId: String,
+        userEmail: String? = nil,
         budgetScopeId: String? = nil
     ) async {
         do {
@@ -61,6 +64,7 @@ final class CloudSyncStore: ObservableObject {
                 settlements: settlements,
                 into: context,
                 userScopeId: userScopeId,
+                userEmail: userEmail,
                 budgetScopeId: budgetScopeId
             )
         } catch {
