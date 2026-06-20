@@ -94,12 +94,47 @@ struct BudgetMembersView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Text("\(member.role.displayName) • \(member.inviteStatus.displayName)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    memberChip(
+                        title: member.role.displayName,
+                        systemImage: member.role == .owner ? "crown.fill" : "person.fill",
+                        tint: member.role == .owner ? AppTheme.warning : AppTheme.brand
+                    )
+                    inviteStatusChip(member.inviteStatus)
+                }
             }
         }
         .padding(.vertical, 2)
+    }
+
+    private func inviteStatusChip(_ status: InviteStatus) -> some View {
+        let style = inviteStatusStyle(status)
+        return memberChip(
+            title: status.displayName,
+            systemImage: style.systemImage,
+            tint: style.tint
+        )
+    }
+
+    private func inviteStatusStyle(_ status: InviteStatus) -> (systemImage: String, tint: Color) {
+        switch status {
+        case .active:
+            return ("checkmark.circle.fill", AppTheme.income)
+        case .invited:
+            return ("paperplane.fill", AppTheme.brand)
+        case .pending:
+            return ("clock.fill", AppTheme.warning)
+        }
+    }
+
+    private func memberChip(title: String, systemImage: String, tint: Color) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.caption2.weight(.semibold))
+            .labelStyle(.titleAndIcon)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(tint.opacity(0.12), in: Capsule())
+            .foregroundStyle(tint)
     }
 
     private var feedbackAlertBinding: Binding<Bool> {

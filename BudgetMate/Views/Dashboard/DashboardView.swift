@@ -206,9 +206,9 @@ struct DashboardView: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+        .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 32, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(BudgetBeaverPalette.border, lineWidth: 1)
         )
     }
@@ -238,9 +238,9 @@ struct DashboardView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(BudgetBeaverPalette.bank.opacity(0.6), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .background(BudgetBeaverPalette.bank.opacity(0.6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(BudgetBeaverPalette.border, lineWidth: 1)
         )
     }
@@ -264,12 +264,12 @@ struct DashboardView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(BudgetBeaverPalette.bank, lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.06), radius: 14, x: 0, y: 8)
+        .shadow(color: AppTheme.cardShadow, radius: 8, x: 0, y: 3)
     }
 
     private var damBarSummary: some View {
@@ -402,12 +402,12 @@ struct DashboardView: View {
                 }
                 .padding(20)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(BudgetBeaverPalette.bank.opacity(0.6), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .background(BudgetBeaverPalette.bank.opacity(0.6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
         }
         .padding(16)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
-        .shadow(color: Color.black.opacity(0.08), radius: 16, x: 0, y: 8)
+        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .shadow(color: AppTheme.cardShadow, radius: 8, x: 0, y: 3)
     }
 
     private func beaverSettlementRow(_ settlement: SettlementSuggestion) -> some View {
@@ -456,8 +456,8 @@ struct DashboardView: View {
             .buttonStyle(.plain)
         }
         .padding(12)
-        .background(BudgetBeaverPalette.innerSurface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(BudgetBeaverPalette.innerSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(settlement.from.displayName) owes \(settlement.to.displayName) \(amount(settlement.amount)). Tap for breakdown.")
     }
@@ -516,7 +516,7 @@ struct DashboardView: View {
             }
             .padding(24)
             .frame(maxWidth: 360)
-            .background(Color.white, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+            .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .padding(.horizontal, 24)
         }
         .transition(.opacity.combined(with: .scale(scale: 0.98)))
@@ -576,9 +576,9 @@ struct DashboardView: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity)
-        .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+        .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 32, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(BudgetBeaverPalette.border, lineWidth: 1)
         )
     }
@@ -606,7 +606,7 @@ struct DashboardView: View {
                     .font(.title3.weight(.bold))
                     .foregroundStyle(BudgetBeaverPalette.water)
                     .frame(width: 46, height: 46)
-                    .background(.white.opacity(0.6), in: Circle())
+                    .background(AppTheme.surface.opacity(0.6), in: Circle())
                     .background(.ultraThinMaterial, in: Circle())
             }
 
@@ -633,10 +633,10 @@ struct DashboardView: View {
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             ),
-            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(BudgetBeaverPalette.water.opacity(0.20), lineWidth: 1)
         )
     }
@@ -663,9 +663,9 @@ struct DashboardView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(BudgetBeaverPalette.bank.opacity(0.6), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .background(BudgetBeaverPalette.bank.opacity(0.6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(BudgetBeaverPalette.border, lineWidth: 1)
         )
     }
@@ -913,9 +913,9 @@ private struct SettlementListView: View {
                         }
                         .padding(24)
                         .frame(maxWidth: .infinity)
-                        .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+                        .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
                                 .stroke(BudgetBeaverPalette.border, lineWidth: 1)
                         )
                     } else {
@@ -984,9 +984,9 @@ private struct SettlementListView: View {
             .buttonStyle(.plain)
         }
         .padding(16)
-        .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+        .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 32, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(BudgetBeaverPalette.border, lineWidth: 1)
         )
     }

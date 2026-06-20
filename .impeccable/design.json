@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-20T00:00:00-04:00",
+  "title": "Design System: BudgetMate",
+  "extensions": {
+    "colorMeta": {
+      "brand-blue": {
+        "role": "primary",
+        "displayName": "Trust Blue",
+        "canonical": "#2563EB",
+        "tonalRamp": ["#EFF6FF", "#DBEAFE", "#93C5FD", "#2563EB", "#1D4ED8", "#1E3A8A"]
+      },
+      "beaver-ink": {
+        "role": "neutral",
+        "displayName": "Adaptive Ledger Ink",
+        "canonical": "Color.primary",
+        "tonalRamp": ["systemGroupedBackground", "tertiarySystemGroupedBackground", "secondaryLabel", "label"]
+      },
+      "income-green": {
+        "role": "success",
+        "displayName": "Income Green",
+        "canonical": "#16A34A",
+        "tonalRamp": ["#F0FDF4", "#DCFCE7", "#86EFAC", "#16A34A", "#15803D", "#14532D"]
+      },
+      "expense-red": {
+        "role": "danger",
+        "displayName": "Expense Red",
+        "canonical": "#DC2626",
+        "tonalRamp": ["#FEF2F2", "#FEE2E2", "#FCA5A5", "#DC2626", "#B91C1C", "#7F1D1D"]
+      },
+      "warning-orange": {
+        "role": "warning",
+        "displayName": "Pacing Warning",
+        "canonical": "#EA580C",
+        "tonalRamp": ["#FFF7ED", "#FFEDD5", "#FDBA74", "#EA580C", "#C2410C", "#7C2D12"]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Rounded Amount Display",
+        "purpose": "Large balances, remaining budget, and onboarding title only."
+      },
+      "headline": {
+        "displayName": "Product Headline",
+        "purpose": "Card headings, settings groups, and primary section titles."
+      },
+      "body": {
+        "displayName": "System Body",
+        "purpose": "Forms, settings rows, helper copy, and transaction details."
+      },
+      "label": {
+        "displayName": "State Label",
+        "purpose": "Compact status labels and money-state captions."
+      }
+    },
+    "shadows": [
+      {
+        "name": "card-ambient",
+        "value": "0 3px 8px rgba(0,0,0,0.05)",
+        "purpose": "Existing general card lift from AppTheme.CardSurface."
+      },
+      {
+        "name": "warm-card-lift",
+        "value": "0 3px 8px rgba(0,0,0,0.05)",
+        "purpose": "Dashboard/Budget cards after the quieter surface pass."
+      },
+      {
+        "name": "tab-bar-lift",
+        "value": "0 -6px 18px rgba(0,0,0,0.08)",
+        "purpose": "Separates the bottom tab bar from scrollable content."
+      }
+    ],
+    "motion": [
+      {
+        "name": "press-scale",
+        "value": "spring(response: 0.25, dampingFraction: 0.7)",
+        "purpose": "Used by the central add transaction button."
+      },
+      {
+        "name": "standard-state",
+        "value": "easeInOut(duration: 0.2)",
+        "purpose": "Used for edit-state changes and small UI transitions."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "iphone-first",
+        "value": "native SwiftUI adaptive layout"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Full-width Trust Blue action button with bold text and optional SF Symbol."
+    },
+    {
+      "name": "Card Container",
+      "kind": "card",
+      "refersTo": "card-standard",
+      "description": "Standard reusable surface using AppTheme.surface, low-opacity stroke, 16px radius, and optional ambient shadow."
+    },
+    {
+      "name": "Warm Finance Card",
+      "kind": "card",
+      "refersTo": "card-warm",
+      "description": "Dashboard/Budget finance card using adaptive system surfaces, 20px radius, and Trust Blue for primary emphasis."
+    },
+    {
+      "name": "Bottom Tab Bar",
+      "kind": "nav",
+      "description": "Icon-only SwiftUI bottom navigation with selected blue filled symbols and a centered add transaction action."
+    },
+    {
+      "name": "Settlement Row",
+      "kind": "custom",
+      "description": "Shared-budget row showing member avatars, who owes whom, amount, breakdown access, and mark-paid action."
+    }
+  ]
+}

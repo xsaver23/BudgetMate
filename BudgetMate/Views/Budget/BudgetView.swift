@@ -378,9 +378,9 @@ struct BudgetView: View {
     private func beaverCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         content()
             .padding(18)
-            .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+            .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 32, style: .continuous)
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .stroke(BudgetBeaverPalette.border, lineWidth: 1)
             )
     }
@@ -414,9 +414,9 @@ struct BudgetView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(BudgetBeaverPalette.bank.opacity(0.6), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .background(BudgetBeaverPalette.bank.opacity(0.6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(BudgetBeaverPalette.border, lineWidth: 1)
         )
     }

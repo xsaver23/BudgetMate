@@ -10,7 +10,7 @@ enum AppTheme {
     // Surfaces
     static let background = Color(uiColor: .systemGroupedBackground)
     static let surface = Color(uiColor: .secondarySystemGroupedBackground)
-    static let surfaceStroke = Color.primary.opacity(0.06)
+    static let surfaceStroke = Color.primary.opacity(0.08)
 
     // Semantic
     static let income = Color(hex: "#16A34A")
@@ -24,30 +24,30 @@ enum AppTheme {
 
     // Card metrics
     static let cardRadius: CGFloat = 16
-    static let cardShadow = Color.black.opacity(0.08)
+    static let cardShadow = Color.black.opacity(0.05)
 }
 
 enum BudgetBeaverPalette {
-    static let warmBackground = Color(hex: "#E8E4DC")
-    static let ink = Color(hex: "#4A3B32")
-    static let wood = Color(hex: "#8B5A2B")
-    static let paper = Color(hex: "#FEFDFB")
-    static let bank = Color(hex: "#F4F1EA")
-    static let innerSurface = Color(hex: "#F5F3F0")
-    static let pill = Color(hex: "#F1ECE2")
-    static let border = Color(hex: "#E8E3D9")
-    static let water = Color(hex: "#4A90E2")
-    static let rebBrown = Color(hex: "#7B5A3E")
-    static let jenBlue = Color(hex: "#5B93E8")
-    static let darkButton = Color(hex: "#4A3F35")
-    static let amountDark = Color(hex: "#3D3D3D")
-    static let amountRed = Color(hex: "#D4183D")
-    static let grayText = Color(hex: "#717182")
-    static let muted = Color(hex: "#B4A592")
-    static let forest = Color(hex: "#3E885B")
-    static let forestText = Color(hex: "#2C6341")
-    static let forestSoft = Color(hex: "#F2F7F4")
-    static let clay = Color(hex: "#D97757")
+    static let warmBackground = AppTheme.background
+    static let ink = AppTheme.textPrimary
+    static let wood = AppTheme.textSecondary
+    static let paper = AppTheme.surface
+    static let bank = Color(uiColor: .tertiarySystemGroupedBackground)
+    static let innerSurface = Color(uiColor: .systemGroupedBackground)
+    static let pill = AppTheme.brandSoft
+    static let border = AppTheme.surfaceStroke
+    static let water = AppTheme.brand
+    static let rebBrown = AppTheme.warning
+    static let jenBlue = AppTheme.brand
+    static let darkButton = AppTheme.textPrimary
+    static let amountDark = AppTheme.textPrimary
+    static let amountRed = AppTheme.expense
+    static let grayText = AppTheme.textSecondary
+    static let muted = AppTheme.textSecondary
+    static let forest = AppTheme.income
+    static let forestText = AppTheme.income
+    static let forestSoft = AppTheme.income.opacity(0.10)
+    static let clay = AppTheme.warning
 }
 
 extension Font {
@@ -76,9 +76,9 @@ struct CardSurface: ViewModifier {
             )
             .shadow(
                 color: showsShadow ? AppTheme.cardShadow : .clear,
-                radius: showsShadow ? 12 : 0,
+                radius: showsShadow ? 8 : 0,
                 x: 0,
-                y: showsShadow ? 6 : 0
+                y: showsShadow ? 3 : 0
             )
     }
 }
