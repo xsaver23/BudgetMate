@@ -18,6 +18,7 @@ struct MonthSliderView: View {
                     Text(monthSelectionStore.selectedMonthTitle)
                         .font(.roundedBold(20))
                         .foregroundStyle(AppTheme.textPrimary)
+                        .animation(.easeOut(duration: 0.16), value: selectedIndex)
                 }
 
                 Spacer()
@@ -41,7 +42,7 @@ struct MonthSliderView: View {
                 .frame(width: 34, height: 34)
                 .background(Circle().fill(enabled ? AppTheme.brandSoft : AppTheme.background))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle(scale: 0.94))
         .disabled(!enabled)
         .accessibilityLabel(systemImage == "chevron.left" ? "Previous month" : "Next month")
     }

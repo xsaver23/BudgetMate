@@ -10,6 +10,7 @@ struct DashboardView: View {
     @EnvironmentObject private var appRefreshStore: AppRefreshStore
     var onOpenSettings: () -> Void = {}
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selectedMemberId: UUID? = nil
     @State private var selectedTransaction: Transaction?
     @State private var pendingSettlement: SettlementSuggestion?
@@ -119,13 +120,14 @@ struct DashboardView: View {
                     },
                     onSettle: { settlement in
                         isShowingSettlementList = false
-                        pendingSettlement = settlement
+                        presentPendingSettlement(settlement)
                     }
                 )
             }
             .overlay {
                 if let settlement = pendingSettlement {
                     settlementConfirmationOverlay(settlement)
+                        .transition(settlementOverlayTransition)
                 }
             }
         }
@@ -156,7 +158,27 @@ struct DashboardView: View {
             userScopeId: authStore.currentUserScopeId,
             budgetScopeId: authStore.currentBudgetScopeId
         )
-        pendingSettlement = nil
+        clearPendingSettlement()
+    }
+
+    private var settlementOverlayAnimation: Animation {
+        reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.2, dampingFraction: 0.9)
+    }
+
+    private var settlementOverlayTransition: AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.96))
+    }
+
+    private func presentPendingSettlement(_ settlement: SettlementSuggestion) {
+        withAnimation(settlementOverlayAnimation) {
+            pendingSettlement = settlement
+        }
+    }
+
+    private func clearPendingSettlement() {
+        withAnimation(settlementOverlayAnimation) {
+            pendingSettlement = nil
+        }
     }
 
     // MARK: - Member filter
@@ -442,10 +464,10 @@ struct DashboardView: View {
                         .minimumScaleFactor(0.6)
                 }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle(scale: 0.985, pressedOpacity: 0.9))
 
             Button {
-                pendingSettlement = settlement
+                presentPendingSettlement(settlement)
             } label: {
                 Image(systemName: "checkmark")
                     .font(.caption.weight(.black))
@@ -453,7 +475,7 @@ struct DashboardView: View {
                     .frame(width: 34, height: 34)
                     .background(BudgetBeaverPalette.darkButton, in: Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle(scale: 0.94))
         }
         .padding(12)
         .background(BudgetBeaverPalette.innerSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -480,7 +502,7 @@ struct DashboardView: View {
             Color.black.opacity(0.5)
                 .ignoresSafeArea()
                 .onTapGesture {
-                    pendingSettlement = nil
+                    clearPendingSettlement()
                 }
 
             VStack(spacing: 18) {
@@ -500,10 +522,10 @@ struct DashboardView: View {
                             .frame(maxWidth: .infinity, minHeight: 50)
                             .background(BudgetBeaverPalette.jenBlue, in: Capsule())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
 
                     Button {
-                        pendingSettlement = nil
+                        clearPendingSettlement()
                     } label: {
                         Text("Cancel")
                             .font(.headline.weight(.bold))
@@ -511,7 +533,7 @@ struct DashboardView: View {
                             .frame(maxWidth: .infinity, minHeight: 50)
                             .background(Color.gray.opacity(0.14), in: Capsule())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
                 }
             }
             .padding(24)
@@ -519,7 +541,6 @@ struct DashboardView: View {
             .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .padding(.horizontal, 24)
         }
-        .transition(.opacity.combined(with: .scale(scale: 0.98)))
     }
 
     private func firstName(_ member: BudgetMember) -> String {
@@ -970,7 +991,7 @@ private struct SettlementListView: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle(scale: 0.985, pressedOpacity: 0.9))
 
             Button {
                 onSettle(settlement)
@@ -981,7 +1002,7 @@ private struct SettlementListView: View {
                     .frame(maxWidth: .infinity, minHeight: 46)
                     .background(BudgetBeaverPalette.darkButton, in: Capsule())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
         }
         .padding(16)
         .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 20, style: .continuous))

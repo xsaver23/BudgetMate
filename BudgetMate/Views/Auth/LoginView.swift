@@ -138,7 +138,7 @@ struct LoginView: View {
                     .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .foregroundStyle(.white)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 .disabled(!canSubmit)
                 .opacity(canSubmit ? 1 : 0.45)
             }
@@ -159,7 +159,7 @@ struct LoginView: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.brand)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle(scale: 0.98, pressedOpacity: 0.82))
     }
 
     private func submit() {

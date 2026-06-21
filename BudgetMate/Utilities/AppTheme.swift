@@ -57,6 +57,27 @@ extension Font {
     }
 }
 
+/// Subtle press feedback for plain SwiftUI buttons. Use it when we opt out of
+/// native button styles but still want the control to feel physically responsive.
+struct PressableButtonStyle: ButtonStyle {
+    var scale: CGFloat = 0.97
+    var pressedOpacity: Double = 0.92
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? scale : 1))
+            .opacity(configuration.isPressed ? pressedOpacity : 1)
+            .animation(
+                reduceMotion
+                    ? .easeOut(duration: 0.12)
+                    : .spring(response: 0.16, dampingFraction: 0.82),
+                value: configuration.isPressed
+            )
+    }
+}
+
 /// Reusable "Card-based Modern" surface: white fill, soft rounded corners, soft shadow.
 struct CardSurface: ViewModifier {
     var padding: CGFloat = 16

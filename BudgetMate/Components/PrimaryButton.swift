@@ -16,10 +16,10 @@ struct PrimaryButton: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
+            .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .foregroundStyle(.white)
         }
-        .tint(AppTheme.brand)
-        .buttonStyle(.borderedProminent)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .buttonStyle(PressableButtonStyle())
     }
 }
 

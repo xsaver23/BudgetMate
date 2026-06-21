@@ -61,7 +61,7 @@ struct RootTabView: View {
                 .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle(scale: 0.97, pressedOpacity: 0.86))
         .accessibilityLabel(title)
     }
 
@@ -80,16 +80,8 @@ struct RootTabView: View {
                 )
                 .frame(maxWidth: .infinity)
         }
-        .buttonStyle(ScalePressButtonStyle())
+        .buttonStyle(PressableButtonStyle(scale: 0.96))
         .accessibilityLabel("Add Transaction")
-    }
-}
-
-private struct ScalePressButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.92 : 1)
-            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
     }
 }
 
