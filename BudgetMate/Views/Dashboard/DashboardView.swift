@@ -474,6 +474,8 @@ struct DashboardView: View {
                     .foregroundStyle(Color.white)
                     .frame(width: 34, height: 34)
                     .background(BudgetBeaverPalette.darkButton, in: Circle())
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
             }
             .buttonStyle(PressableButtonStyle(scale: 0.94))
         }

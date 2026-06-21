@@ -41,6 +41,8 @@ struct MonthSliderView: View {
                 .foregroundStyle(enabled ? AppTheme.brand : AppTheme.textSecondary.opacity(0.4))
                 .frame(width: 34, height: 34)
                 .background(Circle().fill(enabled ? AppTheme.brandSoft : AppTheme.background))
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
         }
         .buttonStyle(PressableButtonStyle(scale: 0.94))
         .disabled(!enabled)

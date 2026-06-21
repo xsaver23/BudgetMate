@@ -73,8 +73,13 @@
     "motion": [
       {
         "name": "press-scale",
-        "value": "spring(response: 0.25, dampingFraction: 0.7)",
-        "purpose": "Used by the central add transaction button."
+        "value": "spring(response: 0.16, dampingFraction: 0.82)",
+        "purpose": "Shared PressableButtonStyle for plain custom buttons; defaults to scale 0.97 and respects reduced motion."
+      },
+      {
+        "name": "settlement-overlay",
+        "value": "spring(response: 0.2, dampingFraction: 0.9)",
+        "purpose": "Short confirmation overlay transition, falling back to fade when Reduce Motion is enabled."
       },
       {
         "name": "standard-state",

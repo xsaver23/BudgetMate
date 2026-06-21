@@ -49,8 +49,7 @@ typography:
 rounded:
   sm: "10px"
   md: "16px"
-  lg: "24px"
-  current-max: "32px"
+  lg: "20px"
 spacing:
   xs: "6px"
   sm: "10px"
@@ -140,8 +139,8 @@ The current palette uses Trust Blue as the main product accent, adaptive system 
 BudgetMate currently uses a hybrid of tonal layering, borders, and soft shadows. Standard cards use a 1px low-opacity stroke plus a shadow around radius 12/offset 6. Warm dashboard cards also use larger radii and shadows around radius 14-16/offset 8. The long-term direction should be flatter by default, using shadows for tab bars, overlays, and interactive prominence rather than every repeated card.
 
 ### Shadow Vocabulary
-- **Card Ambient** (`0 6px 12px rgba(0,0,0,0.08)`): Current `CardSurface` default.
-- **Warm Card Lift** (`0 8px 14-16px rgba(0,0,0,0.06-0.08)`): Existing dashboard and budget warm cards.
+- **Card Ambient** (`0 3px 8px rgba(0,0,0,0.05)`): Current `CardSurface` default.
+- **Warm Card Lift** (`0 3px 8px rgba(0,0,0,0.05)`): Dashboard and budget finance cards after the quieter surface pass.
 - **Tab Bar Lift** (`0 -6px 18px rgba(0,0,0,0.08)`): Bottom navigation separation.
 
 ### Named Rules
@@ -154,7 +153,7 @@ BudgetMate currently uses a hybrid of tonal layering, borders, and soft shadows.
 - **Shape:** 16px rounded rectangle for primary buttons; circular icon buttons for compact actions.
 - **Primary:** Trust Blue background with white text, 14px vertical padding, bold label, optional SF Symbol.
 - **Secondary / Text:** SwiftUI button styles and blue text actions currently appear in Settings and card headers.
-- **State:** Disabled and loading states exist in sync controls but should be standardized across all save/sync/settle actions.
+- **State:** Disabled and loading states exist in sync controls. Plain custom buttons use `PressableButtonStyle` for subtle scale/opacity feedback with reduced-motion support.
 
 ### Chips
 - **Style:** Current chips use capsules or rounded rectangles with soft tinted backgrounds for sync state, split-bill labels, and budget status.
