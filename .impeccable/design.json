@@ -10,11 +10,17 @@
         "canonical": "#2563EB",
         "tonalRamp": ["#EFF6FF", "#DBEAFE", "#93C5FD", "#2563EB", "#1D4ED8", "#1E3A8A"]
       },
-      "beaver-ink": {
+      "adaptive-ink": {
         "role": "neutral",
         "displayName": "Adaptive Ledger Ink",
         "canonical": "Color.primary",
         "tonalRamp": ["systemGroupedBackground", "tertiarySystemGroupedBackground", "secondaryLabel", "label"]
+      },
+      "adaptive-muted": {
+        "role": "neutral",
+        "displayName": "Adaptive Muted Text",
+        "canonical": "Color.secondary",
+        "tonalRamp": ["tertiarySystemGroupedBackground", "secondarySystemGroupedBackground", "secondaryLabel"]
       },
       "income-green": {
         "role": "success",
@@ -60,7 +66,7 @@
         "purpose": "Existing general card lift from AppTheme.CardSurface."
       },
       {
-        "name": "warm-card-lift",
+        "name": "finance-card-lift",
         "value": "0 3px 8px rgba(0,0,0,0.05)",
         "purpose": "Dashboard/Budget cards after the quieter surface pass."
       },
@@ -110,7 +116,7 @@
     {
       "name": "Warm Finance Card",
       "kind": "card",
-      "refersTo": "card-warm",
+      "refersTo": "card-finance",
       "description": "Dashboard/Budget finance card using adaptive system surfaces, 20px radius, and Trust Blue for primary emphasis."
     },
     {

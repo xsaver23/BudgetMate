@@ -211,6 +211,7 @@ struct BudgetView: View {
                     }
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(BudgetBeaverPalette.water)
+                    .buttonStyle(PressableButtonStyle(scale: 0.97))
                 }
 
                 Text("Spending is tracked month by month.")
@@ -234,6 +235,7 @@ struct BudgetView: View {
                     .frame(maxWidth: .infinity, minHeight: 46)
                     .background(BudgetBeaverPalette.water, in: Capsule())
                     .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle(scale: 0.98))
 
                     Button {
                         categoryBeingEdited = nil
@@ -243,6 +245,7 @@ struct BudgetView: View {
                     }
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(BudgetBeaverPalette.water)
+                    .buttonStyle(PressableButtonStyle(scale: 0.97))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -266,6 +269,7 @@ struct BudgetView: View {
                         .foregroundStyle(BudgetBeaverPalette.ink)
                     }
                     .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle(scale: 0.97))
                 } else {
                     Text(category.displayName)
                         .font(.subheadline.weight(.bold))
@@ -282,6 +286,7 @@ struct BudgetView: View {
                             .font(.title3)
                     }
                     .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle(scale: 0.9))
                 }
 
                 if isEditingCategories {

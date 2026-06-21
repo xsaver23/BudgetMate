@@ -78,7 +78,7 @@ struct PressableButtonStyle: ButtonStyle {
     }
 }
 
-/// Reusable "Card-based Modern" surface: white fill, soft rounded corners, soft shadow.
+/// Reusable "Card-based Modern" surface: adaptive fill, soft rounded corners, soft shadow.
 struct CardSurface: ViewModifier {
     var padding: CGFloat = 16
     var cornerRadius: CGFloat = AppTheme.cardRadius

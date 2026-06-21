@@ -102,6 +102,7 @@ struct ProfileSetupView: View {
                         .foregroundStyle(.white)
                 }
                 .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle(scale: 0.98, pressedOpacity: canContinue ? 0.92 : 1))
                 .disabled(!canContinue)
                 .opacity(canContinue ? 1 : 0.45)
             }

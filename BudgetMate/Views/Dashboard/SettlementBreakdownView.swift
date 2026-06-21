@@ -163,6 +163,7 @@ struct SettlementBreakdownView: View {
             }
         }
         .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle(scale: 0.98, pressedOpacity: item.isTappable ? 0.9 : 1))
         .disabled(!item.isTappable)
         .accessibilityHint(item.isTappable ? "Opens details" : "")
     }
@@ -211,6 +212,7 @@ struct SettlementBreakdownView: View {
                 .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle(scale: 0.98))
     }
 
     // MARK: - Helpers

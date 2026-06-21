@@ -52,6 +52,7 @@ struct AppTopBar: View {
                 )
             }
             .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle(scale: 0.94))
         }
         .padding(.horizontal, 20)
         .padding(.top, 4)

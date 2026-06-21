@@ -237,8 +237,12 @@ struct AddTransactionView: View {
                 Image(systemName: isIncluded ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 20))
                     .foregroundStyle(isIncluded ? AppTheme.brand : AppTheme.textSecondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle(scale: 0.94))
+            .accessibilityLabel(isIncluded ? "Remove \(member.displayName) from split" : "Include \(member.displayName) in split")
 
             MemberInitialsBadge(
                 initials: member.initials,

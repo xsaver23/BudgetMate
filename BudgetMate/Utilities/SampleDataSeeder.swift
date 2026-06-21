@@ -85,13 +85,13 @@ enum SampleDataSeeder {
         )
 
         let householdSpecs: [Spec] = [
-            // Income — spread across household earners
+            // Income - spread across household earners
             Spec(title: "Salary", amount: 3200, type: .income, category: .work, payment: nil, payerIndex: 0, day: 1, monthsAgo: 0, splitAmong: nil),
             Spec(title: "Salary", amount: 2750, type: .income, category: .work, payment: nil, payerIndex: 1, day: 1, monthsAgo: 0, splitAmong: nil),
             Spec(title: "Freelance", amount: 1400, type: .income, category: .work, payment: nil, payerIndex: 2, day: 3, monthsAgo: 0, splitAmong: nil),
             Spec(title: "Salary", amount: 2950, type: .income, category: .work, payment: nil, payerIndex: 3, day: 1, monthsAgo: 0, splitAmong: nil),
 
-            // Shared household — split across everyone when 4+ members
+            // Shared household - split across everyone when 4+ members
             Spec(title: "Rent", amount: 2400, type: .expense, category: .rent, payment: .card, payerIndex: 0, day: 2, monthsAgo: 0, splitAmong: fourWay, recurrenceRule: monthly),
             Spec(title: "Electric", amount: 186, type: .expense, category: .bills, payment: .card, payerIndex: 1, day: 5, monthsAgo: 0, splitAmong: fourWay, recurrenceRule: monthly),
             Spec(title: "Internet", amount: 89, type: .expense, category: .bills, payment: .card, payerIndex: 0, day: 5, monthsAgo: 0, splitAmong: fourWay, recurrenceRule: monthly),

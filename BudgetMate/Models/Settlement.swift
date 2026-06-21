@@ -3,7 +3,7 @@ import SwiftData
 
 /// A recorded "settle up" payment that clears split-bill debt between two
 /// members. Kept separate from `Transaction` so it never affects income,
-/// expense, or category totals — it only adjusts who-owes-whom balances.
+/// expense, or category totals - it only adjusts who-owes-whom balances.
 @Model
 final class Settlement {
     var id: UUID

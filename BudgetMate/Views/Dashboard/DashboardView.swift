@@ -629,8 +629,7 @@ struct DashboardView: View {
                     .font(.title3.weight(.bold))
                     .foregroundStyle(BudgetBeaverPalette.water)
                     .frame(width: 46, height: 46)
-                    .background(AppTheme.surface.opacity(0.6), in: Circle())
-                    .background(.ultraThinMaterial, in: Circle())
+                    .background(BudgetBeaverPalette.water.opacity(0.12), in: Circle())
             }
 
             Text(amount(item.amount))
@@ -647,20 +646,10 @@ struct DashboardView: View {
                 .foregroundStyle(BudgetBeaverPalette.water.opacity(0.03))
                 .offset(x: 12, y: 18)
         }
-        .background(
-            LinearGradient(
-                colors: [
-                    BudgetBeaverPalette.water.opacity(0.10),
-                    BudgetBeaverPalette.water.opacity(0.06)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
+        .background(BudgetBeaverPalette.bank.opacity(0.6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(BudgetBeaverPalette.water.opacity(0.20), lineWidth: 1)
+                .stroke(BudgetBeaverPalette.border, lineWidth: 1)
         )
     }
 

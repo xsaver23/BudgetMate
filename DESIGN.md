@@ -11,15 +11,11 @@ colors:
   expense-red: "#DC2626"
   positive-teal: "#0D9488"
   warning-orange: "#EA580C"
-  beaver-warm-background: "#E8E4DC"
-  beaver-ink: "#4A3B32"
-  beaver-wood: "#8B5A2B"
-  beaver-paper: "#FFFFFF"
-  beaver-bank: "#F2F2F7"
-  beaver-water: "#4A90E2"
-  beaver-forest: "#3E885B"
-  beaver-clay: "#D97757"
-  beaver-danger: "#D4183D"
+  adaptive-ink: "Color.primary"
+  adaptive-muted: "Color.secondary"
+  adaptive-inner-surface: "systemGroupedBackground"
+  adaptive-raised-surface: "secondarySystemGroupedBackground"
+  adaptive-soft-surface: "tertiarySystemGroupedBackground"
 typography:
   display:
     fontFamily: "SF Pro Rounded, system"
@@ -63,12 +59,12 @@ components:
     padding: "14px 16px"
   card-standard:
     backgroundColor: "{colors.system-surface}"
-    textColor: "{colors.beaver-ink}"
+    textColor: "{colors.adaptive-ink}"
     rounded: "{rounded.md}"
     padding: "16px"
-  card-warm:
-    backgroundColor: "{colors.beaver-paper}"
-    textColor: "{colors.beaver-ink}"
+  card-finance:
+    backgroundColor: "{colors.adaptive-raised-surface}"
+    textColor: "{colors.adaptive-ink}"
     rounded: "{rounded.lg}"
     padding: "18px"
 ---
@@ -97,8 +93,8 @@ The current palette uses Trust Blue as the main product accent, adaptive system 
 - **Trust Blue** (#2563EB): Primary actions, selected navigation, onboarding mark, empty-state icon, and current selection. Keep it rare and purposeful.
 
 ### Secondary
-- **Ledger Warmth** (semantic warning/secondary text + adaptive grouped surfaces): Warm support colors for household context, secondary labels, and low-emphasis surfaces.
-- **Clear Water**: Deprecated as a separate visual identity; Dashboard/Budget money accents should use Trust Blue unless a semantic state needs income, expense, or warning.
+- **Ledger Warmth** (semantic warning/secondary text + adaptive grouped surfaces): Warm support is carried by tone, copy, and restrained semantic color, not by a separate brown/beige palette.
+- **Trust Blue Soft** (#DDE8FD approximation / `AppTheme.brandSoft`): Selection fills, icon wells, and quiet emphasis behind primary-blue symbols.
 
 ### Tertiary
 - **Category Spectrum**: Category colors currently use SwiftUI named colors such as orange, mint, indigo, teal, red, pink, purple, cyan, gray, and yellow. These need a more deliberate, color-blind-safe ramp before broad redesign work.
@@ -106,8 +102,10 @@ The current palette uses Trust Blue as the main product accent, adaptive system 
 ### Neutral
 - **System Grouped Background** (#F2F2F7 approximation): App shell background.
 - **System Surface** (#FFFFFF approximation): Cards, form rows, modal content, and list surfaces.
+- **Adaptive Ink** (`Color.primary`): Primary text and major money values in both light and dark mode.
+- **Adaptive Muted** (`Color.secondary`): Secondary labels, helper text, and low-emphasis metadata.
 - **Soft Stroke** (#0000000F): Standard low-contrast card border.
-- **Warm Paper** (#FEFDFB): Existing warm card background.
+- **Adaptive Finance Surfaces** (`secondarySystemGroupedBackground`, `tertiarySystemGroupedBackground`): Dashboard and Budget cards, tiles, and grouped money summaries.
 
 ### Named Rules
 
@@ -136,11 +134,11 @@ The current palette uses Trust Blue as the main product accent, adaptive system 
 
 ## 4. Elevation
 
-BudgetMate currently uses a hybrid of tonal layering, borders, and soft shadows. Standard cards use a 1px low-opacity stroke plus a shadow around radius 12/offset 6. Warm dashboard cards also use larger radii and shadows around radius 14-16/offset 8. The long-term direction should be flatter by default, using shadows for tab bars, overlays, and interactive prominence rather than every repeated card.
+BudgetMate currently uses tonal layering, low-opacity borders, and quiet shadows. Standard cards use a 1px low-opacity stroke plus a small ambient shadow. Dashboard and Budget finance cards use adaptive system surfaces with 20px corners, keeping the app calm in light mode and legible in dark mode. The long-term direction should stay flatter by default, using shadows for tab bars, overlays, and interactive prominence rather than every repeated card.
 
 ### Shadow Vocabulary
 - **Card Ambient** (`0 3px 8px rgba(0,0,0,0.05)`): Current `CardSurface` default.
-- **Warm Card Lift** (`0 3px 8px rgba(0,0,0,0.05)`): Dashboard and budget finance cards after the quieter surface pass.
+- **Finance Card Lift** (`0 3px 8px rgba(0,0,0,0.05)`): Dashboard and budget finance cards after the quieter surface pass.
 - **Tab Bar Lift** (`0 -6px 18px rgba(0,0,0,0.08)`): Bottom navigation separation.
 
 ### Named Rules
@@ -161,7 +159,7 @@ BudgetMate currently uses a hybrid of tonal layering, borders, and soft shadows.
 
 ### Cards / Containers
 - **Corner Style:** Standard product cards use 16px. Dashboard/Budget hero cards use 20px; avoid 32px for ordinary product cards.
-- **Background:** AppTheme cards use system surface; Dashboard/Budget warm cards use paper/bank colors.
+- **Background:** AppTheme cards use adaptive system surface; Dashboard/Budget finance cards use adaptive raised/soft system surfaces.
 - **Shadow Strategy:** See Elevation.
 - **Border:** 1px low-opacity stroke or warm border.
 - **Internal Padding:** 16-20px.

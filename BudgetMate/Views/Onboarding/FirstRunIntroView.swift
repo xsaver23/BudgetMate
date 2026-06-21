@@ -59,6 +59,7 @@ struct FirstRunIntroView: View {
                         .foregroundStyle(.white)
                 }
                 .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle(scale: 0.98))
 
                 Text("You can adjust budget, currency, and household members in Settings.")
                     .font(.footnote)
