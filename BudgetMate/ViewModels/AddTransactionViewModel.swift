@@ -8,14 +8,7 @@ final class AddTransactionViewModel: ObservableObject {
         }
     }
     @Published var title: String = ""
-    @Published var amountText: String = "" {
-        didSet {
-            let sanitized = Self.sanitizedMoneyText(amountText)
-            if sanitized != amountText {
-                amountText = sanitized
-            }
-        }
-    }
+    @Published var amountText: String = ""
     @Published var category: TransactionCategory = .other
     @Published var paymentMethod: PaymentMethod = .card
     @Published var date: Date = .now
@@ -29,14 +22,7 @@ final class AddTransactionViewModel: ObservableObject {
     @Published var isSplit: Bool = false
     @Published var splitMethod: SplitMethod = .equally
     @Published var participants: Set<UUID> = []
-    @Published var customAmounts: [UUID: String] = [:] {
-        didSet {
-            let sanitized = customAmounts.mapValues(Self.sanitizedMoneyText)
-            if sanitized != customAmounts {
-                customAmounts = sanitized
-            }
-        }
-    }
+    @Published var customAmounts: [UUID: String] = [:]
 
     var availableCategories: [TransactionCategory] {
         if type == .expense {
@@ -85,6 +71,22 @@ final class AddTransactionViewModel: ObservableObject {
     var parsedAmount: Double? {
         guard let value = Double(amountText), value > 0 else { return nil }
         return value
+    }
+
+    func updateAmountText(_ text: String) {
+        let sanitized = Self.sanitizedMoneyText(text)
+        guard sanitized != amountText else { return }
+        amountText = sanitized
+    }
+
+    func customAmountText(for memberId: UUID) -> String {
+        customAmounts[memberId] ?? ""
+    }
+
+    func updateCustomAmount(_ text: String, for memberId: UUID) {
+        let sanitized = Self.sanitizedMoneyText(text)
+        guard sanitized != customAmounts[memberId] else { return }
+        customAmounts[memberId] = sanitized
     }
 
     // MARK: - Split helpers

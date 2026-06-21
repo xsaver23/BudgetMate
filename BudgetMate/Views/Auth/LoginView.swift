@@ -17,8 +17,11 @@ struct LoginView: View {
     }
 
     private var canSubmit: Bool {
-        guard email.contains("@"), password.count >= 6, !authStore.isLoading else { return false }
-        return !isCreatingAccount || !confirmPassword.isEmpty
+        guard Self.isValidEmail(email), !authStore.isLoading else { return false }
+        if isCreatingAccount {
+            return Self.isValidNewPassword(password) && password == confirmPassword
+        }
+        return password.count >= 6
     }
 
     var body: some View {
@@ -43,16 +46,16 @@ struct LoginView: View {
                 .font(.system(size: 38, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 74, height: 74)
-                .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
 
             VStack(spacing: 6) {
                 Text(isCreatingAccount ? "Create your account" : "Welcome back")
                     .font(.roundedBold(28))
-                    .foregroundStyle(AppTheme.textPrimary)
+                    .foregroundStyle(BudgetBeaverPalette.ink)
 
                 Text(isCreatingAccount ? "Start with a private account. Shared budgets come next." : "Sign in to continue to BudgetMate.")
                     .font(.subheadline)
-                    .foregroundStyle(AppTheme.textSecondary)
+                    .foregroundStyle(BudgetBeaverPalette.wood)
                     .multilineTextAlignment(.center)
             }
         }
@@ -66,7 +69,7 @@ struct LoginView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Email")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(AppTheme.textSecondary)
+                        .foregroundStyle(BudgetBeaverPalette.wood)
                     TextField("", text: $email)
                         .keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never)
@@ -74,18 +77,18 @@ struct LoginView: View {
                         .textContentType(.emailAddress)
                         .focused($focusedField, equals: .email)
                         .padding(12)
-                        .background(AppTheme.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Password")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(AppTheme.textSecondary)
+                        .foregroundStyle(BudgetBeaverPalette.wood)
                     SecureField("", text: $password)
                         .textContentType(isCreatingAccount ? .newPassword : .password)
                         .focused($focusedField, equals: .password)
                         .padding(12)
-                        .background(AppTheme.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                         .onChange(of: password) { _, _ in
                             updatePasswordMismatchMessage()
                         }
@@ -95,12 +98,12 @@ struct LoginView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Confirm Password")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(AppTheme.textSecondary)
+                            .foregroundStyle(BudgetBeaverPalette.wood)
                         SecureField("", text: $confirmPassword)
                             .textContentType(.newPassword)
                             .focused($focusedField, equals: .confirmPassword)
                             .padding(12)
-                            .background(AppTheme.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                             .onChange(of: confirmPassword) { _, _ in
                                 updatePasswordMismatchMessage()
                             }
@@ -135,7 +138,7 @@ struct LoginView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-                    .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                     .foregroundStyle(.white)
                 }
                 .buttonStyle(PressableButtonStyle())
@@ -177,13 +180,18 @@ struct LoginView: View {
     }
 
     private func validateForm() -> Bool {
-        if !email.contains("@") {
+        if !Self.isValidEmail(email) {
             validationMessage = "Enter a valid email address."
             return false
         }
 
-        if password.count < 6 {
-            validationMessage = "Password must be at least 6 characters."
+        if isCreatingAccount && !Self.isValidNewPassword(password) {
+            validationMessage = "Use at least 8 characters with a letter and a number."
+            return false
+        }
+
+        if !isCreatingAccount && password.count < 6 {
+            validationMessage = "Enter your password."
             return false
         }
 
@@ -193,6 +201,19 @@ struct LoginView: View {
         }
 
         return true
+    }
+
+    private static func isValidEmail(_ email: String) -> Bool {
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pattern = #"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$"#
+        return trimmed.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private static func isValidNewPassword(_ password: String) -> Bool {
+        guard password.count >= 8 else { return false }
+        let hasLetter = password.range(of: #"[A-Za-z]"#, options: .regularExpression) != nil
+        let hasNumber = password.range(of: #"[0-9]"#, options: .regularExpression) != nil
+        return hasLetter && hasNumber
     }
 
     private func updatePasswordMismatchMessage() {

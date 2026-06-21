@@ -41,16 +41,16 @@ struct ProfileSetupView: View {
                 .font(.system(size: 36, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 74, height: 74)
-                .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
 
             VStack(spacing: 6) {
                 Text("Create your profile")
                     .font(.roundedBold(28))
-                    .foregroundStyle(AppTheme.textPrimary)
+                    .foregroundStyle(BudgetBeaverPalette.ink)
 
                 Text("This is how your name will appear in your budget.")
                     .font(.subheadline)
-                    .foregroundStyle(AppTheme.textSecondary)
+                    .foregroundStyle(BudgetBeaverPalette.wood)
                     .multilineTextAlignment(.center)
             }
         }
@@ -68,6 +68,7 @@ struct ProfileSetupView: View {
                         Spacer()
                         Text(email)
                             .foregroundStyle(AppTheme.textPrimary)
+                            .fontWeight(.bold)
                             .lineLimit(1)
                     }
                     .font(.subheadline)
@@ -76,12 +77,12 @@ struct ProfileSetupView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Name")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(AppTheme.textSecondary)
+                        .foregroundStyle(BudgetBeaverPalette.wood)
                     TextField("", text: $displayName)
                         .textContentType(.name)
                         .focused($isNameFocused)
                         .padding(12)
-                        .background(AppTheme.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
 
                 if let validationMessage {
@@ -98,7 +99,7 @@ struct ProfileSetupView: View {
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
-                        .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                         .foregroundStyle(.white)
                 }
                 .buttonStyle(.plain)

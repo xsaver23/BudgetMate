@@ -107,58 +107,73 @@ struct TransactionsView: View {
     }
 
     private var memberFilterCard: some View {
-        CardContainer {
-            Picker("View", selection: $selectedMemberId) {
-                Text("Combined").tag(Optional<UUID>.none)
-                ForEach(memberViewModel.members) { member in
-                    Text(member.displayName).tag(Optional(member.id))
-                }
+        HStack(spacing: 12) {
+            memberFilterButton(title: "All", color: AppTheme.brand, selection: nil)
+            ForEach(memberViewModel.members) { member in
+                memberFilterButton(
+                    title: String(member.initials.prefix(1)).uppercased(),
+                    color: Color(hex: member.colorHex),
+                    selection: member.id
+                )
             }
-            .pickerStyle(.segmented)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func memberFilterButton(title: String, color: Color, selection: UUID?) -> some View {
+        Button {
+            selectedMemberId = selection
+        } label: {
+            Text(title)
+                .font(.headline.weight(.black))
+                .foregroundStyle(.white)
+                .frame(width: 42, height: 42)
+                .background(color, in: Circle())
+                .overlay {
+                    Circle()
+                        .stroke(selectedMemberId == selection ? AppTheme.secondaryAction : .clear, lineWidth: 4)
+                }
+        }
+        .buttonStyle(PressableButtonStyle(scale: 0.92))
     }
 
     private func dayCard(date: Date, items: [Transaction]) -> some View {
-        CardContainer {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text(dayTitle(for: date))
-                        .font(.roundedBold(15))
-                        .foregroundStyle(AppTheme.textPrimary)
-                    Spacer()
-                    Text(dayNetLabel(for: items))
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(AppTheme.textSecondary)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(dayTitle(for: date))
+                    .font(.roundedBold(18))
+                    .foregroundStyle(BudgetBeaverPalette.wood)
+                Spacer()
+                Text(dayNetLabel(for: items))
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(BudgetBeaverPalette.wood)
+            }
+
+            ForEach(items) { transaction in
+                CompactTransactionRow(
+                    transaction: transaction,
+                    currencySymbol: currencySymbol,
+                    members: memberViewModel.members
+                )
+                .padding(14)
+                .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .onTapGesture {
+                    selectedTransaction = transaction
                 }
-
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, transaction in
-                    CompactTransactionRow(
-                        transaction: transaction,
-                        currencySymbol: currencySymbol,
-                        members: memberViewModel.members
-                    )
-                    .onTapGesture {
-                        selectedTransaction = transaction
-                    }
-                    .contextMenu {
-                        if transaction.isGeneratedRecurringOccurrence {
-                            Text("Recurring occurrence")
-                        } else {
-                            Button(role: .destructive) {
-                                delete(transaction)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
+                .contextMenu {
+                    if transaction.isGeneratedRecurringOccurrence {
+                        Text("Recurring occurrence")
+                    } else {
+                        Button(role: .destructive) {
+                            delete(transaction)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
                         }
-                    }
-
-                    if index < items.count - 1 {
-                        Divider()
                     }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var emptyStateCard: some View {

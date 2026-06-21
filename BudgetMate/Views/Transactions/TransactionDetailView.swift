@@ -141,22 +141,21 @@ struct TransactionDetailView: View {
             VStack(spacing: 10) {
                 Text(transaction.title)
                     .font(.roundedBold(20))
-                    .foregroundStyle(AppTheme.textPrimary)
+                    .foregroundStyle(BudgetBeaverPalette.ink)
                     .multilineTextAlignment(.center)
 
                 Text(signedAmount)
                     .font(.roundedBold(40))
-                    .foregroundStyle(amountTint)
+                    .foregroundStyle(transaction.type == .income ? AppTheme.brand : AppTheme.danger)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
 
                 Text(transaction.type == .expense ? "Expense" : "Income")
                     .font(.caption.weight(.semibold))
-                    .tracking(0.5)
-                    .foregroundStyle(amountTint)
+                    .foregroundStyle(transaction.type == .income ? AppTheme.brand : AppTheme.danger)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 5)
-                    .background(Capsule().fill(amountTint.opacity(0.14)))
+                    .background(Capsule().fill(amountTint))
             }
             .frame(maxWidth: .infinity)
         }
@@ -227,13 +226,13 @@ struct TransactionDetailView: View {
         CardContainer(showsShadow: false) {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Split \(transaction.splits.count) ways")
-                    .font(.roundedBold(18))
-                    .foregroundStyle(AppTheme.textPrimary)
+                    .font(.roundedBold(22))
+                    .foregroundStyle(BudgetBeaverPalette.ink)
 
                 if let payer {
                     Text("\(firstName(payer)) paid \(CurrencyFormatter.amountString(transaction.amount, symbol: currencySymbol)). Each person below shows their share.")
-                        .font(.subheadline)
-                        .foregroundStyle(AppTheme.textSecondary)
+                    .font(.subheadline)
+                    .foregroundStyle(BudgetBeaverPalette.wood)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -260,11 +259,11 @@ struct TransactionDetailView: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(member?.displayName ?? "Unknown")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(AppTheme.textPrimary)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(BudgetBeaverPalette.ink)
                 Text(splitCaption(for: member, isPayer: isPayer))
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(isPayer ? AppTheme.brand : AppTheme.textSecondary)
+                    .foregroundStyle(isPayer ? AppTheme.brand : BudgetBeaverPalette.wood)
             }
 
             Spacer()
@@ -272,10 +271,10 @@ struct TransactionDetailView: View {
             VStack(alignment: .trailing, spacing: 1) {
                 Text(CurrencyFormatter.amountString(split.amount, symbol: currencySymbol))
                     .font(.roundedBold(15))
-                    .foregroundStyle(AppTheme.textPrimary)
+                    .foregroundStyle(BudgetBeaverPalette.ink)
                 Text("\(percent)%")
                     .font(.caption2)
-                    .foregroundStyle(AppTheme.textSecondary)
+                    .foregroundStyle(BudgetBeaverPalette.wood)
             }
         }
     }
@@ -303,12 +302,13 @@ struct TransactionDetailView: View {
             }
         } label: {
             Label(shouldShowRecurringActions ? "Manage Recurring Transaction" : "Delete Transaction", systemImage: "trash")
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.danger)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
+                .padding(.vertical, 16)
+                .background(AppTheme.expense, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
-        .buttonStyle(.bordered)
-        .tint(AppTheme.expense)
-        .controlSize(.large)
+        .buttonStyle(PressableButtonStyle(scale: 0.98))
     }
 
     private func stopFutureOccurrences() {
@@ -316,7 +316,11 @@ struct TransactionDetailView: View {
         let source = sourceTransaction
         let stopDate = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: transaction.date)) ?? .now
         source.recurrenceRule = Transaction.monthlyRecurrenceRule(until: stopDate)
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            cloudSyncStore.recordSyncIssue(error, context: "Stopping recurring transaction")
+        }
         cloudSyncStore.saveTransaction(
             source,
             userScopeId: authStore.currentUserScopeId,
@@ -332,6 +336,11 @@ struct TransactionDetailView: View {
             budgetScopeId: authStore.currentBudgetScopeId
         )
         modelContext.delete(transactionToDelete)
+        do {
+            try modelContext.save()
+        } catch {
+            cloudSyncStore.recordSyncIssue(error, context: "Deleting transaction locally")
+        }
         dismiss()
     }
 

@@ -75,17 +75,20 @@ struct SettlementBreakdownView: View {
                 }
 
                 Text("\(debtorName) owes \(creditorName)")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(AppTheme.textSecondary)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(BudgetBeaverPalette.wood)
                     .multilineTextAlignment(.center)
 
                 Text(amount(suggestion.amount))
                     .font(.roundedBold(40))
-                    .foregroundStyle(AppTheme.expense)
+                    .foregroundStyle(AppTheme.danger)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
             }
             .frame(maxWidth: .infinity)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(suggestion.from.displayName) owes \(suggestion.to.displayName)")
+            .accessibilityValue(amount(suggestion.amount))
         }
     }
 
@@ -104,8 +107,8 @@ struct SettlementBreakdownView: View {
         CardContainer {
             VStack(alignment: .leading, spacing: 14) {
                 Text("How this adds up")
-                    .font(.roundedBold(18))
-                    .foregroundStyle(AppTheme.textPrimary)
+                    .font(.roundedBold(22))
+                    .foregroundStyle(BudgetBeaverPalette.ink)
 
                 if lineItems.isEmpty {
                     Text("No shared bills found between \(debtorName) and \(creditorName).")
@@ -135,7 +138,7 @@ struct SettlementBreakdownView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.title)
                         .font(.subheadline.weight(.medium))
-                        .foregroundStyle(AppTheme.textPrimary)
+                        .foregroundStyle(BudgetBeaverPalette.ink)
                         .lineLimit(1)
                     HStack(spacing: 6) {
                         Text(item.subtitle)
@@ -143,7 +146,7 @@ struct SettlementBreakdownView: View {
                         Text(item.date, format: .dateTime.month().day())
                     }
                     .font(.caption)
-                    .foregroundStyle(AppTheme.textSecondary)
+                    .foregroundStyle(BudgetBeaverPalette.wood)
                     .lineLimit(1)
                 }
 
@@ -152,7 +155,7 @@ struct SettlementBreakdownView: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     Text(signedString(item))
                         .font(.roundedBold(15))
-                        .foregroundStyle(item.signedAmount >= 0 ? AppTheme.expense : AppTheme.income)
+                        .foregroundStyle(item.signedAmount >= 0 ? AppTheme.danger : AppTheme.brand)
 
                     if item.isTappable {
                         Image(systemName: "chevron.right")
@@ -165,6 +168,9 @@ struct SettlementBreakdownView: View {
         .buttonStyle(.plain)
         .buttonStyle(PressableButtonStyle(scale: 0.98, pressedOpacity: item.isTappable ? 0.9 : 1))
         .disabled(!item.isTappable)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(lineRowAccessibilityLabel(for: item))
+        .accessibilityValue(signedString(item))
         .accessibilityHint(item.isTappable ? "Opens details" : "")
     }
 
@@ -205,14 +211,16 @@ struct SettlementBreakdownView: View {
             dismiss()
         } label: {
             Text("Settle Up · \(amount(suggestion.amount))")
-                .font(.headline)
+                .font(.headline.weight(.black))
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .padding(.vertical, 16)
+                .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
         .buttonStyle(PressableButtonStyle(scale: 0.98))
+        .accessibilityLabel("Settle up")
+        .accessibilityValue(amount(suggestion.amount))
     }
 
     // MARK: - Helpers
@@ -220,6 +228,11 @@ struct SettlementBreakdownView: View {
     private func signedString(_ item: BalanceLineItem) -> String {
         let sign = item.signedAmount >= 0 ? "+" : "−"
         return "\(sign)\(amount(abs(item.signedAmount)))"
+    }
+
+    private func lineRowAccessibilityLabel(for item: BalanceLineItem) -> String {
+        let date = item.date.formatted(.dateTime.month(.wide).day().year())
+        return "\(item.title), \(item.subtitle), \(date)"
     }
 
     private func amount(_ value: Double) -> String {
@@ -307,6 +320,9 @@ private struct SettlementDetailView: View {
                     .background(Capsule().fill(AppTheme.brandSoft))
             }
             .frame(maxWidth: .infinity)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Settled up")
+            .accessibilityValue(amount(settlement.amount))
         }
     }
 
@@ -327,6 +343,9 @@ private struct SettlementDetailView: View {
                     .foregroundStyle(AppTheme.textSecondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("In this balance, \(lineItem.subtitle), between \(firstName(debtor)) and \(firstName(creditor))")
+            .accessibilityValue(signedBalanceAmount(lineItem.signedAmount))
         }
     }
 
@@ -376,7 +395,11 @@ private struct SettlementDetailView: View {
                 budgetScopeId: authStore.currentBudgetScopeId
             )
             modelContext.delete(settlement)
-            try? modelContext.save()
+            do {
+                try modelContext.save()
+            } catch {
+                cloudSyncStore.recordSyncIssue(error, context: "Removing settle-up record")
+            }
             dismiss()
         } label: {
             Label("Remove Settle Up Record", systemImage: "trash")

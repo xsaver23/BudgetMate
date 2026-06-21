@@ -12,7 +12,9 @@
 		04EBBEF2DC5D653E00C11553 /* CloudSyncStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C1FF8CAF3956F5439C907B /* CloudSyncStore.swift */; };
 		0CFD806005C4C0E4C5A5E519 /* Settlement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5236CAB74F2EBB8C4E6B245E /* Settlement.swift */; };
 		0DDFA368C6040E4BCCBCA462 /* RecurringTransactionResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B1C4EEAAF8B439C1BDF0E4A /* RecurringTransactionResolver.swift */; };
+		137B00305F3F4D83BEE1661A /* SettlementListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 137B002F5F3F4D83BEE1661A /* SettlementListView.swift */; };
 		1E8DC47DCDCA7F5F7F907A33 /* InviteMemberView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BE177D8067EBA5736F264DE /* InviteMemberView.swift */; };
+		27460235C54C45D99516DA9A /* DamProgressBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27460234C54C45D99516DA9A /* DamProgressBar.swift */; };
 		319F97090DFB7C419A855163 /* SettlementComputationCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37532693B19E92F2A7068DE1 /* SettlementComputationCache.swift */; };
 		331E819970ABE1F45D43F75C /* ProfileSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40D1E2872BC5A28B35336522 /* ProfileSetupView.swift */; };
 		3D7D90140B1F68BA6767DFE8 /* BudgetMemberRole.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EF7913BD5010F7FA6D7AD8E /* BudgetMemberRole.swift */; };
@@ -27,10 +29,12 @@
 		5BA51560BE2ACB459AE37C24 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DF2B227204A92A5987F60BD /* SettingsView.swift */; };
 		5E230B8EA4BBC77616B4A6E7 /* PreviewContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63D97E856CA3AF53B015F391 /* PreviewContainer.swift */; };
 		5F3892C00314079B4CDEABFE /* MemberViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42E01FE2D06F4A8E1B2ADBEC /* MemberViewModel.swift */; };
+		60B9E2105354484C8147C15B /* ClearTransactionsConfirmationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60B9E20F5354484C8147C15B /* ClearTransactionsConfirmationView.swift */; };
 		617F1361EEA10DBEFF2540D4 /* ExpenseCategoryPieChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0042F80975DBA8B9B0E38E /* ExpenseCategoryPieChartView.swift */; };
 		631130753B320141F9A03DBF /* BudgetRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC48A8C1B1BE4E449F2A0989 /* BudgetRepository.swift */; };
 		6C2A250CC81886316AAE6F08 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62B0E81BF035A15B3876C090 /* LoginView.swift */; };
 		6CBD951781CEAAC59C6C49EA /* PaymentMethod.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BCF11CF07DBEC8EEDD50EF2 /* PaymentMethod.swift */; };
+		72D2F73C8E174AB1842334C6 /* EditProfileNameView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72D2F73B8E174AB1842334C6 /* EditProfileNameView.swift */; };
 		798CF7B352C093C152524D33 /* RootTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE26BDC4B9829952FDDD5F4B /* RootTabView.swift */; };
 		7F8C33FF91FFCFC140D78B5E /* TransactionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 933D04CD0D00CCD896662D49 /* TransactionsView.swift */; };
 		8428965AB3F6693F2210FD3F /* MemberSampleData.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9C40CF5D7D5F1657E4A2455 /* MemberSampleData.swift */; };
@@ -76,6 +80,7 @@
 		00CFD35A06272805C431F28C /* FirstRunIntroView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FirstRunIntroView.swift; path = Views/Onboarding/FirstRunIntroView.swift; sourceTree = "<group>"; };
 		0295C0D6BBB4FA2FAC7AC147 /* TransactionRowView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TransactionRowView.swift; path = Components/TransactionRowView.swift; sourceTree = "<group>"; };
 		04BCD5E086B1D469BC4FE6D2 /* TransactionType.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TransactionType.swift; path = Models/TransactionType.swift; sourceTree = "<group>"; };
+		137B002F5F3F4D83BEE1661A /* SettlementListView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettlementListView.swift; path = Views/Dashboard/SettlementListView.swift; sourceTree = "<group>"; };
 		1603C21CD75CD08F6E3D949D /* Transaction.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Transaction.swift; path = Models/Transaction.swift; sourceTree = "<group>"; };
 		16A074877590C32F59F707BF /* CurrencyFormatter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CurrencyFormatter.swift; path = Utilities/CurrencyFormatter.swift; sourceTree = "<group>"; };
 		1B4AB1F07664F0CBFCC1990B /* BudgetMateApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BudgetMateApp.swift; sourceTree = "<group>"; };
@@ -83,12 +88,15 @@
 		1EF7913BD5010F7FA6D7AD8E /* BudgetMemberRole.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BudgetMemberRole.swift; path = Models/BudgetMemberRole.swift; sourceTree = "<group>"; };
 		1F69F6BFE2FA83EED6576EE2 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		1FF092B4434E17858AA40E13 /* BudgetMate.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BudgetMate.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		27460234C54C45D99516DA9A /* DamProgressBar.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DamProgressBar.swift; path = Components/DamProgressBar.swift; sourceTree = "<group>"; };
 		2A1FC905A9F16321E1F78B89 /* BudgetView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BudgetView.swift; path = Views/Budget/BudgetView.swift; sourceTree = "<group>"; };
 		2ED7DC48AFBDC3D94ED5C69E /* AddTransactionView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AddTransactionView.swift; path = Views/Transactions/AddTransactionView.swift; sourceTree = "<group>"; };
 		37532693B19E92F2A7068DE1 /* SettlementComputationCache.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettlementComputationCache.swift; path = Utilities/SettlementComputationCache.swift; sourceTree = "<group>"; };
 		3820979D6FDC1013E67248AA /* TransactionFlowCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TransactionFlowCoordinator.swift; path = Services/TransactionFlowCoordinator.swift; sourceTree = "<group>"; };
 		3CEA2B466DF9EF1DBA7F6C3F /* DashboardView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DashboardView.swift; path = Views/Dashboard/DashboardView.swift; sourceTree = "<group>"; };
 		3F9829DAD0F41D0906FA607C /* SupabaseConfig.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SupabaseConfig.swift; path = Utilities/SupabaseConfig.swift; sourceTree = "<group>"; };
+		40041050C9D04ECBA2FAE109 /* Supabase.example.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = Supabase.example.xcconfig; path = Config/Supabase.example.xcconfig; sourceTree = "<group>"; };
+		4004105105D64AA49E98327E /* Supabase.local.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = Supabase.local.xcconfig; path = Config/Supabase.local.xcconfig; sourceTree = "<group>"; };
 		40D1E2872BC5A28B35336522 /* ProfileSetupView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ProfileSetupView.swift; path = Views/Auth/ProfileSetupView.swift; sourceTree = "<group>"; };
 		4207ABF4F544031A2B1590B7 /* TransactionDetailView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TransactionDetailView.swift; path = Views/Transactions/TransactionDetailView.swift; sourceTree = "<group>"; };
 		420FE2DEB2DDECA27D23CB3A /* TransactionCategory.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TransactionCategory.swift; path = Models/TransactionCategory.swift; sourceTree = "<group>"; };
@@ -101,10 +109,12 @@
 		5B1C4EEAAF8B439C1BDF0E4A /* RecurringTransactionResolver.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RecurringTransactionResolver.swift; path = Utilities/RecurringTransactionResolver.swift; sourceTree = "<group>"; };
 		5F1EF5FDBFF48068877244C2 /* BudgetMember.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BudgetMember.swift; path = Models/BudgetMember.swift; sourceTree = "<group>"; };
 		5F5F2E7C3D9A42603D812EA4 /* CurrencyOption.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CurrencyOption.swift; path = Models/CurrencyOption.swift; sourceTree = "<group>"; };
+		60B9E20F5354484C8147C15B /* ClearTransactionsConfirmationView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ClearTransactionsConfirmationView.swift; path = Views/Settings/ClearTransactionsConfirmationView.swift; sourceTree = "<group>"; };
 		62B0E81BF035A15B3876C090 /* LoginView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LoginView.swift; path = Views/Auth/LoginView.swift; sourceTree = "<group>"; };
 		63D97E856CA3AF53B015F391 /* PreviewContainer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PreviewContainer.swift; path = Utilities/PreviewContainer.swift; sourceTree = "<group>"; };
 		655F029369B1D6B368219EF2 /* CategoryColor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CategoryColor.swift; path = Utilities/CategoryColor.swift; sourceTree = "<group>"; };
 		6BF98EC498AB7E1950ABDEEC /* AppTheme.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppTheme.swift; path = Utilities/AppTheme.swift; sourceTree = "<group>"; };
+		72D2F73B8E174AB1842334C6 /* EditProfileNameView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = EditProfileNameView.swift; path = Views/Settings/EditProfileNameView.swift; sourceTree = "<group>"; };
 		75FF374F1C21C21061DB2859 /* SettlementBreakdownView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettlementBreakdownView.swift; path = Views/Dashboard/SettlementBreakdownView.swift; sourceTree = "<group>"; };
 		8193DE58AE5D4F869D585E51 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8BC2C9B2263946600047CBBC /* AppearanceOption.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppearanceOption.swift; path = Models/AppearanceOption.swift; sourceTree = "<group>"; };
@@ -162,6 +172,7 @@
 		1BEE5C256AB6FAAD5786F9E8 /* BudgetMate */ = {
 			isa = PBXGroup;
 			children = (
+				40041052F8CB4F15BCE23DA0 /* Config */,
 				95C6BB14C1F50B672665118B /* Models */,
 				DC550DA5DCAB4C77E97E1B1D /* Views */,
 				74E7BF7D6C9C47C1710D07BE /* ViewModels */,
@@ -171,6 +182,7 @@
 				8193DE58AE5D4F869D585E51 /* Assets.xcassets */,
 				1B4AB1F07664F0CBFCC1990B /* BudgetMateApp.swift */,
 				49CB0E4EE5030D3F448943D9 /* CardContainer.swift */,
+				27460234C54C45D99516DA9A /* DamProgressBar.swift */,
 				FD0042F80975DBA8B9B0E38E /* ExpenseCategoryPieChartView.swift */,
 				F45F1661CCC7CE2EB9FB0829 /* MemberInitialsBadge.swift */,
 				9DB86BD8B1BDC2F371AD1F36 /* MonthSliderView.swift */,
@@ -204,8 +216,11 @@
 				42E01FE2D06F4A8E1B2ADBEC /* MemberViewModel.swift */,
 				2A1FC905A9F16321E1F78B89 /* BudgetView.swift */,
 				3CEA2B466DF9EF1DBA7F6C3F /* DashboardView.swift */,
+				137B002F5F3F4D83BEE1661A /* SettlementListView.swift */,
 				FE26BDC4B9829952FDDD5F4B /* RootTabView.swift */,
 				E70867EFC140C70DD5D070E6 /* BudgetMembersView.swift */,
+				60B9E20F5354484C8147C15B /* ClearTransactionsConfirmationView.swift */,
+				72D2F73B8E174AB1842334C6 /* EditProfileNameView.swift */,
 				8BE177D8067EBA5736F264DE /* InviteMemberView.swift */,
 				9DF2B227204A92A5987F60BD /* SettingsView.swift */,
 				2ED7DC48AFBDC3D94ED5C69E /* AddTransactionView.swift */,
@@ -231,6 +246,15 @@
 				5B1C4EEAAF8B439C1BDF0E4A /* RecurringTransactionResolver.swift */,
 			);
 			path = BudgetMate;
+			sourceTree = "<group>";
+		};
+		40041052F8CB4F15BCE23DA0 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				40041050C9D04ECBA2FAE109 /* Supabase.example.xcconfig */,
+				4004105105D64AA49E98327E /* Supabase.local.xcconfig */,
+			);
+			name = Config;
 			sourceTree = "<group>";
 		};
 		5ED51FD79A99B866E7CB444B /* iOS */ = {
@@ -420,8 +444,11 @@
 				5F3892C00314079B4CDEABFE /* MemberViewModel.swift in Sources */,
 				01C45EA17D4867C98032DDEC /* BudgetView.swift in Sources */,
 				AA9D5E85D7DE424DE7296BCD /* DashboardView.swift in Sources */,
+				137B00305F3F4D83BEE1661A /* SettlementListView.swift in Sources */,
 				798CF7B352C093C152524D33 /* RootTabView.swift in Sources */,
 				9DCAE57AAA47EC870C60F3AA /* BudgetMembersView.swift in Sources */,
+				60B9E2105354484C8147C15B /* ClearTransactionsConfirmationView.swift in Sources */,
+				72D2F73C8E174AB1842334C6 /* EditProfileNameView.swift in Sources */,
 				1E8DC47DCDCA7F5F7F907A33 /* InviteMemberView.swift in Sources */,
 				5BA51560BE2ACB459AE37C24 /* SettingsView.swift in Sources */,
 				FCC84769DBAAC9231AF2D375 /* AddTransactionView.swift in Sources */,
@@ -429,6 +456,7 @@
 				C81ECF7B8132432E5865EAC9 /* AppTopBar.swift in Sources */,
 				E615457F5E71A6D6AC6BFA6C /* AppTheme.swift in Sources */,
 				EA515E9B2E405BEBCB2DD3D1 /* BudgetRingView.swift in Sources */,
+				27460235C54C45D99516DA9A /* DamProgressBar.swift in Sources */,
 				A4E948FDCF31A7DFE0AD9FDE /* TransactionSplit.swift in Sources */,
 				96341985F5C0DE173288CFC4 /* SampleDataSeeder.swift in Sources */,
 				B03BC747945106B22BC9F4C2 /* TransactionDetailView.swift in Sources */,
@@ -518,6 +546,7 @@
 		};
 		AA0470E62E2D560159ED1572 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4004105105D64AA49E98327E /* Supabase.local.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -528,6 +557,8 @@
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_BUDGETMATE_SUPABASE_PUBLISHABLE_KEY = "$(SUPABASE_PUBLISHABLE_KEY)";
+				INFOPLIST_KEY_BUDGETMATE_SUPABASE_URL = "$(SUPABASE_PROJECT_URL)";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -601,6 +632,7 @@
 		};
 		E6A342908B48670DA00B9BE9 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4004105105D64AA49E98327E /* Supabase.local.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -611,6 +643,8 @@
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_BUDGETMATE_SUPABASE_PUBLISHABLE_KEY = "$(SUPABASE_PUBLISHABLE_KEY)";
+				INFOPLIST_KEY_BUDGETMATE_SUPABASE_URL = "$(SUPABASE_PROJECT_URL)";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

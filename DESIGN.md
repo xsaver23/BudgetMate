@@ -1,21 +1,22 @@
 ---
 name: BudgetMate
-description: Calm, trustworthy budgeting for personal and shared household money.
+description: Bright, trustworthy budgeting for personal and shared household money.
 colors:
-  brand-blue: "#2563EB"
-  brand-blue-soft: "#DDE8FD"
-  system-background: "#F2F2F7"
-  system-surface: "#FFFFFF"
-  surface-stroke: "#0000000F"
-  income-green: "#16A34A"
-  expense-red: "#DC2626"
+  forest-primary: "#173404"
+  cream-background: "#FAEEDA"
+  cream-surface: "#FFFDF7"
+  warm-surface: "#F5E6C9"
+  amber-secondary: "#FFCF70"
+  income-block: "#9CC957"
+  expense-block: "#F49379"
+  danger-ink: "#7D2B17"
   positive-teal: "#0D9488"
-  warning-orange: "#EA580C"
-  adaptive-ink: "Color.primary"
-  adaptive-muted: "Color.secondary"
-  adaptive-inner-surface: "systemGroupedBackground"
-  adaptive-raised-surface: "secondarySystemGroupedBackground"
-  adaptive-soft-surface: "tertiarySystemGroupedBackground"
+  member-blue: "#3B8FE2"
+  member-coral: "#E2572E"
+  member-teal: "#1FA37D"
+  member-purple: "#7B6EE6"
+  adaptive-ink: "Forest in light mode, cream in dark mode"
+  adaptive-muted: "Brown in light mode, amber in dark mode"
 typography:
   display:
     fontFamily: "SF Pro Rounded, system"
@@ -53,17 +54,17 @@ spacing:
   lg: "24px"
 components:
   button-primary:
-    backgroundColor: "{colors.brand-blue}"
-    textColor: "{colors.system-surface}"
-    rounded: "{rounded.md}"
+    backgroundColor: "{colors.forest-primary}"
+    textColor: "{colors.cream-surface}"
+    rounded: "{rounded.lg}"
     padding: "14px 16px"
   card-standard:
-    backgroundColor: "{colors.system-surface}"
+    backgroundColor: "{colors.cream-surface}"
     textColor: "{colors.adaptive-ink}"
     rounded: "{rounded.md}"
     padding: "16px"
   card-finance:
-    backgroundColor: "{colors.adaptive-raised-surface}"
+    backgroundColor: "{colors.warm-surface}"
     textColor: "{colors.adaptive-ink}"
     rounded: "{rounded.lg}"
     padding: "18px"
@@ -73,43 +74,43 @@ components:
 
 ## 1. Overview
 
-**Creative North Star: "The Calm Ledger"**
+**Creative North Star: "Bright Household Hub"**
 
-BudgetMate should feel like a practical household finance surface: warm enough to lower anxiety, structured enough to make money feel precise, and quiet enough to use every day. The current direction is a blue-led SwiftUI product language with warm accents mapped through adaptive system surfaces, so light and dark mode share the same hierarchy.
+BudgetMate should feel like a practical household finance surface with more warmth and confidence: cream canvas, forest primary actions, saturated color-block money tiles, and colorful member identity badges. It should keep settlement and debt screens especially legible so playful color never weakens trust in the numbers.
 
-The interface should reject childish theming, novelty finance visuals, crypto-like intensity, sterile bank UI, and overly beige craft-paper styling. Use warmth as a human accent, not as the entire product identity.
+The interface should reject sterile bank UI and novelty finance visuals. Use bold color for hierarchy and identity, but keep amounts, settlement rows, and settings states readable first.
 
 **Key Characteristics:**
 - Local-first SwiftUI product UI with dashboard, transactions, budget, settings, onboarding, and shared-budget flows.
-- Restrained primary accent for actions and selection.
+- Forest primary accent for actions and selection.
+- Cream/warm surfaces instead of stark white.
+- Saturated income, expense, pacing, category, and member identity colors.
 - Clear semantic color for income, expense, warning, positive states, sync issues, and settlement states.
 - Familiar iOS controls with custom surfaces only where they improve scanability.
 
 ## 2. Colors
 
-The current palette uses Trust Blue as the main product accent, adaptive system surfaces for cards and grouped content, and warm secondary notes for household context.
+The current palette uses forest green as the main product accent, a cream/warm canvas for household warmth, and saturated blocks for scanable finance summaries.
 
 ### Primary
-- **Trust Blue** (#2563EB): Primary actions, selected navigation, onboarding mark, empty-state icon, and current selection. Keep it rare and purposeful.
+- **Forest Primary** (#173404): Primary actions, selected navigation, onboarding mark, headings, and major positive control states.
 
 ### Secondary
-- **Ledger Warmth** (semantic warning/secondary text + adaptive grouped surfaces): Warm support is carried by tone, copy, and restrained semantic color, not by a separate brown/beige palette.
-- **Trust Blue Soft** (#DDE8FD approximation / `AppTheme.brandSoft`): Selection fills, icon wells, and quiet emphasis behind primary-blue symbols.
+- **Cream Canvas** (#FAEEDA): Light-mode app background.
+- **Amber Secondary** (#FFCF70): Secondary CTAs, avatar rings, pacing blocks, and selected-member rings.
 
 ### Tertiary
-- **Category Spectrum**: Category colors currently use SwiftUI named colors such as orange, mint, indigo, teal, red, pink, purple, cyan, gray, and yellow. These need a more deliberate, color-blind-safe ramp before broad redesign work.
+- **Member Spectrum**: Blue, coral, teal, and purple badges identify household members across dashboard, transactions, settlement, budget members, and split rows.
 
 ### Neutral
-- **System Grouped Background** (#F2F2F7 approximation): App shell background.
-- **System Surface** (#FFFFFF approximation): Cards, form rows, modal content, and list surfaces.
-- **Adaptive Ink** (`Color.primary`): Primary text and major money values in both light and dark mode.
-- **Adaptive Muted** (`Color.secondary`): Secondary labels, helper text, and low-emphasis metadata.
-- **Soft Stroke** (#0000000F): Standard low-contrast card border.
-- **Adaptive Finance Surfaces** (`secondarySystemGroupedBackground`, `tertiarySystemGroupedBackground`): Dashboard and Budget cards, tiles, and grouped money summaries.
+- **Cream Surface** (#FFFDF7): Cards, form rows, modal content, and list surfaces.
+- **Adaptive Ink:** Forest in light mode, cream in dark mode.
+- **Adaptive Muted:** Brown in light mode, amber in dark mode.
+- **Warm Surface:** Secondary card fills and quiet groups.
 
 ### Named Rules
 
-**The One Accent Rule.** Trust Blue is the primary product accent. Do not introduce a second blue for competing money emphasis.
+**The One Primary Rule.** Forest green is the primary product action color. Member blue is identity color only, not a competing brand action.
 
 **The Money State Rule.** Income, expense, warning, positive, owed, paid, sync issue, and pending states must not rely on color alone.
 
@@ -134,7 +135,7 @@ The current palette uses Trust Blue as the main product accent, adaptive system 
 
 ## 4. Elevation
 
-BudgetMate currently uses tonal layering, low-opacity borders, and quiet shadows. Standard cards use a 1px low-opacity stroke plus a small ambient shadow. Dashboard and Budget finance cards use adaptive system surfaces with 20px corners, keeping the app calm in light mode and legible in dark mode. The long-term direction should stay flatter by default, using shadows for tab bars, overlays, and interactive prominence rather than every repeated card.
+BudgetMate currently uses tonal layering, low-opacity borders, and quiet shadows. Standard cards use a 1px low-opacity warm stroke plus a small ambient shadow. Dashboard and Budget finance cards use saturated color blocks with 22-24px corners, keeping the app warm in light mode and legible in dark mode. The long-term direction should stay flatter by default, using shadows for overlays and interactive prominence rather than every repeated card.
 
 ### Shadow Vocabulary
 - **Card Ambient** (`0 3px 8px rgba(0,0,0,0.05)`): Current `CardSurface` default.
@@ -148,9 +149,9 @@ BudgetMate currently uses tonal layering, low-opacity borders, and quiet shadows
 ## 5. Components
 
 ### Buttons
-- **Shape:** 16px rounded rectangle for primary buttons; circular icon buttons for compact actions.
-- **Primary:** Trust Blue background with white text, 14px vertical padding, bold label, optional SF Symbol.
-- **Secondary / Text:** SwiftUI button styles and blue text actions currently appear in Settings and card headers.
+- **Shape:** 18-22px rounded rectangle for primary buttons; circular icon buttons for compact actions.
+- **Primary:** Forest background with white text, 14-16px vertical padding, bold label, optional SF Symbol.
+- **Secondary / Text:** Amber filled actions and forest text actions where hierarchy is lower.
 - **State:** Disabled and loading states exist in sync controls. Plain custom buttons use `PressableButtonStyle` for subtle scale/opacity feedback with reduced-motion support.
 
 ### Chips
@@ -158,8 +159,8 @@ BudgetMate currently uses tonal layering, low-opacity borders, and quiet shadows
 - **State:** Pending, active, left, removed, invited, paid, owed, syncing, error, and success states need a consistent vocabulary.
 
 ### Cards / Containers
-- **Corner Style:** Standard product cards use 16px. Dashboard/Budget hero cards use 20px; avoid 32px for ordinary product cards.
-- **Background:** AppTheme cards use adaptive system surface; Dashboard/Budget finance cards use adaptive raised/soft system surfaces.
+- **Corner Style:** Standard product cards use 22px. Dashboard/Budget color blocks use 22-24px.
+- **Background:** AppTheme cards use cream/adaptive surface; finance tiles use saturated color blocks.
 - **Shadow Strategy:** See Elevation.
 - **Border:** 1px low-opacity stroke or warm border.
 - **Internal Padding:** 16-20px.
@@ -170,9 +171,9 @@ BudgetMate currently uses tonal layering, low-opacity borders, and quiet shadows
 - **Error / Disabled:** Error, helper, and disabled states should use plain language and visible state icons where helpful.
 
 ### Navigation
-- **Style:** Custom bottom tab bar with icon-only tabs and a central add transaction button.
-- **Active State:** Filled SF Symbol and Trust Blue.
-- **Inactive State:** Secondary color SF Symbol.
+- **Style:** Custom bottom tab bar with icon + label tabs and a central add transaction button.
+- **Active State:** Filled SF Symbol, label, and Forest Primary.
+- **Inactive State:** Brown secondary icon and label.
 - **Mobile Treatment:** Native iPhone-first layout; ensure bottom safe area and status bar scrim continue to protect content.
 
 ### Signature Component

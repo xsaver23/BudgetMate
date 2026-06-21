@@ -62,6 +62,10 @@ struct BudgetView: View {
         return builtInCategories + customCategories
     }
 
+    private var hasConfiguredCategoryBudgets: Bool {
+        categories.contains { configuredBudget(for: $0) > 0 }
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -119,7 +123,7 @@ struct BudgetView: View {
             HStack(alignment: .top, spacing: 14) {
                 Image(systemName: "calendar.badge.clock")
                     .font(.headline.weight(.bold))
-                    .foregroundStyle(BudgetBeaverPalette.wood)
+                    .foregroundStyle(AppTheme.brand)
                     .frame(width: 44, height: 44)
                     .background(BudgetBeaverPalette.bank, in: Circle())
 
@@ -130,7 +134,7 @@ struct BudgetView: View {
 
                     Text(formattedAmount(settingsStore.settings.monthlyBudget))
                         .font(.largeTitle.weight(.black))
-                        .foregroundStyle(BudgetBeaverPalette.water)
+                        .foregroundStyle(BudgetBeaverPalette.ink)
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
                 }
@@ -158,7 +162,7 @@ struct BudgetView: View {
 
                     Text(remainingBudget >= 0 ? "ON TRACK" : "OVER")
                         .font(.caption2.weight(.bold))
-                        .foregroundStyle(remainingBudget >= 0 ? BudgetBeaverPalette.forest : BudgetBeaverPalette.amountRed)
+                        .foregroundStyle(remainingBudget >= 0 ? AppTheme.brand : BudgetBeaverPalette.amountRed)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(BudgetBeaverPalette.bank, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -168,19 +172,21 @@ struct BudgetView: View {
                     budgetSummaryTile(
                         title: "Spent",
                         value: totalExpenses,
-                        tint: BudgetBeaverPalette.clay,
+                        tint: AppTheme.expense,
                         systemImage: "arrow.up.right"
                     )
                     budgetSummaryTile(
                         title: "Remaining",
                         value: remainingBudget,
-                        tint: remainingBudget >= 0 ? BudgetBeaverPalette.forest : BudgetBeaverPalette.amountRed,
+                        tint: remainingBudget >= 0 ? AppTheme.income : AppTheme.expense,
                         systemImage: remainingBudget >= 0 ? "checkmark" : "exclamationmark"
                     )
                 }
 
                 ProgressView(value: budgetProgress)
-                    .tint(remainingBudget >= 0 ? BudgetBeaverPalette.water : BudgetBeaverPalette.amountRed)
+                    .tint(remainingBudget >= 0 ? BudgetBeaverPalette.wood : BudgetBeaverPalette.amountRed)
+                    .accessibilityLabel("Monthly budget progress")
+                    .accessibilityValue(budgetProgressAccessibilityValue)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -210,13 +216,21 @@ struct BudgetView: View {
                         }
                     }
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(BudgetBeaverPalette.water)
+                    .foregroundStyle(AppTheme.brand)
                     .buttonStyle(PressableButtonStyle(scale: 0.97))
                 }
 
                 Text("Spending is tracked month by month.")
                     .font(.caption)
                     .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.7))
+
+                if !hasConfiguredCategoryBudgets && !isEditingCategories {
+                    budgetEmptyState(
+                        systemImage: "slider.horizontal.below.rectangle",
+                        title: "No category budgets yet",
+                        message: "Tap Edit to add limits for groceries, restaurants, shopping, and other categories."
+                    )
+                }
 
                 ForEach(Array(categories.enumerated()), id: \.offset) { index, category in
                     categoryBudgetRow(for: category)
@@ -233,7 +247,7 @@ struct BudgetView: View {
                     .font(.headline.weight(.bold))
                     .foregroundStyle(Color.white)
                     .frame(maxWidth: .infinity, minHeight: 46)
-                    .background(BudgetBeaverPalette.water, in: Capsule())
+                    .background(AppTheme.brand, in: Capsule())
                     .buttonStyle(.plain)
                     .buttonStyle(PressableButtonStyle(scale: 0.98))
 
@@ -244,7 +258,7 @@ struct BudgetView: View {
                         Label("Add Category", systemImage: "plus.circle.fill")
                     }
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(BudgetBeaverPalette.water)
+                    .foregroundStyle(AppTheme.brand)
                     .buttonStyle(PressableButtonStyle(scale: 0.97))
                 }
             }
@@ -316,7 +330,9 @@ struct BudgetView: View {
             }
 
             ProgressView(value: budgetProgress(for: category))
-                .tint(remainingAmount(for: category) >= 0 ? BudgetBeaverPalette.water : BudgetBeaverPalette.amountRed)
+                .tint(remainingAmount(for: category) >= 0 ? CategoryColor.color(for: category) : BudgetBeaverPalette.amountRed)
+                .accessibilityLabel("\(category.displayName) budget progress")
+                .accessibilityValue(categoryProgressAccessibilityValue(for: category))
         }
         .padding(.vertical, 4)
     }
@@ -383,9 +399,9 @@ struct BudgetView: View {
     private func beaverCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         content()
             .padding(18)
-            .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
                     .stroke(BudgetBeaverPalette.border, lineWidth: 1)
             )
     }
@@ -396,17 +412,17 @@ struct BudgetView: View {
         tint: Color,
         systemImage: String
     ) -> some View {
-        HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 18) {
             Image(systemName: systemImage)
-                .font(.subheadline.weight(.bold))
-                .foregroundStyle(tint)
-                .frame(width: 38, height: 38)
-                .background(tint.opacity(0.14), in: Circle())
+                .font(.headline.weight(.black))
+                .foregroundStyle(AppTheme.brand)
+                .frame(width: 40, height: 40)
+                .background(AppTheme.brand.opacity(0.24), in: Circle())
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.7))
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(BudgetBeaverPalette.ink)
 
                 Text(formattedAmount(value))
                     .font(.title3.weight(.black))
@@ -414,16 +430,10 @@ struct BudgetView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.55)
             }
-
-            Spacer(minLength: 0)
         }
-        .padding(14)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(BudgetBeaverPalette.bank.opacity(0.6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(BudgetBeaverPalette.border, lineWidth: 1)
-        )
+        .background(tint, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
     private func refreshTabMetrics() {
@@ -529,7 +539,11 @@ struct BudgetView: View {
                 budgetScopeId: authStore.currentBudgetScopeId
             )
         }
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            cloudSyncStore.recordSyncIssue(error, context: "Saving reassigned categories")
+        }
         refreshTabMetrics()
     }
 
@@ -570,6 +584,14 @@ struct BudgetView: View {
         return min(max(monthlySpent(for: category) / budget, 0), 1)
     }
 
+    private var budgetProgressAccessibilityValue: String {
+        (budgetProgress * 100).formatted(.number.precision(.fractionLength(0...1))) + "%"
+    }
+
+    private func categoryProgressAccessibilityValue(for category: TransactionCategory) -> String {
+        (budgetProgress(for: category) * 100).formatted(.number.precision(.fractionLength(0...1))) + "%"
+    }
+
     private func formattedAmount(_ amount: Double) -> String {
         CurrencyFormatter.amountString(amount, symbol: settingsStore.settings.currencySymbol)
     }
@@ -583,6 +605,24 @@ struct BudgetView: View {
                 }
             }
         )
+    }
+
+    private func budgetEmptyState(systemImage: String, title: String, message: String) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(AppTheme.brand)
+            Text(title)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(BudgetBeaverPalette.ink)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.75))
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(16)
+        .background(BudgetBeaverPalette.bank.opacity(0.55), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 }
 
@@ -665,10 +705,9 @@ private struct CategoryEditorView: View {
                         .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
-            .onAppear {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                    nameFocused = true
-                }
+            .task {
+                await Task.yield()
+                nameFocused = true
             }
         }
     }

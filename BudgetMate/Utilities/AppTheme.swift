@@ -1,30 +1,35 @@
 import SwiftUI
 
-/// Central design tokens for the "Card-based Modern" direction.
+/// Central design tokens for the "Bright Household Hub" direction.
 /// Change a value here and it propagates everywhere.
 enum AppTheme {
     // Brand
-    static let brand = Color(hex: "#2563EB")
-    static let brandSoft = Color(hex: "#2563EB").opacity(0.12)
+    static let brand = Color(hex: "#173404")
+    static let brandSoft = Color(hex: "#173404").opacity(0.12)
+    static let secondaryAction = Color(hex: "#FFCF70")
+    static let secondaryActionText = Color(hex: "#3F2109")
 
     // Surfaces
-    static let background = Color(uiColor: .systemGroupedBackground)
-    static let surface = Color(uiColor: .secondarySystemGroupedBackground)
-    static let surfaceStroke = Color.primary.opacity(0.08)
+    static let background = Color(light: "#FAEEDA", dark: "#141B10")
+    static let surface = Color(light: "#FFFDF7", dark: "#202B1A")
+    static let surfaceAlt = Color(light: "#F5E6C9", dark: "#2B351F")
+    static let colorBlockYellow = Color(hex: "#FFCA6A")
+    static let surfaceStroke = Color(light: "#7A4A14", dark: "#FAEEDA").opacity(0.10)
 
     // Semantic
-    static let income = Color(hex: "#16A34A")
-    static let expense = Color(hex: "#DC2626")
-    static let positive = Color(hex: "#0D9488")
-    static let warning = Color(hex: "#EA580C")
+    static let income = Color(hex: "#9CC957")
+    static let expense = Color(hex: "#F49379")
+    static let positive = Color(hex: "#1FA37D")
+    static let warning = Color(hex: "#9A5308")
+    static let danger = Color(hex: "#7D2B17")
 
     // Text
-    static let textPrimary = Color.primary
-    static let textSecondary = Color.secondary
+    static let textPrimary = Color(light: "#173404", dark: "#F9F0DA")
+    static let textSecondary = Color(light: "#8B4E0A", dark: "#E4BE83")
 
     // Card metrics
-    static let cardRadius: CGFloat = 16
-    static let cardShadow = Color.black.opacity(0.05)
+    static let cardRadius: CGFloat = 22
+    static let cardShadow = Color(hex: "#7A4A14").opacity(0.06)
 }
 
 enum BudgetBeaverPalette {
@@ -32,22 +37,26 @@ enum BudgetBeaverPalette {
     static let ink = AppTheme.textPrimary
     static let wood = AppTheme.textSecondary
     static let paper = AppTheme.surface
-    static let bank = Color(uiColor: .tertiarySystemGroupedBackground)
-    static let innerSurface = Color(uiColor: .systemGroupedBackground)
+    static let bank = AppTheme.surfaceAlt
+    static let innerSurface = AppTheme.surface
     static let pill = AppTheme.brandSoft
     static let border = AppTheme.surfaceStroke
     static let water = AppTheme.brand
     static let rebBrown = AppTheme.warning
-    static let jenBlue = AppTheme.brand
+    static let jenBlue = Color(hex: "#3B8FE2")
     static let darkButton = AppTheme.textPrimary
     static let amountDark = AppTheme.textPrimary
-    static let amountRed = AppTheme.expense
+    static let amountRed = AppTheme.danger
     static let grayText = AppTheme.textSecondary
     static let muted = AppTheme.textSecondary
     static let forest = AppTheme.income
-    static let forestText = AppTheme.income
-    static let forestSoft = AppTheme.income.opacity(0.10)
-    static let clay = AppTheme.warning
+    static let forestText = AppTheme.brand
+    static let forestSoft = AppTheme.income.opacity(0.22)
+    static let clay = AppTheme.expense
+    static let amber = AppTheme.secondaryAction
+    static let teal = Color(hex: "#1FA37D")
+    static let purple = Color(hex: "#7B6EE6")
+    static let coral = Color(hex: "#E2572E")
 }
 
 extension Font {
@@ -78,7 +87,7 @@ struct PressableButtonStyle: ButtonStyle {
     }
 }
 
-/// Reusable "Card-based Modern" surface: adaptive fill, soft rounded corners, soft shadow.
+/// Reusable Bright Household surface: cream cards, bold rounded corners, soft lift.
 struct CardSurface: ViewModifier {
     var padding: CGFloat = 16
     var cornerRadius: CGFloat = AppTheme.cardRadius
@@ -97,9 +106,9 @@ struct CardSurface: ViewModifier {
             )
             .shadow(
                 color: showsShadow ? AppTheme.cardShadow : .clear,
-                radius: showsShadow ? 8 : 0,
+                radius: showsShadow ? 10 : 0,
                 x: 0,
-                y: showsShadow ? 3 : 0
+                y: showsShadow ? 5 : 0
             )
     }
 }
@@ -145,5 +154,31 @@ extension Color {
         let blue = Double(value & 0xFF) / 255
 
         self = Color(red: red, green: green, blue: blue)
+    }
+
+    init(light: String, dark: String) {
+        self = Color(uiColor: UIColor { traits in
+            let selected = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(hex: selected)
+        })
+    }
+}
+
+private extension UIColor {
+    convenience init(hex: String) {
+        let normalized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "#", with: "")
+
+        guard normalized.count == 6,
+              let value = Int(normalized, radix: 16) else {
+            self.init(white: 0.5, alpha: 1)
+            return
+        }
+
+        let red = CGFloat((value >> 16) & 0xFF) / 255
+        let green = CGFloat((value >> 8) & 0xFF) / 255
+        let blue = CGFloat(value & 0xFF) / 255
+
+        self.init(red: red, green: green, blue: blue, alpha: 1)
     }
 }

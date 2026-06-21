@@ -13,8 +13,16 @@ final class TransactionSplit {
     init(id: UUID = UUID(), memberId: UUID, amount: Double, transaction: Transaction? = nil) {
         self.id = id
         self.memberId = memberId
-        self.amount = amount
+        self.amount = max(0, amount)
         self.transaction = transaction
+    }
+}
+
+extension TransactionSplit {
+    func validateForSync() throws {
+        guard amount > 0, amount.isFinite else {
+            throw BudgetDataValidationError.invalidSplitAmount
+        }
     }
 }
 

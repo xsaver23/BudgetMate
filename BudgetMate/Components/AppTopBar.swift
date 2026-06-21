@@ -32,13 +32,14 @@ struct AppTopBar: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(todayLabel)
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(BudgetBeaverPalette.wood)
                     .lineLimit(1)
                 Text(greeting)
-                    .font(.title2.weight(.bold))
+                    .font(.roundedBold(30))
+                    .foregroundStyle(BudgetBeaverPalette.ink)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .minimumScaleFactor(0.72)
             }
 
             Spacer(minLength: 12)
@@ -47,7 +48,7 @@ struct AppTopBar: View {
                 MemberInitialsBadge(
                     initials: member.initials,
                     colorHex: member.colorHex,
-                    size: 40,
+                    size: 48,
                     accessibilityLabel: "Open settings. Active member \(member.displayName)"
                 )
             }
@@ -55,8 +56,8 @@ struct AppTopBar: View {
             .buttonStyle(PressableButtonStyle(scale: 0.94))
         }
         .padding(.horizontal, 20)
-        .padding(.top, 4)
-        .padding(.bottom, 14)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
         .frame(maxWidth: .infinity)
     }
 }

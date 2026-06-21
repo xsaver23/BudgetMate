@@ -16,7 +16,7 @@ struct PrimaryButton: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
-            .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .foregroundStyle(.white)
         }
         .buttonStyle(PressableButtonStyle())

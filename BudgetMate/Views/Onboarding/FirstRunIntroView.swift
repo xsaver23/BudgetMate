@@ -15,15 +15,21 @@ struct FirstRunIntroView: View {
 
                     VStack(spacing: 10) {
                         Text("Welcome to BudgetMate")
-                            .font(.roundedBold(32))
-                            .foregroundStyle(AppTheme.textPrimary)
+                            .font(.roundedBold(30))
+                            .foregroundStyle(BudgetBeaverPalette.ink)
                             .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.82)
+                            .fixedSize(horizontal: false, vertical: true)
 
-                        Text("A calmer place to track spending, shared bills, and who owes what.")
-                            .font(.body)
-                            .foregroundStyle(AppTheme.textSecondary)
+                        Text("A calmer place to track shared money.")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(BudgetBeaverPalette.wood)
                             .multilineTextAlignment(.center)
                             .lineSpacing(3)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.88)
+                            .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, 12)
                     }
                 }
@@ -55,7 +61,7 @@ struct FirstRunIntroView: View {
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
-                        .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                         .foregroundStyle(.white)
                 }
                 .buttonStyle(.plain)
@@ -65,6 +71,9 @@ struct FirstRunIntroView: View {
                     .font(.footnote)
                     .foregroundStyle(AppTheme.textSecondary)
                     .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 8)
             }
             .padding(.horizontal, 24)
@@ -91,12 +100,12 @@ struct FirstRunIntroView: View {
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(AppTheme.brand)
                 .frame(width: 38, height: 38)
-                .background(Circle().fill(AppTheme.brandSoft))
+                .background(Circle().fill(rowColor(for: icon)))
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.textPrimary)
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(BudgetBeaverPalette.ink)
                 Text(subtitle)
                     .font(.caption)
                     .foregroundStyle(AppTheme.textSecondary)
@@ -114,6 +123,17 @@ struct FirstRunIntroView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(AppTheme.surfaceStroke, lineWidth: 1)
         )
+    }
+
+    private func rowColor(for icon: String) -> Color {
+        switch icon {
+        case "creditcard":
+            return AppTheme.secondaryAction
+        case "person.2":
+            return AppTheme.income
+        default:
+            return BudgetBeaverPalette.jenBlue.opacity(0.45)
+        }
     }
 }
 

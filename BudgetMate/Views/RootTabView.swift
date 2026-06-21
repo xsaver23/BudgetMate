@@ -39,14 +39,17 @@ struct RootTabView: View {
             tabButton(for: .settings, title: "Settings", icon: "gearshape")
         }
         .padding(.horizontal, 24)
-        .padding(.top, 10)
-        .padding(.bottom, 2)
+        .padding(.top, 9)
+        .padding(.bottom, 3)
         .frame(maxWidth: .infinity)
         .background(
-            AppTheme.surface
-                .clipShape(.rect(topLeadingRadius: 28, topTrailingRadius: 28))
+            AppTheme.background
                 .ignoresSafeArea(edges: .bottom)
-                .shadow(color: .black.opacity(0.08), radius: 18, x: 0, y: -6)
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(AppTheme.expense.opacity(0.45))
+                        .frame(height: 1)
+                }
         )
     }
 
@@ -54,10 +57,14 @@ struct RootTabView: View {
         Button {
             selectedTab = tab
         } label: {
-            Image(systemName: selectedTab == tab ? "\(icon).fill" : icon)
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(selectedTab == tab ? AppTheme.brand : Color.secondary)
-                .frame(height: 48)
+            VStack(spacing: 3) {
+                Image(systemName: selectedTab == tab ? "\(icon).fill" : icon)
+                    .font(.system(size: 21, weight: .semibold))
+                Text(title)
+                    .font(.caption2.weight(.bold))
+            }
+                .foregroundStyle(selectedTab == tab ? AppTheme.brand : BudgetBeaverPalette.wood)
+                .frame(height: 50)
                 .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
         }
@@ -75,7 +82,7 @@ struct RootTabView: View {
                 .foregroundStyle(.white)
                 .frame(width: 52, height: 52)
                 .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .fill(AppTheme.brand)
                 )
                 .frame(maxWidth: .infinity)

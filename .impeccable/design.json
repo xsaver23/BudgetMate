@@ -4,41 +4,53 @@
   "title": "Design System: BudgetMate",
   "extensions": {
     "colorMeta": {
-      "brand-blue": {
+      "forest-primary": {
         "role": "primary",
-        "displayName": "Trust Blue",
-        "canonical": "#2563EB",
-        "tonalRamp": ["#EFF6FF", "#DBEAFE", "#93C5FD", "#2563EB", "#1D4ED8", "#1E3A8A"]
+        "displayName": "Forest Primary",
+        "canonical": "#173404",
+        "tonalRamp": ["#FAEEDA", "#DDE9C4", "#9CC957", "#173404", "#102702", "#071301"]
+      },
+      "cream-canvas": {
+        "role": "surface",
+        "displayName": "Cream Canvas",
+        "canonical": "#FAEEDA",
+        "tonalRamp": ["#FFFDF7", "#FAEEDA", "#F5E6C9", "#2B351F", "#141B10"]
+      },
+      "amber-secondary": {
+        "role": "accent",
+        "displayName": "Amber Secondary",
+        "canonical": "#FFCF70",
+        "tonalRamp": ["#FFF6DD", "#FFDF99", "#FFCF70", "#9A5308", "#3F2109"]
       },
       "adaptive-ink": {
         "role": "neutral",
         "displayName": "Adaptive Ledger Ink",
-        "canonical": "Color.primary",
-        "tonalRamp": ["systemGroupedBackground", "tertiarySystemGroupedBackground", "secondaryLabel", "label"]
+        "canonical": "Color(light: #173404, dark: #F9F0DA)",
+        "tonalRamp": ["#FAEEDA", "#FFFDF7", "#173404", "#F9F0DA"]
       },
       "adaptive-muted": {
         "role": "neutral",
         "displayName": "Adaptive Muted Text",
-        "canonical": "Color.secondary",
-        "tonalRamp": ["tertiarySystemGroupedBackground", "secondarySystemGroupedBackground", "secondaryLabel"]
+        "canonical": "Color(light: #8B4E0A, dark: #E4BE83)",
+        "tonalRamp": ["#F5E6C9", "#8B4E0A", "#E4BE83"]
       },
       "income-green": {
         "role": "success",
         "displayName": "Income Green",
-        "canonical": "#16A34A",
-        "tonalRamp": ["#F0FDF4", "#DCFCE7", "#86EFAC", "#16A34A", "#15803D", "#14532D"]
+        "canonical": "#9CC957",
+        "tonalRamp": ["#F0F8DF", "#C5E27E", "#9CC957", "#5E7D23", "#173404"]
       },
       "expense-red": {
         "role": "danger",
         "displayName": "Expense Red",
-        "canonical": "#DC2626",
-        "tonalRamp": ["#FEF2F2", "#FEE2E2", "#FCA5A5", "#DC2626", "#B91C1C", "#7F1D1D"]
+        "canonical": "#F49379",
+        "tonalRamp": ["#FDE4DA", "#F49379", "#E2572E", "#7D2B17"]
       },
       "warning-orange": {
         "role": "warning",
         "displayName": "Pacing Warning",
-        "canonical": "#EA580C",
-        "tonalRamp": ["#FFF7ED", "#FFEDD5", "#FDBA74", "#EA580C", "#C2410C", "#7C2D12"]
+        "canonical": "#9A5308",
+        "tonalRamp": ["#FFF4D7", "#FFCF70", "#9A5308", "#3F2109"]
       }
     },
     "typographyMeta": {
@@ -68,7 +80,7 @@
       {
         "name": "finance-card-lift",
         "value": "0 3px 8px rgba(0,0,0,0.05)",
-        "purpose": "Dashboard/Budget cards after the quieter surface pass."
+        "purpose": "Cream cards and saturated finance tiles after the Bright Household Hub pass."
       },
       {
         "name": "tab-bar-lift",
@@ -105,24 +117,24 @@
       "name": "Primary Button",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "Full-width Trust Blue action button with bold text and optional SF Symbol."
+      "description": "Full-width Forest Primary action button with bold text and optional SF Symbol."
     },
     {
       "name": "Card Container",
       "kind": "card",
       "refersTo": "card-standard",
-      "description": "Standard reusable surface using AppTheme.surface, low-opacity stroke, 16px radius, and optional ambient shadow."
+      "description": "Standard reusable cream surface using AppTheme.surface, warm low-opacity stroke, 22px radius, and optional ambient shadow."
     },
     {
       "name": "Warm Finance Card",
       "kind": "card",
       "refersTo": "card-finance",
-      "description": "Dashboard/Budget finance card using adaptive system surfaces, 20px radius, and Trust Blue for primary emphasis."
+      "description": "Dashboard/Budget finance card using saturated color blocks, 22-24px radius, and Forest Primary for action emphasis."
     },
     {
       "name": "Bottom Tab Bar",
       "kind": "nav",
-      "description": "Icon-only SwiftUI bottom navigation with selected blue filled symbols and a centered add transaction action."
+      "description": "Icon and label SwiftUI bottom navigation with selected forest filled symbols and a centered add transaction action."
     },
     {
       "name": "Settlement Row",

@@ -16,6 +16,7 @@ xcuserdata/
 .env
 .env.*
 *.local
+BudgetMate/Config/Supabase.local.xcconfig
 
 # Editor and OS noise
 .idea/

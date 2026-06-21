@@ -142,7 +142,7 @@ struct CompactTransactionRow: View {
         HStack(spacing: 12) {
             if transaction.isSplit {
                 MemberAvatarCluster(members: participantMembers, size: 34)
-                    .frame(minWidth: 38, alignment: .leading)
+                    .frame(minWidth: 78, alignment: .leading)
             } else {
                 MemberInitialsBadge(
                     initials: badgeSymbol,
@@ -154,12 +154,12 @@ struct CompactTransactionRow: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(transaction.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.textPrimary)
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(BudgetBeaverPalette.ink)
                     .lineLimit(1)
                 Text(categoryLine)
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.textSecondary)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(BudgetBeaverPalette.wood)
                     .lineLimit(1)
             }
 
@@ -167,11 +167,10 @@ struct CompactTransactionRow: View {
 
             Text(signedAmount)
                 .font(.roundedBold(16))
-                .foregroundStyle(amountColor)
+                .foregroundStyle(transaction.type == .income ? AppTheme.brand : AppTheme.danger)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
-        .padding(.vertical, 2)
         .contentShape(Rectangle())
     }
 }

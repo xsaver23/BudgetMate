@@ -52,202 +52,268 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                AppTopBar(
-                    member: memberViewModel.activeMember
-                )
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
+            ScrollView {
+                VStack(spacing: 18) {
+                    AppTopBar(member: memberViewModel.activeMember)
 
-                Section("Budget") {
-                    TextField("Monthly Budget", text: $monthlyBudgetText)
-                        .keyboardType(.decimalPad)
-                        .onSubmit {
-                            applyMonthlyBudget()
-                        }
-                }
-
-                Section("Currency") {
-                    Picker("Household Currency", selection: currencySelection) {
-                        ForEach(CurrencyOption.allCases) { option in
-                            Text(option.pickerLabel).tag(option.code)
+                    settingsSection("Budget") {
+                        settingsRow("Monthly budget") {
+                            TextField("0.00", text: $monthlyBudgetText)
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                                .font(settingsRowValueFont)
+                                .foregroundStyle(BudgetBeaverPalette.ink)
+                                .frame(width: 120)
+                                .onSubmit { applyMonthlyBudget() }
                         }
                     }
 
-                    Text("Changing currency updates the symbol only. Saved amounts are not converted.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section("Appearance") {
-                    Picker("Mode", selection: appearanceSelection) {
-                        ForEach(AppearanceOption.allCases) { option in
-                            Text(option.displayName).tag(option)
+                    settingsSection("Currency") {
+                        settingsRow("Household Currency") {
+                            Menu {
+                                ForEach(CurrencyOption.allCases) { option in
+                                    Button {
+                                        updateCurrencyCode(option.code)
+                                    } label: {
+                                        if option.code == settingsStore.settings.currencyCode {
+                                            Label(option.pickerLabel, systemImage: "checkmark")
+                                        } else {
+                                            Text(option.pickerLabel)
+                                        }
+                                    }
+                                }
+                            } label: {
+                                settingsValue(settingsStore.settings.currencyCode)
+                            }
                         }
-                    }
-                    .pickerStyle(.segmented)
-                }
 
-                Section("Account") {
-                    HStack {
-                        Text("Signed in as")
-                        Spacer()
-                        Text(authStore.userEmail ?? "Unknown")
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.trailing)
+                        Divider()
+
+                        Text("Changing currency updates the symbol only. Saved amounts are not converted.")
+                            .font(settingsHelperFont)
+                            .foregroundStyle(BudgetBeaverPalette.wood)
                     }
 
-                    HStack {
-                        Text("Profile name")
-                        Spacer()
-                        Text(profileDisplayName)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.trailing)
-                    }
-
-                    Button("Update Profile Name") {
-                        isShowingProfileEditor = true
-                    }
-
-                    Button("Sign Out", role: .destructive) {
-                        Task {
-                            await authStore.signOut()
+                    settingsSection("Appearance") {
+                        Picker("Mode", selection: appearanceSelection) {
+                            ForEach(AppearanceOption.allCases) { option in
+                                Text(option.displayName).tag(option)
+                            }
                         }
+                        .pickerStyle(.segmented)
+                        .tint(AppTheme.brand)
                     }
-                }
 
-                #if DEBUG
-                Section("Developer Testing") {
-                    Picker("Using app as", selection: $memberViewModel.activeMemberId) {
-                        ForEach(memberViewModel.members) { member in
-                            Text(member.displayName).tag(member.id)
+                    settingsSection("Account") {
+                        settingsRow("Signed in as") {
+                            Text(authStore.userEmail ?? "Unknown")
+                                .font(settingsCompactValueFont)
+                                .foregroundStyle(BudgetBeaverPalette.wood)
+                                .multilineTextAlignment(.trailing)
                         }
-                    }
 
-                    Text("Preview the app as another member. This section is hidden in release builds.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        Divider()
 
-                    Button("Load Sample Data (Only Me)") {
-                        loadSampleData(mode: .currentUserOnly)
-                    }
-                    .tint(AppTheme.brand)
+                        settingsRow("Profile name") {
+                            Text(profileDisplayName)
+                                .font(settingsRowValueFont)
+                                .foregroundStyle(BudgetBeaverPalette.ink)
+                        }
 
-                    Button("Load Sample Data (Demo Household)") {
-                        loadSampleData(mode: .household)
-                    }
-                    .tint(AppTheme.brand)
-                }
-                #endif
+                        Divider()
 
-                Section("Shared Budget") {
-                    if !memberships.isEmpty {
-                        Picker("Viewing", selection: activeBudgetSelection) {
-                            ForEach(memberships) { membership in
-                                Text(membership.displayName(currentUserId: authStore.currentUserScopeId))
-                                    .tag(membership.budgetId.uuidString)
+                        rowButton("Update Profile Name", tint: AppTheme.brand) {
+                            isShowingProfileEditor = true
+                        }
+
+                        Divider()
+
+                        rowButton("Sign Out", tint: AppTheme.danger) {
+                            Task {
+                                await authStore.signOut()
                             }
                         }
                     }
 
-                    NavigationLink("Budget Members") {
-                        BudgetMembersView()
-                    }
+                    #if DEBUG
+                    settingsSection("Developer Testing") {
+                        settingsRow("Using app as") {
+                            Menu {
+                                ForEach(memberViewModel.members) { member in
+                                    Button {
+                                        memberViewModel.activeMemberId = member.id
+                                    } label: {
+                                        if member.id == memberViewModel.activeMemberId {
+                                            Label(member.displayName, systemImage: "checkmark")
+                                        } else {
+                                            Text(member.displayName)
+                                        }
+                                    }
+                                }
+                            } label: {
+                                settingsValue(memberViewModel.activeMember.displayName)
+                            }
+                        }
 
-                    if canLeaveCurrentBudget {
-                        Button("Leave Shared Budget", role: .destructive) {
-                            isShowingLeaveBudgetConfirmation = true
+                        Text("Preview the app as another member. This section is hidden in release builds.")
+                            .font(settingsHelperFont)
+                            .foregroundStyle(BudgetBeaverPalette.wood)
+
+                        Divider()
+
+                        rowButton("Load Sample Data (Only Me)", tint: AppTheme.brand) {
+                            loadSampleData(mode: .currentUserOnly)
+                        }
+
+                        Divider()
+
+                        rowButton("Load Sample Data (Demo Household)", tint: AppTheme.brand) {
+                            loadSampleData(mode: .household)
+                        }
+                    }
+                    #endif
+
+                    settingsSection("Shared Budget") {
+                        if !memberships.isEmpty {
+                            settingsRow("Viewing") {
+                                Menu {
+                                    ForEach(memberships) { membership in
+                                        let displayName = membership.displayName(currentUserId: authStore.currentUserScopeId)
+                                        Button {
+                                            switchActiveBudget(to: membership.budgetId.uuidString)
+                                        } label: {
+                                            if membership.budgetId.uuidString == authStore.currentBudgetScopeId {
+                                                Label(displayName, systemImage: "checkmark")
+                                            } else {
+                                                Text(displayName)
+                                            }
+                                        }
+                                    }
+                                } label: {
+                                    settingsValue(activeBudgetDisplayName)
+                                }
+                            }
+                            Divider()
+                        }
+
+                        NavigationLink {
+                            BudgetMembersView()
+                        } label: {
+                            HStack(spacing: 14) {
+                                MemberAvatarCluster(members: memberViewModel.members, size: 32, maxVisible: 4)
+                                Text("\(memberViewModel.members.count) member\(memberViewModel.members.count == 1 ? "" : "s")")
+                                    .font(settingsRowValueFont)
+                                    .foregroundStyle(BudgetBeaverPalette.ink)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(settingsRowValueFont)
+                                    .foregroundStyle(BudgetBeaverPalette.wood)
+                            }
+                        }
+                        .buttonStyle(.plain)
+
+                        if canLeaveCurrentBudget {
+                            Divider()
+                            rowButton("Leave Shared Budget", tint: AppTheme.danger) {
+                                isShowingLeaveBudgetConfirmation = true
+                            }
+                        }
+
+                        if isLoadingInvites {
+                            Divider()
+                            HStack {
+                                Text("Checking invites")
+                                    .font(settingsRowLabelFont)
+                                    .foregroundStyle(BudgetBeaverPalette.ink)
+                                Spacer()
+                                ProgressView()
+                            }
+                        } else if pendingInvites.isEmpty {
+                            Divider()
+                            Text("No pending invites.")
+                                .font(settingsHelperFont)
+                                .foregroundStyle(BudgetBeaverPalette.wood)
+                        } else if !pendingInvites.isEmpty {
+                            Divider()
+                            ForEach(pendingInvites) { invite in
+                                pendingInviteRow(invite)
+                            }
                         }
                     }
 
-                    if isLoadingInvites {
-                        HStack {
-                            Text("Checking invites")
-                            Spacer()
-                            ProgressView()
-                        }
-                    } else if pendingInvites.isEmpty {
-                        Text("No pending invites.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(pendingInvites) { invite in
-                            pendingInviteRow(invite)
-                        }
-                    }
-                }
-
-                Section("Recurring Expenses") {
-                    if recurringExpenses.isEmpty {
-                        Text("No recurring expenses right now.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(recurringExpenses) { transaction in
-                            recurringExpenseRow(transaction)
-                        }
-                    }
-                }
-
-                Section("Sync") {
-                    HStack {
-                        Text("Device data")
-                        Spacer()
-                        Text(memberViewModel.syncMode.displayName)
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(syncBadgeColor.opacity(0.18), in: Capsule())
-                            .foregroundStyle(syncBadgeColor)
-                    }
-
-                    HStack {
-                        Text("Cloud backup")
-                        Spacer()
-                        Text(cloudSyncStore.statusText())
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(cloudSyncStore.hasSyncIssue ? AppTheme.expense : .secondary)
-                    }
-
-                    Text(cloudSyncStore.syncHelpText)
-                        .font(.caption)
-                        .foregroundStyle(cloudSyncStore.hasSyncIssue ? AppTheme.expense : AppTheme.textSecondary)
-
-                    Button {
-                        Task {
-                            await refreshAllData(showFeedback: true, forceSync: true)
-                        }
-                    } label: {
-                        if cloudSyncStore.isSyncing {
-                            Label("Syncing Now", systemImage: "arrow.triangle.2.circlepath")
-                        } else if cloudSyncStore.hasSyncIssue {
-                            Label("Retry Sync", systemImage: "icloud.and.arrow.up")
+                    settingsSection("Recurring Expenses") {
+                        if recurringExpenses.isEmpty {
+                            Text("No recurring expenses right now.")
+                                .font(settingsRowLabelFont)
+                                .foregroundStyle(BudgetBeaverPalette.wood)
                         } else {
-                            Label("Sync Now", systemImage: "icloud.and.arrow.up")
+                            ForEach(recurringExpenses) { transaction in
+                                recurringExpenseRow(transaction)
+                            }
                         }
                     }
-                    .disabled(cloudSyncStore.isSyncing)
-                }
 
-                Section("Data") {
-                    Button("Reset Settings") {
-                        settingsStore.resetSettings()
-                        syncFieldsFromStore()
-                        cloudSyncStore.saveSettings(
-                            settingsStore.settings,
-                            userScopeId: authStore.currentUserScopeId,
-                            budgetScopeId: authStore.currentBudgetScopeId
-                        )
+                    settingsSection("Sync") {
+                        settingsRow("Device data") {
+                            Text(memberViewModel.syncMode.displayName)
+                                .font(settingsBadgeFont)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(syncBadgeColor.opacity(0.20), in: Capsule())
+                                .foregroundStyle(syncBadgeColor)
+                        }
+
+                        Divider()
+
+                        settingsRow("Cloud backup") {
+                            Text(cloudSyncStore.statusText())
+                                .font(settingsCompactValueFont)
+                                .foregroundStyle(cloudSyncStore.hasSyncIssue ? AppTheme.danger : BudgetBeaverPalette.wood)
+                        }
+
+                        Text(cloudSyncStore.syncHelpText)
+                            .font(settingsHelperFont)
+                            .foregroundStyle(cloudSyncStore.hasSyncIssue ? AppTheme.danger : BudgetBeaverPalette.wood)
+
+                        Button {
+                            Task {
+                                await refreshAllData(showFeedback: true, forceSync: true)
+                            }
+                        } label: {
+                            Label(syncButtonTitle, systemImage: "icloud.and.arrow.up")
+                                .font(settingsActionFont)
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity, minHeight: 50)
+                                .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        }
+                        .buttonStyle(PressableButtonStyle(scale: 0.98))
+                        .disabled(cloudSyncStore.isSyncing)
                     }
 
-                    Button("Clear All Transactions", role: .destructive) {
-                        isShowingClearConfirmation = true
+                    settingsSection("Data") {
+                        rowButton("Reset Settings", tint: AppTheme.brand) {
+                            settingsStore.resetSettings()
+                            syncFieldsFromStore()
+                            cloudSyncStore.saveSettings(
+                                settingsStore.settings,
+                                userScopeId: authStore.currentUserScopeId,
+                                budgetScopeId: authStore.currentBudgetScopeId
+                            )
+                        }
+
+                        Divider()
+
+                        rowButton("Clear All Transactions", tint: AppTheme.danger) {
+                            isShowingClearConfirmation = true
+                        }
                     }
                 }
+                .padding(.horizontal)
+                .padding(.bottom, 24)
             }
             .refreshable {
                 await refreshAllData(showFeedback: false, forceSync: true)
             }
-            .scrollContentBackground(.hidden)
             .background(AppTheme.background)
             .statusBarScrim()
             .navigationBarTitleDisplayMode(.inline)
@@ -295,12 +361,110 @@ struct SettingsView: View {
             } message: {
                 Text("You will no longer see this shared budget. The budget and its transactions will stay available for the other members.")
             }
-            .alert("Transactions", isPresented: clearFeedbackAlertBinding) {
+            .alert("BudgetMate", isPresented: clearFeedbackAlertBinding) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(clearFeedbackMessage ?? "")
             }
         }
+    }
+
+    private var syncButtonTitle: String {
+        if cloudSyncStore.isSyncing {
+            return "Syncing Now"
+        }
+        return cloudSyncStore.hasSyncIssue ? "Retry Sync" : "Sync Now"
+    }
+
+    private var settingsSectionTitleFont: Font {
+        .system(size: 24, weight: .black, design: .rounded)
+    }
+
+    private var settingsRowLabelFont: Font {
+        .system(size: 18, weight: .bold, design: .rounded)
+    }
+
+    private var settingsRowValueFont: Font {
+        .system(size: 18, weight: .bold, design: .rounded)
+    }
+
+    private var settingsCompactValueFont: Font {
+        .system(size: 15, weight: .bold, design: .rounded)
+    }
+
+    private var settingsHelperFont: Font {
+        .system(size: 14, weight: .medium, design: .rounded)
+    }
+
+    private var settingsBadgeFont: Font {
+        .system(size: 12, weight: .black, design: .rounded)
+    }
+
+    private var settingsActionFont: Font {
+        .system(size: 18, weight: .bold, design: .rounded)
+    }
+
+    private func settingsSection<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(settingsSectionTitleFont)
+                .foregroundStyle(BudgetBeaverPalette.wood)
+
+            VStack(alignment: .leading, spacing: 12) {
+                content()
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func settingsRow<Trailing: View>(
+        _ title: String,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(title)
+                .font(settingsRowLabelFont)
+                .foregroundStyle(BudgetBeaverPalette.wood)
+            Spacer(minLength: 12)
+            trailing()
+        }
+    }
+
+    private func settingsValue(_ value: String) -> some View {
+        HStack(spacing: 6) {
+            Text(value)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 12, weight: .black, design: .rounded))
+        }
+        .font(settingsRowValueFont)
+        .foregroundStyle(BudgetBeaverPalette.ink)
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+    }
+
+    private func rowButton(
+        _ title: String,
+        tint: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Text(title)
+                    .font(settingsActionFont)
+                    .foregroundStyle(tint)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 12)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableButtonStyle(scale: 0.985))
     }
 
     private func syncFieldsFromStore() {
@@ -332,6 +496,10 @@ struct SettingsView: View {
     private var canLeaveCurrentBudget: Bool {
         authStore.currentBudgetScopeId != authStore.currentUserScopeId &&
         currentMembership?.role != "owner"
+    }
+
+    private var activeBudgetDisplayName: String {
+        currentMembership?.displayName(currentUserId: authStore.currentUserScopeId) ?? "Personal Budget"
     }
 
     private func updateProfileName(_ name: String) {
@@ -377,7 +545,11 @@ struct SettingsView: View {
             ownerUserId: authStore.currentBudgetScopeId,
             mode: mode
         )
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            cloudSyncStore.recordSyncIssue(error, context: "Loading sample data")
+        }
         if mode == .household {
             let memberCount = memberViewModel.members.count
             cloudSyncStore.saveMembers(
@@ -401,7 +573,11 @@ struct SettingsView: View {
         )
         scopedTransactions.forEach { modelContext.delete($0) }
         scopedSettlements.forEach { modelContext.delete($0) }
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            cloudSyncStore.recordSyncIssue(error, context: "Clearing local budget data")
+        }
 
         if transactionCount == 0 && settlementCount == 0 {
             clearFeedbackMessage = "Nothing to clear."
@@ -512,18 +688,13 @@ struct SettingsView: View {
         await loadMemberships()
     }
 
-    private var activeBudgetSelection: Binding<String> {
-        Binding(
-            get: { authStore.currentBudgetScopeId },
-            set: { budgetScopeId in
-                authStore.switchBudgetScope(to: budgetScopeId)
-                settingsStore.switchUser(to: budgetScopeId)
-                clearFeedbackMessage = "Switched budget. Syncing now."
-                Task {
-                    await refreshAllData(showFeedback: false, forceSync: true)
-                }
-            }
-        )
+    private func switchActiveBudget(to budgetScopeId: String) {
+        authStore.switchBudgetScope(to: budgetScopeId)
+        settingsStore.switchUser(to: budgetScopeId)
+        clearFeedbackMessage = "Switched budget. Syncing now."
+        Task {
+            await refreshAllData(showFeedback: false, forceSync: true)
+        }
     }
 
     private func acceptInvite(_ invite: BudgetInvite) {
@@ -557,25 +728,25 @@ struct SettingsView: View {
     private func recurringExpenseRow(_ transaction: Transaction) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "arrow.triangle.2.circlepath")
-                .font(.system(size: 14, weight: .semibold))
+                .font(settingsBadgeFont)
                 .foregroundStyle(AppTheme.brand)
                 .frame(width: 30, height: 30)
                 .background(Circle().fill(AppTheme.brandSoft))
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(transaction.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(settingsRowLabelFont)
                     .foregroundStyle(AppTheme.textPrimary)
 
                 Text(recurringExpenseSubtitle(for: transaction))
-                    .font(.caption)
+                    .font(settingsHelperFont)
                     .foregroundStyle(AppTheme.textSecondary)
             }
 
             Spacer(minLength: 8)
 
             Text(formattedAmount(transaction.amount))
-                .font(.subheadline.weight(.semibold))
+                .font(settingsCompactValueFont)
                 .foregroundStyle(AppTheme.textPrimary)
                 .multilineTextAlignment(.trailing)
         }
@@ -586,18 +757,18 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "person.2.badge.plus")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(settingsBadgeFont)
                     .foregroundStyle(AppTheme.brand)
                     .frame(width: 30, height: 30)
                     .background(Circle().fill(AppTheme.brandSoft))
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Budget invite for \(invite.displayName)")
-                        .font(.subheadline.weight(.semibold))
+                        .font(settingsRowLabelFont)
                         .foregroundStyle(AppTheme.textPrimary)
 
                     Text(invite.email)
-                        .font(.caption)
+                        .font(settingsHelperFont)
                         .foregroundStyle(AppTheme.textSecondary)
                 }
 
@@ -607,6 +778,7 @@ struct SettingsView: View {
             Button("Accept Invite") {
                 acceptInvite(invite)
             }
+            .font(settingsActionFont)
             .buttonStyle(.borderedProminent)
             .tint(AppTheme.brand)
         }
@@ -639,13 +811,17 @@ struct SettingsView: View {
         Binding(
             get: { settingsStore.settings.currencyCode },
             set: {
-                settingsStore.updateCurrencyCode($0)
-                cloudSyncStore.saveSettings(
-                    settingsStore.settings,
-                    userScopeId: authStore.currentUserScopeId,
-                    budgetScopeId: authStore.currentBudgetScopeId
-                )
+                updateCurrencyCode($0)
             }
+        )
+    }
+
+    private func updateCurrencyCode(_ code: String) {
+        settingsStore.updateCurrencyCode(code)
+        cloudSyncStore.saveSettings(
+            settingsStore.settings,
+            userScopeId: authStore.currentUserScopeId,
+            budgetScopeId: authStore.currentBudgetScopeId
         )
     }
 
@@ -672,129 +848,4 @@ struct SettingsView: View {
         .environmentObject(CloudSyncStore())
         .environmentObject(AppRefreshStore())
         .modelContainer(PreviewContainer.seeded)
-}
-
-private struct ClearTransactionsConfirmationView: View {
-    let onCancel: () -> Void
-    let onConfirm: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 22) {
-                Spacer()
-
-                Image(systemName: "trash.circle.fill")
-                    .font(.system(size: 70))
-                    .foregroundStyle(.red)
-
-                VStack(spacing: 10) {
-                    Text("Clear All Transactions?")
-                        .font(.title2.weight(.bold))
-
-                    Text("This will permanently remove all transactions and settle-up records.")
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal)
-                }
-
-                VStack(spacing: 12) {
-                    Button("Clear All Transactions", role: .destructive) {
-                        onConfirm()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .frame(maxWidth: .infinity)
-
-                    Button("Cancel") {
-                        onCancel()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                    .frame(maxWidth: .infinity)
-                }
-                .padding(.horizontal)
-
-                Spacer()
-            }
-            .padding()
-            .navigationTitle("Confirm Action")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Close") {
-                        onCancel()
-                    }
-                }
-            }
-        }
-    }
-}
-
-private struct EditProfileNameView: View {
-    let currentName: String
-    let onCancel: () -> Void
-    let onSave: (String) -> Void
-
-    @State private var name: String
-    @State private var validationMessage: String?
-    @FocusState private var isFocused: Bool
-
-    init(currentName: String, onCancel: @escaping () -> Void, onSave: @escaping (String) -> Void) {
-        self.currentName = currentName
-        self.onCancel = onCancel
-        self.onSave = onSave
-        _name = State(initialValue: currentName)
-    }
-
-    private var trimmedName: String {
-        name.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Profile") {
-                    TextField("Profile name", text: $name)
-                        .textContentType(.name)
-                        .focused($isFocused)
-
-                    if let validationMessage {
-                        Text(validationMessage)
-                            .font(.caption)
-                            .foregroundStyle(AppTheme.expense)
-                    }
-                }
-            }
-            .scrollContentBackground(.hidden)
-            .background(AppTheme.background)
-            .navigationTitle("Profile Name")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        onCancel()
-                    }
-                }
-
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        save()
-                    }
-                    .fontWeight(.bold)
-                }
-            }
-            .onAppear {
-                isFocused = true
-            }
-        }
-    }
-
-    private func save() {
-        guard !trimmedName.isEmpty else {
-            validationMessage = "Enter a profile name."
-            return
-        }
-
-        onSave(trimmedName)
-    }
 }

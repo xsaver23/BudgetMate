@@ -11,13 +11,26 @@ struct BudgetMembersView: View {
     @State private var feedbackMessage: String?
 
     var body: some View {
-        List {
-            Section("Members") {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Budget members")
+                    .font(.roundedBold(34))
+                    .foregroundStyle(BudgetBeaverPalette.ink)
+                    .padding(.top, 18)
+
                 if canManageMembers {
                     ForEach(memberViewModel.members) { member in
                         memberRow(member)
+                            .contextMenu {
+                                if member.role != .owner {
+                                    Button(role: .destructive) {
+                                        deleteMember(member)
+                                    } label: {
+                                        Label("Remove Member", systemImage: "trash")
+                                    }
+                                }
+                            }
                     }
-                    .onDelete(perform: deleteMembers)
                 } else {
                     ForEach(memberViewModel.members) { member in
                         memberRow(member)
@@ -25,20 +38,27 @@ struct BudgetMembersView: View {
 
                     Text("Only the budget owner can invite or remove members.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(BudgetBeaverPalette.wood)
                 }
-            }
 
-            if canManageMembers {
-                Section {
-                    Button("Invite Member") {
+                if canManageMembers {
+                    Button {
                         isShowingInviteSheet = true
+                    } label: {
+                        Text("Invite member")
+                            .font(.headline.weight(.black))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity, minHeight: 58)
+                            .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                     }
-                    .tint(AppTheme.brand)
+                    .buttonStyle(PressableButtonStyle(scale: 0.98))
                 }
             }
+            .padding()
         }
+        .background(AppTheme.background)
         .navigationTitle("Budget Members")
+        .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $isShowingInviteSheet) {
             InviteMemberView { name, email in
                 if memberViewModel.inviteMember(displayName: name, email: email) != nil {
@@ -80,18 +100,19 @@ struct BudgetMembersView: View {
             MemberInitialsBadge(
                 initials: member.initials,
                 colorHex: member.colorHex,
-                size: 40,
+                size: 52,
                 accessibilityLabel: "Member \(member.displayName)"
             )
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(member.displayName)
-                    .font(.roundedBold(17))
+                    .font(.roundedBold(22))
+                    .foregroundStyle(BudgetBeaverPalette.ink)
 
                 if let email = member.email, !email.isEmpty {
                     Text(email)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(BudgetBeaverPalette.wood)
                 }
 
                 HStack(spacing: 6) {
@@ -103,8 +124,26 @@ struct BudgetMembersView: View {
                     inviteStatusChip(member.inviteStatus)
                 }
             }
+
+            Spacer(minLength: 8)
+
+            if canManageMembers, member.role != .owner {
+                Button(role: .destructive) {
+                    deleteMember(member)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.danger)
+                        .frame(width: 44, height: 44)
+                        .background(AppTheme.expense.opacity(0.35), in: Circle())
+                }
+                .buttonStyle(PressableButtonStyle(scale: 0.94))
+                .accessibilityLabel("Remove \(member.displayName)")
+            }
         }
-        .padding(.vertical, 2)
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
     private func inviteStatusChip(_ status: InviteStatus) -> some View {
@@ -129,12 +168,12 @@ struct BudgetMembersView: View {
 
     private func memberChip(title: String, systemImage: String, tint: Color) -> some View {
         Label(title, systemImage: systemImage)
-            .font(.caption2.weight(.semibold))
+            .font(.caption.weight(.black))
             .labelStyle(.titleAndIcon)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(tint.opacity(0.12), in: Capsule())
-            .foregroundStyle(tint)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(tint.opacity(0.30), in: Capsule())
+            .foregroundStyle(AppTheme.brand)
     }
 
     private var feedbackAlertBinding: Binding<Bool> {
@@ -183,6 +222,11 @@ struct BudgetMembersView: View {
         } catch {
             feedbackMessage = error.localizedDescription
         }
+    }
+
+    private func deleteMember(_ member: BudgetMember) {
+        guard let index = memberViewModel.members.firstIndex(where: { $0.id == member.id }) else { return }
+        deleteMembers(at: IndexSet(integer: index))
     }
 
     private func deleteTransactions(forMemberIds ids: Set<UUID>) -> Int {

@@ -12,12 +12,11 @@ struct MonthSliderView: View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("MONTH")
-                        .font(.caption2.weight(.semibold))
-                        .tracking(0.5)
-                        .foregroundStyle(AppTheme.textSecondary)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(BudgetBeaverPalette.wood)
                     Text(monthSelectionStore.selectedMonthTitle)
-                        .font(.roundedBold(20))
-                        .foregroundStyle(AppTheme.textPrimary)
+                        .font(.roundedBold(22))
+                        .foregroundStyle(BudgetBeaverPalette.ink)
                         .animation(.easeOut(duration: 0.16), value: selectedIndex)
                 }
 
@@ -38,9 +37,9 @@ struct MonthSliderView: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(enabled ? AppTheme.brand : AppTheme.textSecondary.opacity(0.4))
+                .foregroundStyle(enabled ? AppTheme.brand : AppTheme.textSecondary.opacity(0.42))
                 .frame(width: 34, height: 34)
-                .background(Circle().fill(enabled ? AppTheme.brandSoft : AppTheme.background))
+                .background(Circle().fill(enabled ? AppTheme.background : AppTheme.surfaceAlt.opacity(0.6)))
                 .frame(width: 44, height: 44)
                 .contentShape(Circle())
         }

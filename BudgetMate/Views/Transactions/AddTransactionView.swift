@@ -18,16 +18,19 @@ struct AddTransactionView: View {
         _viewModel = StateObject(wrappedValue: AddTransactionViewModel(transaction: transactionToEdit))
     }
 
-    private var amountTint: Color {
-        viewModel.type == .income ? AppTheme.income : AppTheme.expense
-    }
-
     private var payerId: UUID {
         selectedMemberId ?? memberViewModel.activeMember.id
     }
 
     private var currencySymbol: String {
         settingsStore.settings.currencySymbol
+    }
+
+    private var amountBinding: Binding<String> {
+        Binding(
+            get: { viewModel.amountText },
+            set: { viewModel.updateAmountText($0) }
+        )
     }
 
     var body: some View {
@@ -77,6 +80,7 @@ struct AddTransactionView: View {
                 }
                 .scrollContentBackground(.hidden)
                 .background(AppTheme.background)
+                .tint(AppTheme.brand)
             }
             .background(AppTheme.background)
             .navigationTitle(transactionToEdit == nil ? "Add Transaction" : "Edit Transaction")
@@ -84,9 +88,6 @@ struct AddTransactionView: View {
             .onAppear {
                 viewModel.updateAvailableExpenseCategories(from: settingsStore.settings)
                 ensureSelectedMemberIsValid()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    amountFocused = true
-                }
             }
             .onChange(of: settingsStore.settings) { _, settings in
                 viewModel.updateAvailableExpenseCategories(from: settings)
@@ -107,6 +108,7 @@ struct AddTransactionView: View {
                     Button("Cancel") {
                         dismiss()
                     }
+                    .foregroundStyle(BudgetBeaverPalette.wood)
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
@@ -114,6 +116,7 @@ struct AddTransactionView: View {
                         saveTransaction()
                     }
                     .fontWeight(.bold)
+                    .foregroundStyle(AppTheme.brand)
                     .disabled(!viewModel.canSave)
                 }
             }
@@ -128,19 +131,22 @@ struct AddTransactionView: View {
                 }
             }
             .pickerStyle(.segmented)
-            .frame(maxWidth: 260)
+            .tint(viewModel.type == .income ? AppTheme.brand : AppTheme.danger)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 20)
 
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(currencySymbol)
                     .font(.roundedBold(34))
                     .foregroundStyle(AppTheme.textSecondary)
 
-                TextField("0", text: $viewModel.amountText)
+                TextField("0", text: amountBinding)
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.center)
                     .font(.roundedBold(60))
-                    .foregroundStyle(amountTint)
-                    .fixedSize()
+                    .foregroundStyle(BudgetBeaverPalette.ink)
+                    .lineLimit(1)
+                    .frame(minWidth: 120)
                     .focused($amountFocused)
                     .accessibilityLabel("Amount")
             }
@@ -148,14 +154,13 @@ struct AddTransactionView: View {
 
             Text(viewModel.type == .expense ? "Expense" : "Income")
                 .font(.caption.weight(.semibold))
-                .tracking(0.5)
-                .foregroundStyle(amountTint)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 5)
-                .background(Capsule().fill(amountTint.opacity(0.14)))
+                .foregroundStyle(viewModel.type == .expense ? AppTheme.danger : AppTheme.brand)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+                .background(viewModel.type == .expense ? AppTheme.expense : AppTheme.income, in: Capsule())
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 16)
+        .padding(.top, 18)
         .padding(.bottom, 24)
         .background(AppTheme.background)
         .contentShape(Rectangle())
@@ -203,8 +208,9 @@ struct AddTransactionView: View {
                 }
                 .pickerStyle(.segmented)
 
+                let equalSharesByMember = equalSharesByMember()
                 ForEach(memberViewModel.members) { member in
-                    participantRow(for: member)
+                    participantRow(for: member, equalSharesByMember: equalSharesByMember)
                 }
 
                 if viewModel.splitMethod == .custom {
@@ -227,7 +233,7 @@ struct AddTransactionView: View {
         }
     }
 
-    private func participantRow(for member: BudgetMember) -> some View {
+    private func participantRow(for member: BudgetMember, equalSharesByMember: [UUID: Double]) -> some View {
         let isIncluded = viewModel.participants.contains(member.id)
         let isPayer = member.id == payerId
         return HStack(spacing: 12) {
@@ -236,12 +242,11 @@ struct AddTransactionView: View {
             } label: {
                 Image(systemName: isIncluded ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 20))
-                    .foregroundStyle(isIncluded ? AppTheme.brand : AppTheme.textSecondary)
+                    .foregroundStyle(isIncluded ? AppTheme.brand : BudgetBeaverPalette.wood.opacity(0.45))
                     .frame(width: 44, height: 44)
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .buttonStyle(PressableButtonStyle(scale: 0.94))
             .accessibilityLabel(isIncluded ? "Remove \(member.displayName) from split" : "Include \(member.displayName) in split")
 
             MemberInitialsBadge(
@@ -259,7 +264,7 @@ struct AddTransactionView: View {
             if isIncluded {
                 switch viewModel.splitMethod {
                 case .equally:
-                    Text(CurrencyFormatter.amountString(equalShare(for: member.id), symbol: currencySymbol))
+                    Text(CurrencyFormatter.amountString(equalSharesByMember[member.id] ?? 0, symbol: currencySymbol))
                         .font(.roundedBold(15))
                         .foregroundStyle(AppTheme.textPrimary)
                 case .custom:
@@ -274,9 +279,9 @@ struct AddTransactionView: View {
         .contentShape(Rectangle())
     }
 
-    private func equalShare(for memberId: UUID) -> Double {
-        guard let resolved = viewModel.resolvedSplits(payerId: payerId) else { return 0 }
-        return resolved.first(where: { $0.memberId == memberId })?.amount ?? 0
+    private func equalSharesByMember() -> [UUID: Double] {
+        guard let resolved = viewModel.resolvedSplits(payerId: payerId) else { return [:] }
+        return Dictionary(uniqueKeysWithValues: resolved)
     }
 
     private func toggleParticipant(_ id: UUID) {
@@ -289,8 +294,8 @@ struct AddTransactionView: View {
 
     private func customBinding(_ id: UUID) -> Binding<String> {
         Binding(
-            get: { viewModel.customAmounts[id] ?? "" },
-            set: { viewModel.customAmounts[id] = $0 }
+            get: { viewModel.customAmountText(for: id) },
+            set: { viewModel.updateCustomAmount($0, for: id) }
         )
     }
 
@@ -300,7 +305,11 @@ struct AddTransactionView: View {
             viewModel.applyChanges(to: transactionToEdit, paidBy: member)
             transactionToEdit.ownerUserId = authStore.currentBudgetScopeId
             replaceSplits(for: transactionToEdit, paidBy: member)
-            try? modelContext.save()
+            do {
+                try modelContext.save()
+            } catch {
+                cloudSyncStore.recordSyncIssue(error, context: "Saving edited transaction")
+            }
             cloudSyncStore.saveTransaction(
                 transactionToEdit,
                 userScopeId: authStore.currentUserScopeId,
@@ -315,7 +324,11 @@ struct AddTransactionView: View {
         modelContext.insert(transaction)
         insertSplits(for: transaction, paidBy: member)
 
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            cloudSyncStore.recordSyncIssue(error, context: "Saving new transaction")
+        }
         cloudSyncStore.saveTransaction(
             transaction,
             userScopeId: authStore.currentUserScopeId,

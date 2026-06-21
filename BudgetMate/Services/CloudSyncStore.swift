@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import SwiftData
 
 @MainActor
@@ -22,8 +23,12 @@ final class CloudSyncStore: ObservableObject {
     @Published private(set) var isSyncing = false
     @Published private(set) var lastSyncedAt: Date?
     @Published private(set) var lastErrorMessage: String?
+    @Published private(set) var lastDiagnosticMessage: String?
 
     private let service: SupabaseBudgetSyncService
+    private let logger = Logger(subsystem: "BudgetMate", category: "CloudSync")
+    private let maxRetryAttempts = 3
+    private var pendingFullSyncRequest: FullSyncRequest?
 
     init(service: SupabaseBudgetSyncService = SupabaseBudgetSyncService()) {
         self.service = service
@@ -91,29 +96,72 @@ final class CloudSyncStore: ObservableObject {
         userEmail: String? = nil,
         budgetScopeId: String? = nil
     ) async throws -> CloudBudgetSyncSummary {
+        let request = FullSyncRequest(
+            settings: settings,
+            members: members,
+            transactions: transactions,
+            settlements: settlements,
+            context: context,
+            userScopeId: userScopeId,
+            userEmail: userEmail,
+            budgetScopeId: budgetScopeId
+        )
+
+        guard !isSyncing else {
+            pendingFullSyncRequest = request
+            throw CloudSyncStoreError.syncAlreadyRunning
+        }
+
+        let summary = try await performFullSync(request)
+        await drainPendingFullSyncRequests()
+        return summary
+    }
+
+    private func performFullSync(_ request: FullSyncRequest) async throws -> CloudBudgetSyncSummary {
         isSyncing = true
         defer { isSyncing = false }
 
         do {
-            let summary = try await service.sync(
-                settings: settings,
-                members: members,
-                transactions: transactions,
-                settlements: settlements,
-                into: context,
-                userScopeId: userScopeId,
-                userEmail: userEmail,
-                budgetScopeId: budgetScopeId
-            )
-            try? context.save()
+            let summary = try await runWithRetry {
+                try await self.service.sync(
+                    settings: request.settings,
+                    members: request.members,
+                    transactions: request.transactions,
+                    settlements: request.settlements,
+                    into: request.context,
+                    userScopeId: request.userScopeId,
+                    userEmail: request.userEmail,
+                    budgetScopeId: request.budgetScopeId
+                )
+            }
+            do {
+                try request.context.save()
+            } catch {
+                markFailed(error, context: "Saving merged cloud data")
+                throw error
+            }
             markSynced()
             return summary
         } catch {
-            markFailed(error)
+            markFailed(error, context: "Full sync")
             throw error
         }
     }
 
+    private func drainPendingFullSyncRequests() async {
+        while let request = pendingFullSyncRequest {
+            pendingFullSyncRequest = nil
+
+            do {
+                _ = try await performFullSync(request)
+            } catch {
+                markFailed(error, context: "Queued full sync")
+                return
+            }
+        }
+    }
+
+    @discardableResult
     func syncIfPossible(
         settings: BudgetSettings,
         members: [BudgetMember],
@@ -123,47 +171,64 @@ final class CloudSyncStore: ObservableObject {
         userScopeId: String,
         userEmail: String? = nil,
         budgetScopeId: String? = nil
-    ) async {
+    ) async -> Bool {
+        let request = FullSyncRequest(
+            settings: settings,
+            members: members,
+            transactions: transactions,
+            settlements: settlements,
+            context: context,
+            userScopeId: userScopeId,
+            userEmail: userEmail,
+            budgetScopeId: budgetScopeId
+        )
+
+        guard !isSyncing else {
+            pendingFullSyncRequest = request
+            return false
+        }
+
         do {
-            _ = try await sync(
-                settings: settings,
-                members: members,
-                transactions: transactions,
-                settlements: settlements,
-                into: context,
-                userScopeId: userScopeId,
-                userEmail: userEmail,
-                budgetScopeId: budgetScopeId
-            )
+            _ = try await performFullSync(request)
+            await drainPendingFullSyncRequests()
+            return true
         } catch {
-            markFailed(error)
+            guard !(error is CloudSyncStoreError) else { return false }
+            markFailed(error, context: "Background sync")
+            return false
         }
     }
 
     func inviteMember(displayName: String, email: String, userScopeId: String) async throws {
         do {
-            try await service.createInvite(displayName: displayName, email: email, userScopeId: userScopeId)
+            try await runWithRetry {
+                try await self.service.createInvite(displayName: displayName, email: email, userScopeId: userScopeId)
+            }
             markSynced()
         } catch {
-            markFailed(error)
+            markFailed(error, context: "Inviting member")
             throw error
         }
     }
 
     func fetchPendingInvites(email: String) async throws -> [BudgetInvite] {
         do {
-            return try await service.fetchPendingInvites(email: email)
+            return try await runWithRetry {
+                try await self.service.fetchPendingInvites(email: email)
+            }
         } catch {
-            markFailed(error)
+            markFailed(error, context: "Fetching invites")
             throw error
         }
     }
 
     func fetchMemberships(userScopeId: String) async throws -> [BudgetMembership] {
         do {
-            return try await service.fetchMemberships(userScopeId: userScopeId)
+            return try await runWithRetry {
+                try await self.service.fetchMemberships(userScopeId: userScopeId)
+            }
         } catch {
-            markFailed(error)
+            markFailed(error, context: "Fetching memberships")
             throw error
         }
     }
@@ -178,37 +243,49 @@ final class CloudSyncStore: ObservableObject {
                 budgetScopeId: budgetScopeId
             )
         } catch {
-            markFailed(error)
+            markFailed(error, context: "Repairing member profile")
         }
     }
 
     func acceptInvite(_ invite: BudgetInvite, userScopeId: String) async throws {
         do {
-            try await service.acceptInvite(invite, userScopeId: userScopeId)
+            try await runWithRetry {
+                try await self.service.acceptInvite(invite, userScopeId: userScopeId)
+            }
             markSynced()
         } catch {
-            markFailed(error)
+            markFailed(error, context: "Accepting invite")
             throw error
         }
     }
 
     func leaveBudget(userScopeId: String, budgetScopeId: String) async throws {
         do {
-            try await service.leaveBudget(userScopeId: userScopeId, budgetScopeId: budgetScopeId)
+            try await runWithRetry {
+                try await self.service.leaveBudget(userScopeId: userScopeId, budgetScopeId: budgetScopeId)
+            }
             markSynced()
         } catch {
-            markFailed(error)
+            markFailed(error, context: "Leaving budget")
             throw error
         }
     }
 
     private func markSynced() {
         lastErrorMessage = nil
+        lastDiagnosticMessage = nil
         lastSyncedAt = .now
     }
 
     func fetchSettings(userScopeId: String, budgetScopeId: String? = nil) async throws -> BudgetSettings? {
-        try await service.fetchSettings(userScopeId: userScopeId, budgetScopeId: budgetScopeId)
+        do {
+            return try await runWithRetry {
+                try await self.service.fetchSettings(userScopeId: userScopeId, budgetScopeId: budgetScopeId)
+            }
+        } catch {
+            markFailed(error, context: "Fetching settings")
+            throw error
+        }
     }
 
     func saveSettings(_ settings: BudgetSettings, userScopeId: String, budgetScopeId: String? = nil) {
@@ -220,7 +297,14 @@ final class CloudSyncStore: ObservableObject {
     }
 
     func fetchMembers(userScopeId: String, budgetScopeId: String? = nil) async throws -> [BudgetMember] {
-        try await service.fetchMembers(userScopeId: userScopeId, budgetScopeId: budgetScopeId)
+        do {
+            return try await runWithRetry {
+                try await self.service.fetchMembers(userScopeId: userScopeId, budgetScopeId: budgetScopeId)
+            }
+        } catch {
+            markFailed(error, context: "Fetching members")
+            throw error
+        }
     }
 
     func saveMembers(_ members: [BudgetMember], userScopeId: String, budgetScopeId: String? = nil) {
@@ -293,14 +377,36 @@ final class CloudSyncStore: ObservableObject {
 
     private func runSave(_ operation: @escaping () async throws -> Void) async {
         do {
-            try await operation()
+            try await runWithRetry(operation)
             markSynced()
         } catch {
-            markFailed(error)
+            markFailed(error, context: "Saving cloud change")
         }
     }
 
-    private func markFailed(_ error: Error) {
+    func recordSyncIssue(_ error: Error, context: String) {
+        markFailed(error, context: context)
+    }
+
+    private func runWithRetry<T>(_ operation: @escaping () async throws -> T) async throws -> T {
+        var attempt = 1
+
+        while true {
+            do {
+                return try await operation()
+            } catch {
+                if error is CancellationError || attempt >= maxRetryAttempts {
+                    throw error
+                }
+
+                let delayNanoseconds = UInt64(pow(2.0, Double(attempt - 1)) * 500_000_000)
+                try await Task.sleep(nanoseconds: delayNanoseconds)
+                attempt += 1
+            }
+        }
+    }
+
+    private func markFailed(_ error: Error, context: String) {
         if error is CancellationError {
             return
         }
@@ -312,6 +418,9 @@ final class CloudSyncStore: ObservableObject {
             return
         }
 
+        let diagnostic = "\(context): \(message)"
+        logger.error("\(diagnostic, privacy: .private)")
+        lastDiagnosticMessage = diagnostic
         lastErrorMessage = message
     }
 
@@ -337,4 +446,26 @@ final class CloudSyncStore: ObservableObject {
 
         return message
     }
+}
+
+enum CloudSyncStoreError: LocalizedError {
+    case syncAlreadyRunning
+
+    var errorDescription: String? {
+        switch self {
+        case .syncAlreadyRunning:
+            return "Sync is already running."
+        }
+    }
+}
+
+private struct FullSyncRequest {
+    let settings: BudgetSettings
+    let members: [BudgetMember]
+    let transactions: [Transaction]
+    let settlements: [Settlement]
+    let context: ModelContext
+    let userScopeId: String
+    let userEmail: String?
+    let budgetScopeId: String?
 }

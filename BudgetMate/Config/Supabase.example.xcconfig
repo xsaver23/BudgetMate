@@ -1,0 +1,2 @@
+SUPABASE_PROJECT_URL = https:/$()/your-project.supabase.co
+SUPABASE_PUBLISHABLE_KEY = your-publishable-key

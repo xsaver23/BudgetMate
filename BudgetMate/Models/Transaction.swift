@@ -34,8 +34,8 @@ final class Transaction {
         ownerUserId: String = "local"
     ) {
         self.id = id
-        self.title = title
-        self.amount = amount
+        self.title = Self.normalizedTitle(title)
+        self.amount = max(0, amount)
         self.type = type
         self.category = category
         self.paymentMethod = paymentMethod
@@ -48,6 +48,23 @@ final class Transaction {
 }
 
 extension Transaction {
+    static func normalizedTitle(_ title: String) -> String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Untitled" : trimmed
+    }
+
+    func validateForSync() throws {
+        guard amount > 0, amount.isFinite else {
+            throw BudgetDataValidationError.invalidTransactionAmount(title: title)
+        }
+
+        guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw BudgetDataValidationError.emptyTransactionTitle
+        }
+
+        try splits.forEach { try $0.validateForSync() }
+    }
+
     var isMonthlyRecurring: Bool {
         recurrenceRule?.hasPrefix("monthly") == true
     }
@@ -111,4 +128,30 @@ extension Transaction {
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter
     }()
+}
+
+enum BudgetDataValidationError: LocalizedError {
+    case emptyMemberName
+    case emptyTransactionTitle
+    case invalidTransactionAmount(title: String)
+    case invalidSplitAmount
+    case invalidSettlementAmount
+    case invalidSettlementDirection
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyMemberName:
+            return "Member names cannot be empty."
+        case .emptyTransactionTitle:
+            return "Transaction titles cannot be empty."
+        case .invalidTransactionAmount(let title):
+            return "Transaction \"\(title)\" needs an amount greater than zero."
+        case .invalidSplitAmount:
+            return "Split amounts must be greater than zero."
+        case .invalidSettlementAmount:
+            return "Settle-up amounts must be greater than zero."
+        case .invalidSettlementDirection:
+            return "A member cannot settle up with themselves."
+        }
+    }
 }

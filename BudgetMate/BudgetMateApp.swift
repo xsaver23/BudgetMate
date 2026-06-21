@@ -33,7 +33,7 @@ struct BudgetMateApp: App {
             Group {
                 if hasSeenIntro {
                     if authStore.isLoading {
-                        ProgressView()
+                        ProgressView("Loading BudgetMate")
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .background(AppTheme.background)
                             .preferredColorScheme(settingsStore.settings.appearance.colorScheme)
@@ -103,7 +103,7 @@ struct BudgetMateApp: App {
     @ViewBuilder
     private var authenticatedContent: some View {
         if appliedUserScopeId != authStore.currentUserScopeId || isCheckingCloudProfile {
-            ProgressView()
+            ProgressView("Preparing your budget")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(AppTheme.background)
         } else if memberViewModel.isProfileComplete {
@@ -148,7 +148,7 @@ struct BudgetMateApp: App {
                 authStore.switchBudgetScope(to: sharedMembership.budgetId.uuidString)
             }
         } catch {
-            // Keep the personal budget if membership lookup fails.
+            cloudSyncStore.recordSyncIssue(error, context: "Selecting shared budget")
         }
     }
 
@@ -174,7 +174,7 @@ struct BudgetMateApp: App {
                 email: authStore.userEmail
             )
         } catch {
-            // If the cloud lookup fails, keep the local profile flow available.
+            cloudSyncStore.recordSyncIssue(error, context: "Restoring cloud profile")
         }
     }
 
@@ -189,12 +189,20 @@ struct BudgetMateApp: App {
         lastAutoSyncedAtByScope[syncKey] = .now
 
         let context = persistenceController.container.mainContext
-        let transactions = (try? context.fetch(FetchDescriptor<Transaction>()))?
-            .filter { $0.ownerUserId == budgetScopeId } ?? []
-        let settlements = (try? context.fetch(FetchDescriptor<Settlement>()))?
-            .filter { $0.ownerUserId == budgetScopeId } ?? []
+        let transactions: [Transaction]
+        let settlements: [Settlement]
 
-        await cloudSyncStore.syncIfPossible(
+        do {
+            transactions = try context.fetch(FetchDescriptor<Transaction>())
+                .filter { $0.ownerUserId == budgetScopeId }
+            settlements = try context.fetch(FetchDescriptor<Settlement>())
+                .filter { $0.ownerUserId == budgetScopeId }
+        } catch {
+            cloudSyncStore.recordSyncIssue(error, context: "Loading local data for sync")
+            return
+        }
+
+        let didRunSync = await cloudSyncStore.syncIfPossible(
             settings: settingsStore.settings,
             members: memberViewModel.members,
             transactions: transactions,
@@ -204,19 +212,27 @@ struct BudgetMateApp: App {
             userEmail: authStore.userEmail,
             budgetScopeId: budgetScopeId
         )
+        guard didRunSync else { return }
 
-        if let cloudSettings = try? await cloudSyncStore.fetchSettings(userScopeId: userScopeId, budgetScopeId: budgetScopeId) {
-            settingsStore.replaceSettings(cloudSettings)
+        do {
+            if let cloudSettings = try await cloudSyncStore.fetchSettings(userScopeId: userScopeId, budgetScopeId: budgetScopeId) {
+                settingsStore.replaceSettings(cloudSettings)
+            }
+        } catch {
+            cloudSyncStore.recordSyncIssue(error, context: "Refreshing cloud settings")
         }
 
-        if let cloudMembers = try? await cloudSyncStore.fetchMembers(userScopeId: userScopeId, budgetScopeId: budgetScopeId),
-           !cloudMembers.isEmpty {
-            memberViewModel.replaceMembers(with: cloudMembers)
+        do {
+            let cloudMembers = try await cloudSyncStore.fetchMembers(userScopeId: userScopeId, budgetScopeId: budgetScopeId)
+            if !cloudMembers.isEmpty {
+                memberViewModel.replaceMembers(with: cloudMembers)
+            }
+        } catch {
+            cloudSyncStore.recordSyncIssue(error, context: "Refreshing cloud members")
         }
     }
 
     private func shouldRunAutoSync(syncKey: String, force: Bool) -> Bool {
-        guard !cloudSyncStore.isSyncing else { return false }
         guard !force else { return true }
         guard let lastSyncedAt = lastAutoSyncedAtByScope[syncKey] else { return true }
         return Date().timeIntervalSince(lastSyncedAt) > 45

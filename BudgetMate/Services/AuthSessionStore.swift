@@ -77,11 +77,15 @@ final class AuthSessionStore: ObservableObject {
 
     func signOut() async {
         await runAuthAction {
+            let signedOutUserId = userId
             try await client.auth.signOut()
             isAuthenticated = false
             userId = nil
             userEmail = nil
             activeBudgetScopeId = nil
+            if let signedOutUserId {
+                UserDefaults.standard.removeObject(forKey: activeBudgetScopeKey(for: signedOutUserId))
+            }
         }
     }
 

@@ -152,7 +152,11 @@ struct DashboardView: View {
             ownerUserId: authStore.currentBudgetScopeId
         )
         modelContext.insert(record)
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            cloudSyncStore.recordSyncIssue(error, context: "Saving settle-up record")
+        }
         cloudSyncStore.saveSettlement(
             record,
             userScopeId: authStore.currentUserScopeId,
@@ -184,15 +188,48 @@ struct DashboardView: View {
     // MARK: - Member filter
 
     private var memberFilterCard: some View {
-        CardContainer {
-            Picker("View", selection: $selectedMemberId) {
-                Text("Combined").tag(Optional<UUID>.none)
-                ForEach(memberViewModel.members) { member in
-                    Text(filterLabel(for: member)).tag(Optional(member.id))
-                }
+        HStack(spacing: 12) {
+            memberFilterButton(
+                title: "All",
+                color: AppTheme.brand,
+                selection: nil,
+                accessibilityLabel: "Show all members"
+            )
+            ForEach(memberViewModel.members) { member in
+                memberFilterButton(
+                    title: String(member.initials.prefix(1)).uppercased(),
+                    color: Color(hex: member.colorHex),
+                    selection: member.id,
+                    accessibilityLabel: "Filter dashboard to \(member.displayName)"
+                )
             }
-            .pickerStyle(.segmented)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func memberFilterButton(
+        title: String,
+        color: Color,
+        selection: UUID?,
+        accessibilityLabel: String
+    ) -> some View {
+        Button {
+            selectedMemberId = selection
+        } label: {
+            Text(title)
+                .font(.headline.weight(.black))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(color, in: Circle())
+                .overlay {
+                    Circle()
+                        .stroke(selectedMemberId == selection ? AppTheme.secondaryAction : .clear, lineWidth: 4)
+                }
+        }
+        .buttonStyle(PressableButtonStyle(scale: 0.92))
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue(selectedMemberId == selection ? "Selected" : "Not selected")
     }
 
     // MARK: - Balance hero
@@ -200,98 +237,74 @@ struct DashboardView: View {
     private var balanceHeroCard: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("TOTAL BALANCE")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.6))
+                Text("Total balance")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(BudgetBeaverPalette.wood)
 
                 Text(amount(derivedMetrics.totals.currentBalance))
-                    .font(.largeTitle.weight(.black))
-                    .foregroundStyle(BudgetBeaverPalette.water)
+                    .font(.roundedBold(48))
+                    .foregroundStyle(BudgetBeaverPalette.ink)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.55)
+                    .minimumScaleFactor(0.48)
             }
 
-            HStack(alignment: .center, spacing: 12) {
+            HStack(alignment: .center, spacing: 14) {
                 miniStat(
                     title: "Income",
                     value: derivedMetrics.totals.totalIncome,
-                    tint: BudgetBeaverPalette.forest,
+                    tint: AppTheme.income,
                     systemImage: "arrow.down.left"
                 )
                 miniStat(
                     title: "Expenses",
                     value: derivedMetrics.totals.totalExpenses,
-                    tint: BudgetBeaverPalette.clay,
+                    tint: AppTheme.expense,
                     systemImage: "arrow.up.right"
                 )
             }
         }
-        .padding(18)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(BudgetBeaverPalette.border, lineWidth: 1)
-        )
     }
 
     private func miniStat(title: String, value: Double, tint: Color, systemImage: String) -> some View {
-        HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 20) {
             Image(systemName: systemImage)
-                .font(.subheadline.weight(.bold))
-                .foregroundStyle(tint)
-                .frame(width: 38, height: 38)
-                .background(tint.opacity(0.14), in: Circle())
+                .font(.headline.weight(.black))
+                .foregroundStyle(AppTheme.brand)
+                .frame(width: 40, height: 40)
+                .background(AppTheme.brand.opacity(0.28), in: Circle())
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(title)
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.7))
-                    .lineLimit(1)
-
+                    .font(.headline.weight(.bold))
                 Text(amount(value))
-                    .font(.title3.weight(.black))
-                    .foregroundStyle(BudgetBeaverPalette.ink)
+                    .font(.title2.weight(.black))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.55)
+                    .minimumScaleFactor(0.62)
             }
-
-            Spacer(minLength: 0)
+            .foregroundStyle(BudgetBeaverPalette.ink)
         }
-        .padding(14)
+        .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(BudgetBeaverPalette.bank.opacity(0.6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(BudgetBeaverPalette.border, lineWidth: 1)
-        )
+        .background(tint, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
     // MARK: - Budget pacing dam bar
 
     private var budgetPacingCard: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            Text("Budget Pacing")
-                .font(.roundedBold(18))
-                .foregroundStyle(BudgetBeaverPalette.ink)
-
+        Group {
             if monthlyBudget > 0 {
                 damBarSummary
             } else {
                 Text("Set a monthly budget in Settings to track your pacing.")
-                    .font(.subheadline)
-                    .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.7))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(BudgetBeaverPalette.wood)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(20)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(BudgetBeaverPalette.bank, lineWidth: 1)
-        )
-        .shadow(color: AppTheme.cardShadow, radius: 8, x: 0, y: 3)
+        .background(AppTheme.colorBlockYellow, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     private var damBarSummary: some View {
@@ -299,44 +312,26 @@ struct DashboardView: View {
         let remaining = derivedMetrics.totals.remainingBudget
         let clampedProgress = min(max(budgetProgress, 0), 1)
 
-        return VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .bottom) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(remaining >= 0 ? "REMAINING" : "OVER BUDGET")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.6))
-
-                    Text(amount(abs(remaining)))
-                        .font(.largeTitle.weight(.black))
-                        .foregroundStyle(BudgetBeaverPalette.ink)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.5)
-                }
-
-                Spacer(minLength: 12)
-
-                Text("of \(amount(monthlyBudget))")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.7))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-            }
-
-            DamProgressBar(progress: clampedProgress)
-                .frame(height: 20)
-
-            HStack {
-                spentLabel(spent)
-
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Budget pacing")
+                    .font(.title3.weight(.black))
+                    .foregroundStyle(BudgetBeaverPalette.wood)
                 Spacer()
-
                 Text(spentPercentageText)
-                    .font(.footnote.weight(.bold))
-                    .foregroundStyle(BudgetBeaverPalette.water)
+                    .font(.title3.weight(.black))
+                    .foregroundStyle(BudgetBeaverPalette.wood)
             }
+
+            ProgressView(value: clampedProgress)
+                .tint(BudgetBeaverPalette.wood)
+                .scaleEffect(x: 1, y: 1.4, anchor: .center)
+                .accessibilityLabel("Budget pacing")
+                .accessibilityValue(spentPercentageText)
 
             pacingStatusBox
         }
+        .padding(20)
     }
 
     private func spentLabel(_ spent: Double) -> Text {
@@ -367,7 +362,7 @@ struct DashboardView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(insight.background, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(Color.white.opacity(0.32), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     // MARK: - Who owes whom
@@ -376,37 +371,20 @@ struct DashboardView: View {
         let suggestions = derivedMetrics.settlementCache.suggestions
         let displayedSuggestions = Array(suggestions.prefix(3))
 
-        return VStack(spacing: 10) {
+        return VStack(alignment: .leading, spacing: 14) {
             HStack {
-                HStack(spacing: 8) {
-                    Text("$")
-                        .font(.system(size: 18, weight: .black, design: .rounded))
-                        .foregroundStyle(Color.white)
-                        .frame(width: 32, height: 32)
-                        .background(BudgetBeaverPalette.rebBrown, in: Circle())
-
-                    Text("Settle Balance")
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(BudgetBeaverPalette.ink)
-                }
+                Text("Settle up")
+                    .font(.title3.weight(.black))
+                    .foregroundStyle(BudgetBeaverPalette.ink)
 
                 Spacer()
 
-                HStack(spacing: 8) {
-                    if suggestions.count > 1 {
-                        Button("More") {
-                            isShowingSettlementList = true
-                        }
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(BudgetBeaverPalette.water)
+                if suggestions.count > 1 {
+                    Button("More") {
+                        isShowingSettlementList = true
                     }
-
-                    Text("SPLIT BILL")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.6))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(BudgetBeaverPalette.bank, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(BudgetBeaverPalette.wood)
                 }
             }
 
@@ -427,32 +405,33 @@ struct DashboardView: View {
                 .background(BudgetBeaverPalette.bank.opacity(0.6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
         }
-        .padding(16)
-        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .shadow(color: AppTheme.cardShadow, radius: 8, x: 0, y: 3)
+        .padding(.top, 2)
     }
 
     private func beaverSettlementRow(_ settlement: SettlementSuggestion) -> some View {
-        HStack(alignment: .center, spacing: 12) {
+        VStack(spacing: 14) {
             Button {
                 breakdownPresentation = derivedMetrics.settlementCache.makeBreakdownPresentation(for: settlement)
             } label: {
                 HStack(spacing: 10) {
-                    HStack(spacing: -8) {
+                    HStack(spacing: 10) {
                         settlementAvatar(member: settlement.from, color: avatarColor(for: settlement.from), borderColor: BudgetBeaverPalette.innerSurface)
+                        Image(systemName: "arrow.right")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(BudgetBeaverPalette.wood)
                         settlementAvatar(member: settlement.to, color: avatarColor(for: settlement.to), borderColor: BudgetBeaverPalette.innerSurface)
                     }
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text("\(firstName(settlement.from)) owes \(firstName(settlement.to))")
-                            .font(.subheadline.weight(.bold))
+                            .font(.headline.weight(.bold))
                             .foregroundStyle(BudgetBeaverPalette.ink)
-                            .lineLimit(1)
+                            .lineLimit(2)
                             .minimumScaleFactor(0.75)
 
                         Text("Tap for breakdown")
                             .font(.caption.weight(.bold))
-                            .foregroundStyle(BudgetBeaverPalette.jenBlue)
+                            .foregroundStyle(BudgetBeaverPalette.wood)
                     }
 
                     Spacer(minLength: 6)
@@ -469,21 +448,19 @@ struct DashboardView: View {
             Button {
                 presentPendingSettlement(settlement)
             } label: {
-                Image(systemName: "checkmark")
-                    .font(.caption.weight(.black))
-                    .foregroundStyle(Color.white)
-                    .frame(width: 34, height: 34)
-                    .background(BudgetBeaverPalette.darkButton, in: Circle())
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
+                Text("Settle up")
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, minHeight: 56)
+                    .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
             }
-            .buttonStyle(PressableButtonStyle(scale: 0.94))
+            .buttonStyle(PressableButtonStyle(scale: 0.97))
         }
-        .padding(12)
-        .background(BudgetBeaverPalette.innerSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(settlement.from.displayName) owes \(settlement.to.displayName) \(amount(settlement.amount)). Tap for breakdown.")
+        .accessibilityLabel("\(settlement.from.displayName) owes \(settlement.to.displayName)")
+        .accessibilityValue(amount(settlement.amount))
+        .accessibilityHint("Tap for breakdown.")
     }
 
     private func settlementAvatar(member: BudgetMember, color: Color, borderColor: Color) -> some View {
@@ -896,151 +873,6 @@ struct DashboardView: View {
         // Segmented controls are tight; prefer first name for readability.
         let firstWord = trimmed.split(separator: " ").first.map(String.init) ?? trimmed
         return firstWord
-    }
-}
-
-private struct SettlementListView: View {
-    let suggestions: [SettlementSuggestion]
-    let currencySymbol: String
-    let onClose: () -> Void
-    let onBreakdown: (SettlementSuggestion) -> Void
-    let onSettle: (SettlementSuggestion) -> Void
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 14) {
-                    if suggestions.isEmpty {
-                        VStack(spacing: 10) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 34, weight: .semibold))
-                                .foregroundStyle(BudgetBeaverPalette.forest)
-                            Text("No split balances right now.")
-                                .font(.headline.weight(.bold))
-                                .foregroundStyle(BudgetBeaverPalette.ink)
-                            Text("When people owe each other money, each balance will show here.")
-                                .font(.subheadline)
-                                .foregroundStyle(BudgetBeaverPalette.grayText)
-                                .multilineTextAlignment(.center)
-                        }
-                        .padding(24)
-                        .frame(maxWidth: .infinity)
-                        .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .stroke(BudgetBeaverPalette.border, lineWidth: 1)
-                        )
-                    } else {
-                        ForEach(suggestions) { settlement in
-                            settlementListRow(settlement)
-                        }
-                    }
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 18)
-            }
-            .background(AppTheme.background)
-            .navigationTitle("Who Owes Who")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done", action: onClose)
-                        .font(.headline.weight(.semibold))
-                }
-            }
-        }
-    }
-
-    private func settlementListRow(_ settlement: SettlementSuggestion) -> some View {
-        VStack(spacing: 12) {
-            Button {
-                onBreakdown(settlement)
-            } label: {
-                HStack(spacing: 12) {
-                    HStack(spacing: -8) {
-                        avatar(for: settlement.from)
-                        avatar(for: settlement.to)
-                    }
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("\(firstName(settlement.from)) owes \(firstName(settlement.to))")
-                            .font(.headline.weight(.bold))
-                            .foregroundStyle(BudgetBeaverPalette.ink)
-
-                        Text("Tap for breakdown")
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(BudgetBeaverPalette.jenBlue)
-                    }
-
-                    Spacer(minLength: 8)
-
-                    Text(amount(settlement.amount))
-                        .font(.title3.weight(.black))
-                        .foregroundStyle(BudgetBeaverPalette.amountRed)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.65)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(PressableButtonStyle(scale: 0.985, pressedOpacity: 0.9))
-
-            Button {
-                onSettle(settlement)
-            } label: {
-                Label("Settle Balance", systemImage: "checkmark")
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(Color.white)
-                    .frame(maxWidth: .infinity, minHeight: 46)
-                    .background(BudgetBeaverPalette.darkButton, in: Capsule())
-            }
-            .buttonStyle(PressableButtonStyle())
-        }
-        .padding(16)
-        .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(BudgetBeaverPalette.border, lineWidth: 1)
-        )
-    }
-
-    private func avatar(for member: BudgetMember) -> some View {
-        Text(String(member.initials.prefix(1)).uppercased())
-            .font(.system(size: 20, weight: .black, design: .rounded))
-            .foregroundStyle(Color.white)
-            .frame(width: 44, height: 44)
-            .background(Color(hex: member.colorHex), in: Circle())
-            .overlay(Circle().stroke(BudgetBeaverPalette.paper, lineWidth: 3))
-    }
-
-    private func amount(_ value: Double) -> String {
-        CurrencyFormatter.amountString(value, symbol: currencySymbol)
-    }
-
-    private func firstName(_ member: BudgetMember) -> String {
-        let first = member.displayName.split(separator: " ").first.map(String.init) ?? member.displayName
-        let trimmed = first.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? member.displayName : trimmed
-    }
-}
-
-private struct DamProgressBar: View {
-    let progress: Double
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(BudgetBeaverPalette.bank)
-                    .frame(height: 20)
-
-                Capsule()
-                    .fill(BudgetBeaverPalette.water)
-                    .frame(width: max(proxy.size.width * progress, 0), height: 20)
-            }
-        }
-        .frame(height: 20)
-        .accessibilityLabel("Budget spent")
-        .accessibilityValue((progress * 100).formatted(.number.precision(.fractionLength(0...1))) + "%")
     }
 }
 

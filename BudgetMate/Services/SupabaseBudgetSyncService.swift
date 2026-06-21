@@ -27,11 +27,14 @@ struct CloudBudgetSyncSummary {
 
 enum SupabaseBudgetSyncError: LocalizedError {
     case missingUser
+    case invalidCloudDate(String)
 
     var errorDescription: String? {
         switch self {
         case .missingUser:
             return "Sign in again before syncing."
+        case .invalidCloudDate(let value):
+            return "Cloud data has an invalid date: \(value)."
         }
     }
 }
@@ -131,13 +134,26 @@ struct CloudBudgetMemberRow: Codable {
         )
     }
 
+    func validateDates() throws {
+        if let joinedDate,
+           Self.dateFormatter.date(from: joinedDate) == nil {
+            throw SupabaseBudgetSyncError.invalidCloudDate(joinedDate)
+        }
+
+        guard Self.dateFormatter.date(from: createdDate) != nil else {
+            throw SupabaseBudgetSyncError.invalidCloudDate(createdDate)
+        }
+    }
+
     private static func string(from date: Date) -> String {
-        ISO8601DateFormatter().string(from: date)
+        dateFormatter.string(from: date)
     }
 
     private static func date(from string: String) -> Date {
-        ISO8601DateFormatter().date(from: string) ?? .now
+        dateFormatter.date(from: string) ?? .now
     }
+
+    private static let dateFormatter = ISO8601DateFormatter()
 }
 
 private struct CloudBudgetRow: Codable {
@@ -212,9 +228,17 @@ private struct CloudBudgetInviteRow: Codable {
             displayName: displayName,
             email: email,
             status: status,
-            createdAt: ISO8601DateFormatter().date(from: createdAt) ?? .now
+            createdAt: Self.dateFormatter.date(from: createdAt) ?? .now
         )
     }
+
+    func validateCreatedAt() throws {
+        guard Self.dateFormatter.date(from: createdAt) != nil else {
+            throw SupabaseBudgetSyncError.invalidCloudDate(createdAt)
+        }
+    }
+
+    private static let dateFormatter = ISO8601DateFormatter()
 }
 
 private struct CloudBudgetInviteUpdateRow: Codable {
@@ -270,6 +294,12 @@ private struct CloudBudgetMemberRepairUpdateRow: Codable {
 
 private struct CloudRecordIDRow: Codable {
     let id: UUID
+    let userId: UUID
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userId = "user_id"
+    }
 }
 
 struct CloudTransactionSplitRow: Codable {
@@ -362,13 +392,25 @@ struct CloudTransactionRow: Codable {
         )
     }
 
+    func validateDates() throws {
+        guard Self.dateFormatter.date(from: date) != nil else {
+            throw SupabaseBudgetSyncError.invalidCloudDate(date)
+        }
+
+        guard Self.dateFormatter.date(from: createdAt) != nil else {
+            throw SupabaseBudgetSyncError.invalidCloudDate(createdAt)
+        }
+    }
+
     private static func string(from date: Date) -> String {
-        ISO8601DateFormatter().string(from: date)
+        dateFormatter.string(from: date)
     }
 
     private static func date(from string: String) -> Date {
-        ISO8601DateFormatter().date(from: string) ?? .now
+        dateFormatter.date(from: string) ?? .now
     }
+
+    private static let dateFormatter = ISO8601DateFormatter()
 }
 
 struct CloudSettlementRow: Codable {
@@ -397,14 +439,14 @@ struct CloudSettlementRow: Codable {
         fromMemberId = settlement.fromMemberId
         toMemberId = settlement.toMemberId
         amount = settlement.amount
-        date = ISO8601DateFormatter().string(from: settlement.date)
+        date = Self.dateFormatter.string(from: settlement.date)
     }
 
     func apply(to settlement: Settlement, ownerUserId: String) {
         settlement.fromMemberId = fromMemberId
         settlement.toMemberId = toMemberId
         settlement.amount = amount
-        settlement.date = ISO8601DateFormatter().date(from: date) ?? .now
+        settlement.date = Self.dateFormatter.date(from: date) ?? .now
         settlement.ownerUserId = ownerUserId
     }
 
@@ -414,10 +456,18 @@ struct CloudSettlementRow: Codable {
             fromMemberId: fromMemberId,
             toMemberId: toMemberId,
             amount: amount,
-            date: ISO8601DateFormatter().date(from: date) ?? .now,
+            date: Self.dateFormatter.date(from: date) ?? .now,
             ownerUserId: ownerUserId
         )
     }
+
+    func validateDate() throws {
+        guard Self.dateFormatter.date(from: date) != nil else {
+            throw SupabaseBudgetSyncError.invalidCloudDate(date)
+        }
+    }
+
+    private static let dateFormatter = ISO8601DateFormatter()
 }
 
 final class SupabaseBudgetSyncService {
@@ -441,10 +491,13 @@ final class SupabaseBudgetSyncService {
             throw SupabaseBudgetSyncError.missingUser
         }
         let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
+        try members.forEach { try $0.validateForSync() }
+        try transactions.forEach { try $0.validateForSync() }
+        try settlements.forEach { try $0.validateForSync() }
 
         try await ensurePersonalBudget(userId: userId)
         if let userEmail {
-            try? await repairMemberProfileIfNeeded(
+            try await repairMemberProfileIfNeeded(
                 userScopeId: userScopeId,
                 userEmail: userEmail,
                 budgetScopeId: budgetId.uuidString
@@ -457,36 +510,40 @@ final class SupabaseBudgetSyncService {
         let signedInMemberIds = signedInMemberIds(for: userId, userEmail: userEmail, in: members)
         let cloudTransactionIDRows: [CloudRecordIDRow] = try await client
             .from("budget_transactions")
-            .select("id")
+            .select("id,user_id")
             .eq("budget_id", value: budgetId)
             .execute()
             .value
-        let cloudTransactionIDs = Set(cloudTransactionIDRows.map(\.id))
+        let cloudTransactionOwnersByID = Dictionary(uniqueKeysWithValues: cloudTransactionIDRows.map { ($0.id, $0.userId) })
         let cloudSettlementIDRows: [CloudRecordIDRow] = try await client
             .from("budget_settlements")
-            .select("id")
+            .select("id,user_id")
             .eq("budget_id", value: budgetId)
             .execute()
             .value
-        let cloudSettlementIDs = Set(cloudSettlementIDRows.map(\.id))
+        let cloudSettlementOwnersByID = Dictionary(uniqueKeysWithValues: cloudSettlementIDRows.map { ($0.id, $0.userId) })
         let transactionRows = transactions
             .filter {
                 shouldBulkPush(
                     transaction: $0,
+                    userId: userId,
                     signedInMemberIds: signedInMemberIds,
-                    cloudTransactionIDs: cloudTransactionIDs
+                    cloudOwnersByID: cloudTransactionOwnersByID
                 )
             }
             .map { CloudTransactionRow(transaction: $0, userId: userId, budgetId: budgetId) }
+        let pushedTransactionIDs = Set(transactionRows.map(\.id))
         let settlementRows = settlements
             .filter {
                 shouldBulkPush(
                     settlement: $0,
+                    userId: userId,
                     signedInMemberIds: signedInMemberIds,
-                    cloudSettlementIDs: cloudSettlementIDs
+                    cloudOwnersByID: cloudSettlementOwnersByID
                 )
             }
             .map { CloudSettlementRow(settlement: $0, userId: userId, budgetId: budgetId) }
+        let pushedSettlementIDs = Set(settlementRows.map(\.id))
 
         if budgetId == userId && (existingSettings == nil || settings != .default) {
             try await client
@@ -529,7 +586,18 @@ final class SupabaseBudgetSyncService {
             .eq("budget_id", value: budgetId)
             .execute()
             .value
+        try pulledTransactions.forEach { try $0.validateDates() }
+        try pulledSettlements.forEach { try $0.validateDate() }
 
+        pruneLocalRowsMissingFromCloud(
+            localTransactions: transactions,
+            localSettlements: settlements,
+            pulledTransactions: pulledTransactions,
+            pulledSettlements: pulledSettlements,
+            pushedTransactionIDs: pushedTransactionIDs,
+            pushedSettlementIDs: pushedSettlementIDs,
+            in: context
+        )
         merge(pulledTransactions, into: context, existing: transactions, ownerUserId: budgetId.uuidString)
         merge(pulledSettlements, into: context, existing: settlements, ownerUserId: budgetId.uuidString)
         let pulledMembers = try await fetchMembers(userScopeId: userScopeId, budgetScopeId: budgetId.uuidString)
@@ -590,6 +658,7 @@ final class SupabaseBudgetSyncService {
             .execute()
             .value
 
+        try rows.forEach { try $0.validateDates() }
         return rows.map { $0.makeMember() }
     }
 
@@ -603,6 +672,7 @@ final class SupabaseBudgetSyncService {
         guard budgetId == userId else { return }
 
         guard !members.isEmpty else { return }
+        try members.forEach { try $0.validateForSync() }
         let rows = members.map { CloudBudgetMemberRow(member: $0, userId: userId, budgetId: budgetId) }
         try await client
             .from("budget_members")
@@ -616,10 +686,15 @@ final class SupabaseBudgetSyncService {
         }
 
         try await ensurePersonalBudget(userId: userId)
+        let normalizedDisplayName = BudgetMember.normalizedDisplayName(displayName)
+        guard !normalizedDisplayName.isEmpty,
+              Self.normalizedEmail(email) != nil else {
+            throw BudgetDataValidationError.emptyMemberName
+        }
 
         let row = CloudBudgetInviteRow(
-            displayName: displayName,
-            email: email,
+            displayName: normalizedDisplayName,
+            email: email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
             invitedByUserId: userId
         )
 
@@ -641,6 +716,7 @@ final class SupabaseBudgetSyncService {
             .execute()
             .value
 
+        try rows.forEach { try $0.validateCreatedAt() }
         return rows.map { $0.makeInvite() }
     }
 
@@ -769,6 +845,7 @@ final class SupabaseBudgetSyncService {
         let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
 
         try await ensurePersonalBudget(userId: userId)
+        try transaction.validateForSync()
 
         let row = CloudTransactionRow(transaction: transaction, userId: userId, budgetId: budgetId)
         try await client
@@ -784,6 +861,7 @@ final class SupabaseBudgetSyncService {
         let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
 
         try await ensurePersonalBudget(userId: userId)
+        try settlement.validateForSync()
 
         let row = CloudSettlementRow(settlement: settlement, userId: userId, budgetId: budgetId)
         try await client
@@ -874,20 +952,31 @@ final class SupabaseBudgetSyncService {
 
     private func shouldBulkPush(
         transaction: Transaction,
+        userId: UUID,
         signedInMemberIds: Set<UUID>,
-        cloudTransactionIDs: Set<UUID>
+        cloudOwnersByID: [UUID: UUID]
     ) -> Bool {
-        signedInMemberIds.contains(transaction.createdByMemberId) || !cloudTransactionIDs.contains(transaction.id)
+        if let cloudOwnerId = cloudOwnersByID[transaction.id] {
+            return cloudOwnerId == userId && signedInMemberIds.contains(transaction.createdByMemberId)
+        }
+
+        return signedInMemberIds.contains(transaction.createdByMemberId)
     }
 
     private func shouldBulkPush(
         settlement: Settlement,
+        userId: UUID,
         signedInMemberIds: Set<UUID>,
-        cloudSettlementIDs: Set<UUID>
+        cloudOwnersByID: [UUID: UUID]
     ) -> Bool {
-        signedInMemberIds.contains(settlement.fromMemberId)
+        let includesSignedInMember = signedInMemberIds.contains(settlement.fromMemberId)
             || signedInMemberIds.contains(settlement.toMemberId)
-            || !cloudSettlementIDs.contains(settlement.id)
+
+        if let cloudOwnerId = cloudOwnersByID[settlement.id] {
+            return cloudOwnerId == userId && includesSignedInMember
+        }
+
+        return includesSignedInMember
     }
 
     private func merge(
@@ -920,6 +1009,29 @@ final class SupabaseBudgetSyncService {
                     )
                 )
             }
+        }
+    }
+
+    private func pruneLocalRowsMissingFromCloud(
+        localTransactions: [Transaction],
+        localSettlements: [Settlement],
+        pulledTransactions: [CloudTransactionRow],
+        pulledSettlements: [CloudSettlementRow],
+        pushedTransactionIDs: Set<UUID>,
+        pushedSettlementIDs: Set<UUID>,
+        in context: ModelContext
+    ) {
+        let pulledTransactionIDs = Set(pulledTransactions.map(\.id))
+        let pulledSettlementIDs = Set(pulledSettlements.map(\.id))
+
+        for transaction in localTransactions
+        where !pulledTransactionIDs.contains(transaction.id) && !pushedTransactionIDs.contains(transaction.id) {
+            context.delete(transaction)
+        }
+
+        for settlement in localSettlements
+        where !pulledSettlementIDs.contains(settlement.id) && !pushedSettlementIDs.contains(settlement.id) {
+            context.delete(settlement)
         }
     }
 

@@ -24,8 +24,20 @@ final class Settlement {
         self.id = id
         self.fromMemberId = fromMemberId
         self.toMemberId = toMemberId
-        self.amount = amount
+        self.amount = max(0, amount)
         self.date = date
         self.ownerUserId = ownerUserId
+    }
+}
+
+extension Settlement {
+    func validateForSync() throws {
+        guard amount > 0, amount.isFinite else {
+            throw BudgetDataValidationError.invalidSettlementAmount
+        }
+
+        guard fromMemberId != toMemberId else {
+            throw BudgetDataValidationError.invalidSettlementDirection
+        }
     }
 }
