@@ -42,11 +42,6 @@ VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
 ```
 
-You can also deploy from the CLI after signing in to Cloudflare:
-
-```bash
-npx wrangler pages deploy dist --project-name budgetmate
-```
 
 ## Data Modes
 
