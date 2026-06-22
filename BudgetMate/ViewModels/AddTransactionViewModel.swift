@@ -55,9 +55,10 @@ final class AddTransactionViewModel: ObservableObject {
             splitMethod = .custom
             participants = Set(transaction.splits.map(\.memberId))
             customAmounts = Dictionary(
-                uniqueKeysWithValues: transaction.splits.map {
+                transaction.splits.map {
                     ($0.memberId, String(format: "%.2f", $0.amount))
-                }
+                },
+                uniquingKeysWith: { first, _ in first }
             )
         }
     }

@@ -281,7 +281,7 @@ struct AddTransactionView: View {
 
     private func equalSharesByMember() -> [UUID: Double] {
         guard let resolved = viewModel.resolvedSplits(payerId: payerId) else { return [:] }
-        return Dictionary(uniqueKeysWithValues: resolved)
+        return Dictionary(resolved, uniquingKeysWith: { first, _ in first })
     }
 
     private func toggleParticipant(_ id: UUID) {

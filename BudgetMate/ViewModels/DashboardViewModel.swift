@@ -142,7 +142,7 @@ enum DashboardViewModel {
     ) -> [SettlementSuggestion] {
         guard members.count > 1 else { return [] }
 
-        let membersById = Dictionary(uniqueKeysWithValues: members.map { ($0.id, $0) })
+        let membersById = Dictionary(members.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var directionalCents: [DirectionalBalanceKey: Int] = [:]
 
         for transaction in splitExpenses {

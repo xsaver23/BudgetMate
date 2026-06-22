@@ -22,9 +22,15 @@ struct SettlementComputationCache {
         settlements: [Settlement],
         members: [BudgetMember]
     ) -> SettlementComputationCache {
+        // Guard against a local store that ended up with duplicate rows for the
+        // same id (e.g. from older multi-device syncs): deduplicate before
+        // building keyed dictionaries so we never trap on a duplicate key and
+        // never double-count split expenses.
+        let transactions = transactions.deduplicatedByID()
+        let settlements = settlements.deduplicatedByID()
         let splitExpenses = transactions.filter { $0.type == .expense && !$0.splits.isEmpty }
-        let transactionById = Dictionary(uniqueKeysWithValues: transactions.map { ($0.id, $0) })
-        let settlementById = Dictionary(uniqueKeysWithValues: settlements.map { ($0.id, $0) })
+        let transactionById = Dictionary(transactions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let settlementById = Dictionary(settlements.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let suggestions = DashboardViewModel.settlements(
             splitExpenses: splitExpenses,
             settlementRecords: settlements,
@@ -121,6 +127,8 @@ struct DashboardDerivedMetrics {
         selectedMemberId: UUID?,
         monthlyBudget: Double
     ) -> DashboardDerivedMetrics {
+        let transactions = transactions.deduplicatedByID()
+        let settlements = settlements.deduplicatedByID()
         let settlementCache = SettlementComputationCache.build(
             transactions: transactions,
             settlements: settlements,
@@ -179,6 +187,8 @@ struct BudgetTabMetrics {
         members: [BudgetMember],
         monthInterval: DateInterval?
     ) -> BudgetTabMetrics {
+        let transactions = transactions.deduplicatedByID()
+        let settlements = settlements.deduplicatedByID()
         let splitExpenses = transactions.filter { $0.type == .expense && !$0.splits.isEmpty }
         let netBalances = DashboardViewModel.netBalances(
             splitExpenses: splitExpenses,
@@ -212,5 +222,15 @@ struct BudgetTabMetrics {
             expensesByMember: expensesByMember,
             spentByCategory: spentByCategory
         )
+    }
+}
+
+extension Array where Element: Identifiable {
+    /// Returns the array with elements of duplicate `id` removed, keeping the
+    /// first occurrence. Defends against a SwiftData store that contains
+    /// duplicate rows for the same identifier.
+    func deduplicatedByID() -> [Element] {
+        var seen = Set<Element.ID>()
+        return filter { seen.insert($0.id).inserted }
     }
 }

@@ -32,7 +32,7 @@ struct TransactionDetailView: View {
         self.members = members
         self.currencySymbol = currencySymbol
         self.balanceContext = balanceContext
-        self.membersById = Dictionary(uniqueKeysWithValues: members.map { ($0.id, $0) })
+        self.membersById = Dictionary(members.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     private var payer: BudgetMember? {

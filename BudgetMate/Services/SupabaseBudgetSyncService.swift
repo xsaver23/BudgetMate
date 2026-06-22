@@ -514,14 +514,14 @@ final class SupabaseBudgetSyncService {
             .eq("budget_id", value: budgetId)
             .execute()
             .value
-        let cloudTransactionOwnersByID = Dictionary(uniqueKeysWithValues: cloudTransactionIDRows.map { ($0.id, $0.userId) })
+        let cloudTransactionOwnersByID = Dictionary(cloudTransactionIDRows.map { ($0.id, $0.userId) }, uniquingKeysWith: { first, _ in first })
         let cloudSettlementIDRows: [CloudRecordIDRow] = try await client
             .from("budget_settlements")
             .select("id,user_id")
             .eq("budget_id", value: budgetId)
             .execute()
             .value
-        let cloudSettlementOwnersByID = Dictionary(uniqueKeysWithValues: cloudSettlementIDRows.map { ($0.id, $0.userId) })
+        let cloudSettlementOwnersByID = Dictionary(cloudSettlementIDRows.map { ($0.id, $0.userId) }, uniquingKeysWith: { first, _ in first })
         let transactionRows = transactions
             .filter {
                 shouldBulkPush(
@@ -985,7 +985,16 @@ final class SupabaseBudgetSyncService {
         existing transactions: [Transaction],
         ownerUserId: String
     ) {
-        let existingById = Dictionary(uniqueKeysWithValues: transactions.map { ($0.id, $0) })
+        // Keep the first row per id and delete any duplicates, healing stores
+        // that accumulated duplicate rows before ids were deduplicated on sync.
+        var existingById: [UUID: Transaction] = [:]
+        for transaction in transactions {
+            if existingById[transaction.id] == nil {
+                existingById[transaction.id] = transaction
+            } else {
+                context.delete(transaction)
+            }
+        }
 
         for row in rows {
             let transaction = existingById[row.id] ?? row.makeTransaction(ownerUserId: ownerUserId)
@@ -1041,7 +1050,16 @@ final class SupabaseBudgetSyncService {
         existing settlements: [Settlement],
         ownerUserId: String
     ) {
-        let existingById = Dictionary(uniqueKeysWithValues: settlements.map { ($0.id, $0) })
+        // Keep the first row per id and delete any duplicates (see transaction
+        // merge above).
+        var existingById: [UUID: Settlement] = [:]
+        for settlement in settlements {
+            if existingById[settlement.id] == nil {
+                existingById[settlement.id] = settlement
+            } else {
+                context.delete(settlement)
+            }
+        }
 
         for row in rows {
             if let settlement = existingById[row.id] {
