@@ -61,6 +61,7 @@ struct SettingsView: View {
             ScrollView {
                 VStack(spacing: 18) {
                     AppTopBar(member: memberViewModel.activeMember)
+                        .padding(.horizontal, -16)
 
                     settingsSection("Currency") {
                         settingsRow("Household Currency") {
@@ -170,21 +171,25 @@ struct SettingsView: View {
                     settingsSection("Shared Budget") {
                         if !memberships.isEmpty {
                             settingsRow("Viewing") {
-                                Menu {
-                                    ForEach(memberships) { membership in
-                                        let displayName = membership.displayName(currentUserId: authStore.currentUserScopeId)
-                                        Button {
-                                            switchActiveBudget(to: membership.budgetId.uuidString)
-                                        } label: {
-                                            if membership.budgetId.uuidString == authStore.currentBudgetScopeId {
-                                                Label(displayName, systemImage: "checkmark")
-                                            } else {
-                                                Text(displayName)
+                                if memberships.count > 1 {
+                                    Menu {
+                                        ForEach(memberships) { membership in
+                                            let displayName = membership.displayName(currentUserId: authStore.currentUserScopeId)
+                                            Button {
+                                                switchActiveBudget(to: membership.budgetId.uuidString)
+                                            } label: {
+                                                if membership.budgetId.uuidString == authStore.currentBudgetScopeId {
+                                                    Label(displayName, systemImage: "checkmark")
+                                                } else {
+                                                    Text(displayName)
+                                                }
                                             }
                                         }
+                                    } label: {
+                                        settingsValue(activeBudgetDisplayName)
                                     }
-                                } label: {
-                                    settingsValue(activeBudgetDisplayName)
+                                } else {
+                                    settingsStaticValue(activeBudgetDisplayName)
                                 }
                             }
                             Divider()
@@ -440,6 +445,14 @@ struct SettingsView: View {
         .foregroundStyle(BudgetBeaverPalette.ink)
         .lineLimit(1)
         .minimumScaleFactor(0.8)
+    }
+
+    private func settingsStaticValue(_ value: String) -> some View {
+        Text(value)
+            .font(settingsRowValueFont)
+            .foregroundStyle(BudgetBeaverPalette.ink)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
     }
 
     private func rowButton(

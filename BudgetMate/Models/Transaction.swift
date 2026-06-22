@@ -132,6 +132,7 @@ extension Transaction {
 
 enum BudgetDataValidationError: LocalizedError {
     case emptyMemberName
+    case invalidMemberNameEmoji
     case emptyTransactionTitle
     case invalidTransactionAmount(title: String)
     case invalidSplitAmount
@@ -142,6 +143,8 @@ enum BudgetDataValidationError: LocalizedError {
         switch self {
         case .emptyMemberName:
             return "Member names cannot be empty."
+        case .invalidMemberNameEmoji:
+            return "Member names cannot include emoji."
         case .emptyTransactionTitle:
             return "Transaction titles cannot be empty."
         case .invalidTransactionAmount(let title):

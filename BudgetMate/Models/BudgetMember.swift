@@ -107,7 +107,7 @@ struct BudgetMember: Identifiable, Codable, Hashable {
             throw BudgetDataValidationError.emptyMemberName
         }
         guard !displayName.containsEmoji else {
-            throw BudgetDataValidationError.emptyMemberName
+            throw BudgetDataValidationError.invalidMemberNameEmoji
         }
     }
 }
