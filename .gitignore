@@ -12,9 +12,15 @@ xcuserdata/
 .build/
 .swiftpm/
 
+# JavaScript / web
+node_modules/
+dist/
+*.tsbuildinfo
+
 # Local configuration and secrets
 .env
 .env.*
+!.env.example
 *.local
 BudgetMate/Config/Supabase.local.xcconfig
 

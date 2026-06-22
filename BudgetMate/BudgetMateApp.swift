@@ -16,6 +16,8 @@ struct BudgetMateApp: App {
     @State private var lastAutoSyncedAtByScope: [String: Date] = [:]
     @State private var checkedCloudProfileUserScopeId: String?
     @State private var isCheckingCloudProfile = false
+    private let activeSyncInterval: Duration = .seconds(8)
+    private let minimumPassiveSyncInterval: TimeInterval = 8
     private let persistenceController = PersistenceController.shared
 
     init() {
@@ -237,7 +239,7 @@ struct BudgetMateApp: App {
     private func shouldRunAutoSync(syncKey: String, force: Bool) -> Bool {
         guard !force else { return true }
         guard let lastSyncedAt = lastAutoSyncedAtByScope[syncKey] else { return true }
-        return Date().timeIntervalSince(lastSyncedAt) > 45
+        return Date().timeIntervalSince(lastSyncedAt) > minimumPassiveSyncInterval
     }
 
     @MainActor
@@ -247,7 +249,7 @@ struct BudgetMateApp: App {
 
         while !Task.isCancelled {
             do {
-                try await Task.sleep(for: .seconds(30))
+                try await Task.sleep(for: activeSyncInterval)
             } catch {
                 return
             }

@@ -28,7 +28,6 @@ final class CloudSyncStore: ObservableObject {
     private let service: SupabaseBudgetSyncService
     private let logger = Logger(subsystem: "BudgetMate", category: "CloudSync")
     private let maxRetryAttempts = 3
-    private var pendingFullSyncRequest: FullSyncRequest?
 
     init(service: SupabaseBudgetSyncService = SupabaseBudgetSyncService()) {
         self.service = service
@@ -107,13 +106,8 @@ final class CloudSyncStore: ObservableObject {
             budgetScopeId: budgetScopeId
         )
 
-        guard !isSyncing else {
-            pendingFullSyncRequest = request
-            throw CloudSyncStoreError.syncAlreadyRunning
-        }
-
+        await waitForFullSyncToFinish()
         let summary = try await performFullSync(request)
-        await drainPendingFullSyncRequests()
         return summary
     }
 
@@ -148,19 +142,6 @@ final class CloudSyncStore: ObservableObject {
         }
     }
 
-    private func drainPendingFullSyncRequests() async {
-        while let request = pendingFullSyncRequest {
-            pendingFullSyncRequest = nil
-
-            do {
-                _ = try await performFullSync(request)
-            } catch {
-                markFailed(error, context: "Queued full sync")
-                return
-            }
-        }
-    }
-
     @discardableResult
     func syncIfPossible(
         settings: BudgetSettings,
@@ -183,19 +164,23 @@ final class CloudSyncStore: ObservableObject {
             budgetScopeId: budgetScopeId
         )
 
-        guard !isSyncing else {
-            pendingFullSyncRequest = request
-            return false
-        }
-
+        await waitForFullSyncToFinish()
         do {
             _ = try await performFullSync(request)
-            await drainPendingFullSyncRequests()
             return true
         } catch {
-            guard !(error is CloudSyncStoreError) else { return false }
             markFailed(error, context: "Background sync")
             return false
+        }
+    }
+
+    private func waitForFullSyncToFinish() async {
+        while isSyncing {
+            do {
+                try await Task.sleep(for: .milliseconds(150))
+            } catch {
+                return
+            }
         }
     }
 
@@ -491,17 +476,6 @@ final class CloudSyncStore: ObservableObject {
         }
 
         return message
-    }
-}
-
-enum CloudSyncStoreError: LocalizedError {
-    case syncAlreadyRunning
-
-    var errorDescription: String? {
-        switch self {
-        case .syncAlreadyRunning:
-            return "Sync is already running."
-        }
     }
 }
 

@@ -42,6 +42,27 @@ enum SupabaseBudgetSyncError: LocalizedError {
     }
 }
 
+private enum CloudISO8601DateCodec {
+    private static let standardFormatter = ISO8601DateFormatter()
+    private static let fractionalFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    static func string(from date: Date) -> String {
+        standardFormatter.string(from: date)
+    }
+
+    static func date(from string: String) -> Date? {
+        standardFormatter.date(from: string) ?? fractionalFormatter.date(from: string)
+    }
+
+    static func dateOrNow(from string: String) -> Date {
+        date(from: string) ?? .now
+    }
+}
+
 struct CloudBudgetSettingsRow: Codable {
     let userId: UUID
     let budgetId: UUID
@@ -166,31 +187,25 @@ struct CloudBudgetMemberRow: Codable {
             authUserId: authUserId,
             role: BudgetMemberRole(rawValue: role) ?? .member,
             inviteStatus: InviteStatus(rawValue: inviteStatus) ?? .active,
-            joinedDate: joinedDate.map(Self.date(from:)),
-            createdDate: Self.date(from: createdDate)
+            joinedDate: joinedDate.map(CloudISO8601DateCodec.dateOrNow(from:)),
+            createdDate: CloudISO8601DateCodec.dateOrNow(from: createdDate)
         )
     }
 
     func validateDates() throws {
         if let joinedDate,
-           Self.dateFormatter.date(from: joinedDate) == nil {
+           CloudISO8601DateCodec.date(from: joinedDate) == nil {
             throw SupabaseBudgetSyncError.invalidCloudDate(joinedDate)
         }
 
-        guard Self.dateFormatter.date(from: createdDate) != nil else {
+        guard CloudISO8601DateCodec.date(from: createdDate) != nil else {
             throw SupabaseBudgetSyncError.invalidCloudDate(createdDate)
         }
     }
 
     private static func string(from date: Date) -> String {
-        dateFormatter.string(from: date)
+        CloudISO8601DateCodec.string(from: date)
     }
-
-    private static func date(from string: String) -> Date {
-        dateFormatter.date(from: string) ?? .now
-    }
-
-    private static let dateFormatter = ISO8601DateFormatter()
 }
 
 private struct CloudBudgetRow: Codable {
@@ -259,7 +274,7 @@ private struct CloudBudgetInviteRow: Codable {
         self.displayName = displayName
         self.email = email.lowercased()
         status = "pending"
-        createdAt = ISO8601DateFormatter().string(from: .now)
+        createdAt = CloudISO8601DateCodec.string(from: .now)
     }
 
     func makeInvite() -> BudgetInvite {
@@ -270,17 +285,15 @@ private struct CloudBudgetInviteRow: Codable {
             displayName: displayName,
             email: email,
             status: status,
-            createdAt: Self.dateFormatter.date(from: createdAt) ?? .now
+            createdAt: CloudISO8601DateCodec.dateOrNow(from: createdAt)
         )
     }
 
     func validateCreatedAt() throws {
-        guard Self.dateFormatter.date(from: createdAt) != nil else {
+        guard CloudISO8601DateCodec.date(from: createdAt) != nil else {
             throw SupabaseBudgetSyncError.invalidCloudDate(createdAt)
         }
     }
-
-    private static let dateFormatter = ISO8601DateFormatter()
 }
 
 private struct CloudBudgetInviteUpdateRow: Codable {
@@ -297,7 +310,7 @@ private struct CloudBudgetInviteUpdateRow: Codable {
     init(status: String, acceptedByUserId: UUID? = nil) {
         self.status = status
         self.acceptedByUserId = acceptedByUserId
-        acceptedAt = ISO8601DateFormatter().string(from: .now)
+        acceptedAt = CloudISO8601DateCodec.string(from: .now)
     }
 }
 
@@ -315,7 +328,7 @@ private struct CloudBudgetMemberAcceptedUpdateRow: Codable {
     init(authUserId: UUID) {
         self.authUserId = authUserId
         inviteStatus = InviteStatus.active.rawValue
-        joinedDate = ISO8601DateFormatter().string(from: .now)
+        joinedDate = CloudISO8601DateCodec.string(from: .now)
     }
 }
 
@@ -412,8 +425,8 @@ struct CloudTransactionRow: Codable {
         transaction.category = TransactionCategory(rawValue: category)
         transaction.paymentMethod = paymentMethod.flatMap(PaymentMethod.init(rawValue:))
         transaction.createdByMemberId = createdByMemberId
-        transaction.date = Self.date(from: date)
-        transaction.createdAt = Self.date(from: createdAt)
+        transaction.date = CloudISO8601DateCodec.dateOrNow(from: date)
+        transaction.createdAt = CloudISO8601DateCodec.dateOrNow(from: createdAt)
         transaction.recurrenceRule = recurrenceRule
         transaction.ownerUserId = ownerUserId
     }
@@ -427,32 +440,26 @@ struct CloudTransactionRow: Codable {
             category: TransactionCategory(rawValue: category),
             paymentMethod: paymentMethod.flatMap(PaymentMethod.init(rawValue:)),
             createdByMemberId: createdByMemberId,
-            date: Self.date(from: date),
-            createdAt: Self.date(from: createdAt),
+            date: CloudISO8601DateCodec.dateOrNow(from: date),
+            createdAt: CloudISO8601DateCodec.dateOrNow(from: createdAt),
             recurrenceRule: recurrenceRule,
             ownerUserId: ownerUserId
         )
     }
 
     func validateDates() throws {
-        guard Self.dateFormatter.date(from: date) != nil else {
+        guard CloudISO8601DateCodec.date(from: date) != nil else {
             throw SupabaseBudgetSyncError.invalidCloudDate(date)
         }
 
-        guard Self.dateFormatter.date(from: createdAt) != nil else {
+        guard CloudISO8601DateCodec.date(from: createdAt) != nil else {
             throw SupabaseBudgetSyncError.invalidCloudDate(createdAt)
         }
     }
 
     private static func string(from date: Date) -> String {
-        dateFormatter.string(from: date)
+        CloudISO8601DateCodec.string(from: date)
     }
-
-    private static func date(from string: String) -> Date {
-        dateFormatter.date(from: string) ?? .now
-    }
-
-    private static let dateFormatter = ISO8601DateFormatter()
 }
 
 struct CloudSettlementRow: Codable {
@@ -481,14 +488,14 @@ struct CloudSettlementRow: Codable {
         fromMemberId = settlement.fromMemberId
         toMemberId = settlement.toMemberId
         amount = settlement.amount
-        date = Self.dateFormatter.string(from: settlement.date)
+        date = CloudISO8601DateCodec.string(from: settlement.date)
     }
 
     func apply(to settlement: Settlement, ownerUserId: String) {
         settlement.fromMemberId = fromMemberId
         settlement.toMemberId = toMemberId
         settlement.amount = amount
-        settlement.date = Self.dateFormatter.date(from: date) ?? .now
+        settlement.date = CloudISO8601DateCodec.dateOrNow(from: date)
         settlement.ownerUserId = ownerUserId
     }
 
@@ -498,18 +505,16 @@ struct CloudSettlementRow: Codable {
             fromMemberId: fromMemberId,
             toMemberId: toMemberId,
             amount: amount,
-            date: Self.dateFormatter.date(from: date) ?? .now,
+            date: CloudISO8601DateCodec.dateOrNow(from: date),
             ownerUserId: ownerUserId
         )
     }
 
     func validateDate() throws {
-        guard Self.dateFormatter.date(from: date) != nil else {
+        guard CloudISO8601DateCodec.date(from: date) != nil else {
             throw SupabaseBudgetSyncError.invalidCloudDate(date)
         }
     }
-
-    private static let dateFormatter = ISO8601DateFormatter()
 }
 
 final class SupabaseBudgetSyncService {
