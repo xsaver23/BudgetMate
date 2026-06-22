@@ -129,7 +129,11 @@ struct InviteMemberView: View {
                                 autocorrection: true
                             )
                         }
-                        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous)
+                                .stroke(AppTheme.surfaceStroke, lineWidth: 1)
+                        )
 
                         if let validationMessage {
                             Text(validationMessage)
@@ -143,7 +147,11 @@ struct InviteMemberView: View {
                         .foregroundStyle(BudgetBeaverPalette.wood)
                         .padding(18)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous)
+                                .stroke(AppTheme.surfaceStroke, lineWidth: 1)
+                        )
 
                     Spacer(minLength: 24)
                 }

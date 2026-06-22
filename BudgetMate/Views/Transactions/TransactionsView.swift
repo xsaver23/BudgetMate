@@ -55,12 +55,24 @@ struct TransactionsView: View {
         let calendar = Calendar.current
         let groups = Dictionary(grouping: filteredTransactions) { calendar.startOfDay(for: $0.date) }
         return groups
-            .map { (date: $0.key, items: $0.value) }
+            .map { (date: $0.key, items: sortedTransactions($0.value)) }
             .sorted { $0.date > $1.date }
     }
 
     private var currencySymbol: String {
         settingsStore.settings.currencySymbol
+    }
+
+    private func sortedTransactions(_ transactions: [Transaction]) -> [Transaction] {
+        transactions.sorted { lhs, rhs in
+            if lhs.date != rhs.date {
+                return lhs.date > rhs.date
+            }
+            if lhs.createdAt != rhs.createdAt {
+                return lhs.createdAt > rhs.createdAt
+            }
+            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+        }
     }
 
     var body: some View {

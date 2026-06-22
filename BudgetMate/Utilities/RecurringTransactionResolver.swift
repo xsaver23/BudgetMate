@@ -5,7 +5,17 @@ enum RecurringTransactionResolver {
         transactions.flatMap { transaction in
             occurrences(of: transaction, in: interval, calendar: calendar)
         }
-        .sorted { $0.date > $1.date }
+        .sorted(by: newestFirst)
+    }
+
+    private static func newestFirst(_ lhs: Transaction, _ rhs: Transaction) -> Bool {
+        if lhs.date != rhs.date {
+            return lhs.date > rhs.date
+        }
+        if lhs.createdAt != rhs.createdAt {
+            return lhs.createdAt > rhs.createdAt
+        }
+        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
     }
 
     private static func occurrences(of transaction: Transaction, in interval: DateInterval, calendar: Calendar) -> [Transaction] {

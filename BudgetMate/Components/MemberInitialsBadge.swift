@@ -17,9 +17,9 @@ struct MemberInitialsBadge: View {
                     .foregroundStyle(.white)
             )
             .overlay(
-                Circle().stroke(AppTheme.secondaryAction, lineWidth: max(2, size * 0.09))
+                Circle().stroke(AppTheme.background, lineWidth: max(2, size * 0.07))
             )
-            .shadow(color: showsShadow ? Color(hex: colorHex).opacity(0.22) : .clear, radius: 5, x: 0, y: 3)
+            .shadow(color: showsShadow ? Color(hex: colorHex).opacity(0.12) : .clear, radius: 4, x: 0, y: 2)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityLabel ?? "Member \(initials)")
     }
@@ -54,7 +54,7 @@ struct MemberAvatarCluster: View {
                             .font(.system(size: size * 0.4, weight: .bold, design: .rounded))
                             .foregroundStyle(.white)
                     )
-                    .overlay(Circle().stroke(AppTheme.secondaryAction, lineWidth: max(2, size * 0.09)))
+                    .overlay(Circle().stroke(AppTheme.background, lineWidth: max(2, size * 0.07)))
             }
         }
         .accessibilityElement(children: .combine)

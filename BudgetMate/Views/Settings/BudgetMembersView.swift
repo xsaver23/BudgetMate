@@ -51,7 +51,7 @@ struct BudgetMembersView: View {
                             .font(.headline.weight(.black))
                             .foregroundStyle(.white)
                             .frame(maxWidth: .infinity, minHeight: 58)
-                            .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                            .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous))
                     }
                     .buttonStyle(PressableButtonStyle(scale: 0.98))
                 }
@@ -226,7 +226,7 @@ struct BudgetMembersView: View {
                         .font(.headline.weight(.bold))
                         .foregroundStyle(AppTheme.danger)
                         .frame(width: 44, height: 44)
-                        .background(AppTheme.expense.opacity(0.35), in: Circle())
+                        .background(AppTheme.expenseTint, in: Circle())
                 }
                 .buttonStyle(PressableButtonStyle(scale: 0.94))
                 .accessibilityLabel("Remove \(member.displayName)")
@@ -234,7 +234,11 @@ struct BudgetMembersView: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous)
+                .stroke(AppTheme.surfaceStroke, lineWidth: 1)
+        )
     }
 
     private func inviteStatusChip(_ status: InviteStatus) -> some View {
@@ -263,7 +267,7 @@ struct BudgetMembersView: View {
             .labelStyle(.titleAndIcon)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(tint.opacity(0.30), in: Capsule())
+            .background(tint.opacity(0.14), in: Capsule())
             .foregroundStyle(AppTheme.brand)
     }
 

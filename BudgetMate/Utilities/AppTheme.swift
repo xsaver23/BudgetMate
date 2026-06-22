@@ -1,35 +1,42 @@
 import SwiftUI
 
-/// Central design tokens for the "Bright Household Hub" direction.
+/// Central design tokens for the Ledger direction shared by iOS and web.
 /// Change a value here and it propagates everywhere.
 enum AppTheme {
     // Brand
-    static let brand = Color(hex: "#173404")
-    static let brandSoft = Color(hex: "#173404").opacity(0.12)
-    static let secondaryAction = Color(hex: "#FFCF70")
-    static let secondaryActionText = Color(hex: "#3F2109")
+    static let brand = Color(hex: "#1E3A2B")
+    static let brandAlt = Color(hex: "#2C4A39")
+    static let brandSoft = Color(hex: "#E8F2EA")
+    static let secondaryAction = Color(hex: "#E7B84B")
+    static let secondaryActionText = Color(hex: "#1F2419")
 
     // Surfaces
-    static let background = Color(light: "#FAEEDA", dark: "#141B10")
-    static let surface = Color(light: "#FFFDF7", dark: "#202B1A")
-    static let surfaceAlt = Color(light: "#F5E6C9", dark: "#2B351F")
-    static let colorBlockYellow = Color(hex: "#FFCA6A")
-    static let surfaceStroke = Color(light: "#7A4A14", dark: "#FAEEDA").opacity(0.10)
+    static let background = Color(light: "#FBF1DC", dark: "#121710")
+    static let surface = Color(light: "#FFF7E8", dark: "#1D241A")
+    static let surfaceAlt = Color(light: "#F5E9D2", dark: "#252B21")
+    static let colorBlockYellow = Color(hex: "#FBF1DC")
+    static let surfaceStroke = Color(light: "#EADFCA", dark: "#3A4334")
+    static let track = Color(light: "#EEE6D7", dark: "#32382F")
 
     // Semantic
-    static let income = Color(hex: "#9CC957")
-    static let expense = Color(hex: "#F49379")
-    static let positive = Color(hex: "#1FA37D")
-    static let warning = Color(hex: "#9A5308")
-    static let danger = Color(hex: "#7D2B17")
+    static let income = Color(hex: "#3F9E5E")
+    static let incomeTint = Color(hex: "#E8F2EA")
+    static let expense = Color(hex: "#D6694C")
+    static let expenseTint = Color(hex: "#FBEEEA")
+    static let positive = Color(hex: "#3F9E5E")
+    static let warning = Color(hex: "#A6781C")
+    static let warningTint = Color(hex: "#FBF1DC")
+    static let danger = Color(hex: "#8A2F1F")
 
     // Text
-    static let textPrimary = Color(light: "#173404", dark: "#F9F0DA")
-    static let textSecondary = Color(light: "#8B4E0A", dark: "#E4BE83")
+    static let textPrimary = Color(light: "#1F2419", dark: "#F7F2E7")
+    static let textSecondary = Color(light: "#5E5D50", dark: "#C8C1B1")
+    static let textMuted = Color(light: "#9A9788", dark: "#9E988A")
 
     // Card metrics
-    static let cardRadius: CGFloat = 22
-    static let cardShadow = Color(hex: "#7A4A14").opacity(0.06)
+    static let cardRadius: CGFloat = 18
+    static let controlRadius: CGFloat = 14
+    static let cardShadow = Color.clear
 }
 
 enum BudgetBeaverPalette {
@@ -48,15 +55,15 @@ enum BudgetBeaverPalette {
     static let amountDark = AppTheme.textPrimary
     static let amountRed = AppTheme.danger
     static let grayText = AppTheme.textSecondary
-    static let muted = AppTheme.textSecondary
+    static let muted = AppTheme.textMuted
     static let forest = AppTheme.income
     static let forestText = AppTheme.brand
-    static let forestSoft = AppTheme.income.opacity(0.22)
+    static let forestSoft = AppTheme.incomeTint
     static let clay = AppTheme.expense
     static let amber = AppTheme.secondaryAction
-    static let teal = Color(hex: "#1FA37D")
-    static let purple = Color(hex: "#7B6EE6")
-    static let coral = Color(hex: "#E2572E")
+    static let teal = AppTheme.positive
+    static let purple = Color(hex: "#6F6CA8")
+    static let coral = AppTheme.expense
 }
 
 extension Font {

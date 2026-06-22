@@ -17,12 +17,37 @@ function monthKey(value: string | Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
+function timestamp(value: string | Date | undefined): number {
+  if (!value) {
+    return 0;
+  }
+  const date = typeof value === "string" ? new Date(value) : value;
+  const time = date.getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+export function newestTransactionFirst(left: BudgetTransaction, right: BudgetTransaction): number {
+  const dateDelta = timestamp(right.date) - timestamp(left.date);
+  if (dateDelta !== 0) {
+    return dateDelta;
+  }
+
+  const createdDelta = timestamp(right.createdAt) - timestamp(left.createdAt);
+  if (createdDelta !== 0) {
+    return createdDelta;
+  }
+
+  return left.title.localeCompare(right.title, undefined, { sensitivity: "base" });
+}
+
 export function currentMonthKey(): string {
   return monthKey(new Date());
 }
 
 export function transactionsForMonth(transactions: BudgetTransaction[], selectedMonth: string) {
-  return transactions.filter((transaction) => monthKey(transaction.date) === selectedMonth);
+  return transactions
+    .filter((transaction) => monthKey(transaction.date) === selectedMonth)
+    .sort(newestTransactionFirst);
 }
 
 export function monthlyBudget(settings: BudgetSettings): number {

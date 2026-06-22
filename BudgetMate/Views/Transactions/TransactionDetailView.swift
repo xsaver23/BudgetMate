@@ -306,7 +306,11 @@ struct TransactionDetailView: View {
                 .foregroundStyle(AppTheme.danger)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
-                .background(AppTheme.expense, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .background(AppTheme.expenseTint, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(AppTheme.expense.opacity(0.25), lineWidth: 1)
+                )
         }
         .buttonStyle(PressableButtonStyle(scale: 0.98))
     }

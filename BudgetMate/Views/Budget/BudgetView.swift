@@ -136,7 +136,7 @@ struct BudgetView: View {
                     .font(.headline.weight(.bold))
                     .foregroundStyle(AppTheme.brand)
                     .frame(width: 44, height: 44)
-                    .background(BudgetBeaverPalette.bank, in: Circle())
+                    .background(AppTheme.brandSoft, in: Circle())
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("MONTHLY BUDGET")
@@ -176,7 +176,7 @@ struct BudgetView: View {
                         .foregroundStyle(remainingBudget >= 0 ? AppTheme.brand : BudgetBeaverPalette.amountRed)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(BudgetBeaverPalette.bank, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .background(remainingBudget >= 0 ? AppTheme.incomeTint : AppTheme.expenseTint, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
 
                 HStack(spacing: 12) {
@@ -364,7 +364,7 @@ struct BudgetView: View {
                         .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.6))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(BudgetBeaverPalette.bank, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .background(AppTheme.warningTint, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
 
                 ForEach(tabMetrics.expensesByMember, id: \.member.id) { entry in
@@ -394,9 +394,9 @@ struct BudgetView: View {
                         }
                     }
                     .padding(12)
-                    .background(BudgetBeaverPalette.bank.opacity(0.6), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .background(BudgetBeaverPalette.bank, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .stroke(BudgetBeaverPalette.border, lineWidth: 1)
                     )
                 }
@@ -408,9 +408,9 @@ struct BudgetView: View {
     private func beaverCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         content()
             .padding(18)
-            .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous)
                     .stroke(BudgetBeaverPalette.border, lineWidth: 1)
             )
     }
@@ -426,7 +426,7 @@ struct BudgetView: View {
                 .font(.headline.weight(.black))
                 .foregroundStyle(AppTheme.brand)
                 .frame(width: 40, height: 40)
-                .background(AppTheme.brand.opacity(0.24), in: Circle())
+                .background(AppTheme.brandSoft, in: Circle())
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
@@ -442,7 +442,11 @@ struct BudgetView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(tint, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(tint.opacity(0.16), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(AppTheme.surfaceStroke, lineWidth: 1)
+        )
     }
 
     private func refreshTabMetrics() {
@@ -662,7 +666,7 @@ struct BudgetView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(16)
-        .background(BudgetBeaverPalette.bank.opacity(0.55), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(BudgetBeaverPalette.bank, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
@@ -781,9 +785,9 @@ private struct CategoryEditorView: View {
                                     }
                                 }
                         }
-                        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                            RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous)
                                 .stroke(AppTheme.surfaceStroke, lineWidth: 1)
                         )
 

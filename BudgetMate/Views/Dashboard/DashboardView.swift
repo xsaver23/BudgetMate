@@ -273,7 +273,7 @@ struct DashboardView: View {
                 .font(.headline.weight(.black))
                 .foregroundStyle(AppTheme.brand)
                 .frame(width: 40, height: 40)
-                .background(AppTheme.brand.opacity(0.28), in: Circle())
+                .background(AppTheme.brandSoft, in: Circle())
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(title)
@@ -287,7 +287,11 @@ struct DashboardView: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(tint, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(tint.opacity(0.16), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(AppTheme.surfaceStroke, lineWidth: 1)
+        )
     }
 
     // MARK: - Budget pacing dam bar
@@ -304,7 +308,11 @@ struct DashboardView: View {
                     .padding(20)
             }
         }
-        .background(AppTheme.colorBlockYellow, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .background(AppTheme.warningTint, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(AppTheme.secondaryAction.opacity(0.28), lineWidth: 1)
+        )
     }
 
     private var damBarSummary: some View {
@@ -322,7 +330,7 @@ struct DashboardView: View {
             }
 
             ProgressView(value: clampedProgress)
-                .tint(BudgetBeaverPalette.wood)
+                .tint(AppTheme.secondaryAction)
                 .scaleEffect(x: 1, y: 1.4, anchor: .center)
                 .accessibilityLabel("Budget pacing")
                 .accessibilityValue(spentPercentageText)
@@ -360,7 +368,7 @@ struct DashboardView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white.opacity(0.32), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(AppTheme.surface.opacity(0.55), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     // MARK: - Who owes whom
@@ -400,7 +408,7 @@ struct DashboardView: View {
                 }
                 .padding(20)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(BudgetBeaverPalette.bank.opacity(0.6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .background(AppTheme.surfaceAlt, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
         }
         .padding(.top, 2)
@@ -549,7 +557,7 @@ struct DashboardView: View {
                     .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.6))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(BudgetBeaverPalette.bank, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .background(AppTheme.warningTint, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
 
             if topCategories.isEmpty {
@@ -574,9 +582,9 @@ struct DashboardView: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity)
-        .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(BudgetBeaverPalette.paper, in: RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous)
                 .stroke(BudgetBeaverPalette.border, lineWidth: 1)
         )
     }
@@ -621,10 +629,10 @@ struct DashboardView: View {
                 .foregroundStyle(BudgetBeaverPalette.water.opacity(0.03))
                 .offset(x: 6, y: 10)
         }
-        .background(BudgetBeaverPalette.bank.opacity(0.6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(BudgetBeaverPalette.bank, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(BudgetBeaverPalette.border, lineWidth: 1)
         )
     }
@@ -651,9 +659,9 @@ struct DashboardView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(BudgetBeaverPalette.bank.opacity(0.6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(BudgetBeaverPalette.bank, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(BudgetBeaverPalette.border, lineWidth: 1)
         )
     }

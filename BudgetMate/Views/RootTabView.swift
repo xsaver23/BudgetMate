@@ -49,7 +49,7 @@ struct RootTabView: View {
                 .ignoresSafeArea(edges: .bottom)
                 .overlay(alignment: .top) {
                     Rectangle()
-                        .fill(AppTheme.expense.opacity(0.45))
+                        .fill(AppTheme.surfaceStroke)
                         .frame(height: 1)
                 }
         )

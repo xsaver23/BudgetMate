@@ -203,7 +203,7 @@ struct AddTransactionView: View {
                 .foregroundStyle(viewModel.type == .expense ? AppTheme.danger : AppTheme.brand)
                 .padding(.horizontal, 20)
                 .padding(.vertical, 8)
-                .background(viewModel.type == .expense ? AppTheme.expense : AppTheme.income, in: Capsule())
+                .background(viewModel.type == .expense ? AppTheme.expenseTint : AppTheme.incomeTint, in: Capsule())
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 18)

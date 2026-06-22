@@ -4,56 +4,63 @@ enum CategoryColor {
     static func color(for category: TransactionCategory) -> Color {
         switch category {
         case .food:
-            return .orange
+            return AppTheme.warning
         case .restaurant:
-            return .brown
+            return AppTheme.expense
         case .groceries:
-            return .mint
+            return AppTheme.income
         case .rent:
-            return .indigo
+            return AppTheme.brand
         case .subscription:
-            return .teal
+            return AppTheme.warning
         case .health:
-            return .red
+            return AppTheme.expense
         case .household:
-            return .blue
+            return AppTheme.brandAlt
         case .gift:
-            return .pink
+            return AppTheme.expense
         case .studentLoans:
-            return .purple
+            return BudgetBeaverPalette.purple
         case .date:
-            return .pink
+            return AppTheme.expense
         case .vacation:
-            return .cyan
+            return AppTheme.income
         case .parking:
-            return .gray
+            return AppTheme.textMuted
         case .gas:
-            return .yellow
+            return AppTheme.warning
         case .transportation:
-            return .cyan
+            return AppTheme.brandAlt
         case .shopping:
-            return .pink
+            return AppTheme.secondaryAction
         case .entertainment:
-            return .purple
+            return BudgetBeaverPalette.purple
         case .bills:
-            return .red
+            return AppTheme.warning
         case .salary:
-            return .green
+            return AppTheme.income
         case .refund:
-            return .mint
+            return AppTheme.income
         case .work:
-            return .blue
+            return AppTheme.brandAlt
         case .eTransfer:
-            return .teal
+            return AppTheme.income
         case .other:
-            return .gray
+            return AppTheme.textMuted
         default:
             return customColor(for: category.rawValue)
         }
     }
 
     private static func customColor(for rawValue: String) -> Color {
-        let palette: [Color] = [.blue, .green, .orange, .purple, .pink, .teal, .indigo, .cyan]
+        let palette: [Color] = [
+            AppTheme.brand,
+            AppTheme.income,
+            AppTheme.expense,
+            AppTheme.secondaryAction,
+            BudgetBeaverPalette.purple,
+            AppTheme.warning
+        ]
         let hash = rawValue.unicodeScalars.reduce(0) { ($0 &* 31) &+ Int($1.value) }
         return palette[abs(hash) % palette.count]
     }
