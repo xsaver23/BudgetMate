@@ -27,12 +27,15 @@ struct CloudBudgetSyncSummary {
 
 enum SupabaseBudgetSyncError: LocalizedError {
     case missingUser
+    case notBudgetOwner
     case invalidCloudDate(String)
 
     var errorDescription: String? {
         switch self {
         case .missingUser:
             return "Sign in again before syncing."
+        case .notBudgetOwner:
+            return "Only the household owner can invite members."
         case .invalidCloudDate(let value):
             return "Cloud data has an invalid date: \(value)."
         }
@@ -200,6 +203,10 @@ private struct CloudBudgetRow: Codable {
         case ownerUserId = "owner_user_id"
         case name
     }
+
+    func makeSummary() -> BudgetSummary {
+        BudgetSummary(id: id, name: name)
+    }
 }
 
 private struct CloudBudgetMembershipRow: Codable {
@@ -215,12 +222,13 @@ private struct CloudBudgetMembershipRow: Codable {
         case status
     }
 
-    func makeMembership() -> BudgetMembership {
+    func makeMembership(name: String? = nil) -> BudgetMembership {
         BudgetMembership(
             budgetId: budgetId,
             userId: userId,
             role: role,
-            status: status
+            status: status,
+            name: name
         )
     }
 }
@@ -244,9 +252,9 @@ private struct CloudBudgetInviteRow: Codable {
         case createdAt = "created_at"
     }
 
-    init(displayName: String, email: String, invitedByUserId: UUID) {
+    init(displayName: String, email: String, budgetId: UUID, invitedByUserId: UUID) {
         id = UUID()
-        budgetId = invitedByUserId
+        self.budgetId = budgetId
         self.invitedByUserId = invitedByUserId
         self.displayName = displayName
         self.email = email.lowercased()
@@ -586,14 +594,14 @@ final class SupabaseBudgetSyncService {
         )
         let pushedSettlementIDs = Set(settlementRows.map(\.id))
 
-        if budgetId == userId && (existingSettings == nil || settings != .default) {
+        if existingSettings == nil || settings != .default {
             try await client
                 .from("budget_settings")
-                .upsert(settingsRow, onConflict: "user_id")
+                .upsert(settingsRow, onConflict: "budget_id")
                 .execute()
         }
 
-        if budgetId == userId && !memberRows.isEmpty && !Self.isDefaultSampleMembers(members) {
+        if !memberRows.isEmpty && !Self.isDefaultSampleMembers(members) {
             try await client
                 .from("budget_members")
                 .upsert(memberRows, onConflict: "id")
@@ -677,12 +685,11 @@ final class SupabaseBudgetSyncService {
         let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
 
         try await ensurePersonalBudget(userId: userId)
-        guard budgetId == userId else { return }
 
         let row = CloudBudgetSettingsRow(settings: settings, userId: userId, budgetId: budgetId)
         try await client
             .from("budget_settings")
-            .upsert(row, onConflict: "user_id")
+            .upsert(row, onConflict: "budget_id")
             .execute()
     }
 
@@ -710,7 +717,6 @@ final class SupabaseBudgetSyncService {
         let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
 
         try await ensurePersonalBudget(userId: userId)
-        guard budgetId == userId else { return }
 
         guard !members.isEmpty else { return }
         try members.forEach { try $0.validateForSync() }
@@ -724,12 +730,41 @@ final class SupabaseBudgetSyncService {
             .execute()
     }
 
-    func createInvite(displayName: String, email: String, userScopeId: String) async throws {
+    func ensureSharedBudget(name: String, userScopeId: String) async throws -> BudgetSummary {
         guard let userId = UUID(uuidString: userScopeId) else {
             throw SupabaseBudgetSyncError.missingUser
         }
 
         try await ensurePersonalBudget(userId: userId)
+        return try await ensureSharedBudget(ownerUserId: userId, name: name)
+    }
+
+    func fetchOwnedBudgets(userScopeId: String) async throws -> [BudgetSummary] {
+        guard let userId = UUID(uuidString: userScopeId) else {
+            throw SupabaseBudgetSyncError.missingUser
+        }
+
+        try await ensurePersonalBudget(userId: userId)
+        let rows: [CloudBudgetRow] = try await client
+            .from("budgets")
+            .select()
+            .eq("owner_user_id", value: userId)
+            .execute()
+            .value
+
+        return rows
+            .filter { $0.id != userId }
+            .map { $0.makeSummary() }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    func createInvite(displayName: String, email: String, userScopeId: String, budgetId: UUID) async throws {
+        guard let userId = UUID(uuidString: userScopeId) else {
+            throw SupabaseBudgetSyncError.missingUser
+        }
+
+        try await ensurePersonalBudget(userId: userId)
+        try await validateBudgetOwner(userId: userId, budgetId: budgetId)
         let normalizedDisplayName = BudgetMember.normalizedDisplayName(displayName)
         guard !normalizedDisplayName.isEmpty,
               Self.normalizedEmail(email) != nil else {
@@ -739,6 +774,7 @@ final class SupabaseBudgetSyncService {
         let row = CloudBudgetInviteRow(
             displayName: normalizedDisplayName,
             email: email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            budgetId: budgetId,
             invitedByUserId: userId
         )
 
@@ -777,7 +813,10 @@ final class SupabaseBudgetSyncService {
             .execute()
             .value
 
-        return rows.map { $0.makeMembership() }
+        let budgetNames = try await accessibleBudgetNamesByID()
+        return rows.map { row in
+            row.makeMembership(name: budgetNames[row.budgetId])
+        }
     }
 
     func repairMemberProfileIfNeeded(userScopeId: String, userEmail: String, budgetScopeId: String? = nil) async throws {
@@ -964,6 +1003,76 @@ final class SupabaseBudgetSyncService {
             .from("budget_memberships")
             .upsert(membership, onConflict: "budget_id,user_id")
             .execute()
+    }
+
+    private func ensureSharedBudget(ownerUserId: UUID, name: String) async throws -> BudgetSummary {
+        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeName = normalizedName.isEmpty ? "Shared Budget" : normalizedName
+        let ownedBudgets: [CloudBudgetRow] = try await client
+            .from("budgets")
+            .select()
+            .eq("owner_user_id", value: ownerUserId)
+            .execute()
+            .value
+
+        if let existing = ownedBudgets.first(where: {
+            $0.id != ownerUserId && $0.name.localizedCaseInsensitiveCompare(safeName) == .orderedSame
+        }) {
+            return existing.makeSummary()
+        }
+
+        let budget = CloudBudgetRow(
+            id: UUID(),
+            ownerUserId: ownerUserId,
+            name: safeName
+        )
+        let membership = CloudBudgetMembershipRow(
+            budgetId: budget.id,
+            userId: ownerUserId,
+            role: "owner",
+            status: "active"
+        )
+
+        try await client
+            .from("budgets")
+            .insert(budget)
+            .execute()
+
+        try await client
+            .from("budget_memberships")
+            .upsert(membership, onConflict: "budget_id,user_id")
+            .execute()
+
+        return budget.makeSummary()
+    }
+
+    private func validateBudgetOwner(userId: UUID, budgetId: UUID) async throws {
+        let rows: [CloudBudgetMembershipRow] = try await client
+            .from("budget_memberships")
+            .select()
+            .eq("budget_id", value: budgetId)
+            .eq("user_id", value: userId)
+            .eq("role", value: "owner")
+            .eq("status", value: "active")
+            .execute()
+            .value
+
+        guard !rows.isEmpty else {
+            throw SupabaseBudgetSyncError.notBudgetOwner
+        }
+    }
+
+    private func accessibleBudgetNamesByID() async throws -> [UUID: String] {
+        let rows: [CloudBudgetRow] = try await client
+            .from("budgets")
+            .select()
+            .execute()
+            .value
+
+        return Dictionary(
+            rows.map { ($0.id, $0.name) },
+            uniquingKeysWith: { first, _ in first }
+        )
     }
 
     private static func isDefaultSampleMembers(_ members: [BudgetMember]) -> Bool {

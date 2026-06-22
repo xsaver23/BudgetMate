@@ -36,11 +36,17 @@ struct BudgetInvite: Identifiable, Hashable {
     }
 }
 
+struct BudgetSummary: Identifiable, Hashable {
+    let id: UUID
+    let name: String
+}
+
 struct BudgetMembership: Identifiable, Hashable {
     let budgetId: UUID
     let userId: UUID
     let role: String
     let status: String
+    let name: String?
 
     var id: String {
         "\(budgetId.uuidString)-\(userId.uuidString)"
@@ -51,6 +57,11 @@ struct BudgetMembership: Identifiable, Hashable {
     }
 
     func displayName(currentUserId: String) -> String {
-        budgetId.uuidString == currentUserId ? "My Budget" : "Shared Budget"
+        if budgetId.uuidString == currentUserId {
+            return "My Budget"
+        }
+
+        let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmedName.isEmpty ? "Shared Budget" : trimmedName
     }
 }

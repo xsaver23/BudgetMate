@@ -736,3 +736,107 @@ using (
       and membership.status = 'active'
   )
 );
+
+-- Migration: named shared households and per-budget settings.
+alter table public.budget_settings
+add column if not exists owner_user_id uuid references auth.users(id) on delete set null;
+
+update public.budget_settings
+set owner_user_id = user_id
+where owner_user_id is null;
+
+update public.budget_settings
+set budget_id = user_id
+where budget_id is null;
+
+with ranked_settings as (
+  select
+    ctid,
+    row_number() over (
+      partition by budget_id
+      order by updated_at desc nulls last
+    ) as row_number
+  from public.budget_settings
+)
+delete from public.budget_settings
+where ctid in (
+  select ctid
+  from ranked_settings
+  where row_number > 1
+);
+
+alter table public.budget_settings
+alter column budget_id set not null;
+
+alter table public.budget_settings
+drop constraint if exists budget_settings_pkey;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'budget_settings_pkey'
+      and conrelid = 'public.budget_settings'::regclass
+  ) then
+    alter table public.budget_settings
+    add constraint budget_settings_pkey primary key (budget_id);
+  end if;
+end $$;
+
+drop policy if exists "Users can read their budgets" on public.budgets;
+create policy "Users can read their budgets"
+on public.budgets
+for select
+to authenticated
+using (
+  owner_user_id = auth.uid()
+  or exists (
+    select 1
+    from public.budget_memberships membership
+    where membership.budget_id = budgets.id
+      and membership.user_id = auth.uid()
+      and membership.status = 'active'
+  )
+);
+
+drop policy if exists "Budget members can write shared settings" on public.budget_settings;
+create policy "Budget members can write shared settings"
+on public.budget_settings
+for all
+to authenticated
+using (
+  exists (
+    select 1
+    from public.budget_memberships membership
+    where membership.budget_id = budget_settings.budget_id
+      and membership.user_id = auth.uid()
+      and membership.status = 'active'
+  )
+)
+with check (
+  exists (
+    select 1
+    from public.budget_memberships membership
+    where membership.budget_id = budget_settings.budget_id
+      and membership.user_id = auth.uid()
+      and membership.status = 'active'
+  )
+);
+
+drop policy if exists "Owners can create budget invites" on public.budget_invites;
+create policy "Owners can create budget invites"
+on public.budget_invites
+for insert
+to authenticated
+with check (
+  invited_by_user_id = auth.uid()
+  and exists (
+    select 1
+    from public.budget_memberships membership
+    where membership.budget_id = budget_invites.budget_id
+      and membership.user_id = auth.uid()
+      and membership.role = 'owner'
+      and membership.status = 'active'
+  )
+);

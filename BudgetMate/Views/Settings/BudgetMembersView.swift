@@ -5,10 +5,12 @@ struct BudgetMembersView: View {
     @EnvironmentObject private var memberViewModel: MemberViewModel
     @EnvironmentObject private var authStore: AuthSessionStore
     @EnvironmentObject private var cloudSyncStore: CloudSyncStore
+    @EnvironmentObject private var settingsStore: SettingsStore
     @Environment(\.modelContext) private var modelContext
     @Query private var transactions: [Transaction]
     @State private var isShowingInviteSheet = false
     @State private var feedbackMessage: String?
+    @State private var ownedBudgets: [BudgetSummary] = []
 
     var body: some View {
         ScrollView {
@@ -60,29 +62,14 @@ struct BudgetMembersView: View {
         .navigationTitle("Budget Members")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $isShowingInviteSheet) {
-            InviteMemberView { name, email in
-                if memberViewModel.inviteMember(displayName: name, email: email) != nil {
-                    cloudSyncStore.saveMembers(
-                        memberViewModel.members,
-                        userScopeId: authStore.currentUserScopeId,
-                        budgetScopeId: authStore.currentBudgetScopeId
-                    )
-                    if let email {
-                        Task {
-                            do {
-                                try await cloudSyncStore.inviteMember(
-                                    displayName: name,
-                                    email: email,
-                                    userScopeId: authStore.currentUserScopeId
-                                )
-                                feedbackMessage = "Invite saved for \(name). Email delivery is coming next."
-                            } catch {
-                                feedbackMessage = "Member added locally, but the cloud invite failed: \(error.localizedDescription)"
-                            }
-                        }
-                    }
+            InviteMemberView(ownedBudgets: ownedBudgets) { name, email, target in
+                Task {
+                    await inviteMember(name: name, email: email, target: target)
                 }
             }
+        }
+        .task {
+            await loadOwnedBudgets()
         }
         .alert("Budget Members", isPresented: feedbackAlertBinding) {
             Button("OK", role: .cancel) { }
@@ -92,7 +79,90 @@ struct BudgetMembersView: View {
     }
 
     private var canManageMembers: Bool {
-        authStore.currentBudgetScopeId == authStore.currentUserScopeId
+        memberViewModel.activeMember.role == .owner
+    }
+
+    private func inviteMember(name: String, email: String, target: InviteHouseholdTarget) async {
+        guard let invitedMember = memberViewModel.makeInvitedMember(displayName: name, email: email) else {
+            feedbackMessage = "Enter a valid name and email."
+            return
+        }
+
+        do {
+            let targetBudget: BudgetSummary
+            switch target {
+            case .createNew(let householdName):
+                targetBudget = try await cloudSyncStore.ensureSharedBudget(
+                    name: householdName,
+                    userScopeId: authStore.currentUserScopeId
+                )
+            case .existing(let budget):
+                targetBudget = budget
+            }
+
+            try await cloudSyncStore.inviteMember(
+                displayName: name,
+                email: email,
+                userScopeId: authStore.currentUserScopeId,
+                budgetId: targetBudget.id
+            )
+
+            let targetMembers = await membersForInviteTarget(
+                targetBudgetId: targetBudget.id,
+                invitedMember: invitedMember
+            )
+            cloudSyncStore.saveMembers(
+                targetMembers,
+                userScopeId: authStore.currentUserScopeId,
+                budgetScopeId: targetBudget.id.uuidString
+            )
+
+            authStore.switchBudgetScope(to: targetBudget.id.uuidString)
+            settingsStore.switchUser(to: targetBudget.id.uuidString)
+            memberViewModel.replaceMembers(with: targetMembers)
+            await loadOwnedBudgets()
+            feedbackMessage = "Invite saved for \(name) in \(targetBudget.name). Email delivery is coming next."
+        } catch {
+            feedbackMessage = "Could not save invite: \(error.localizedDescription)"
+        }
+    }
+
+    private func membersForInviteTarget(targetBudgetId: UUID, invitedMember: BudgetMember) async -> [BudgetMember] {
+        let existingMembers = (try? await cloudSyncStore.fetchMembers(
+            userScopeId: authStore.currentUserScopeId,
+            budgetScopeId: targetBudgetId.uuidString
+        )) ?? []
+
+        var targetMembers = existingMembers
+        if !targetMembers.contains(where: { member in
+            member.authUserId?.uuidString == authStore.currentUserScopeId ||
+                member.id.uuidString == authStore.currentUserScopeId
+        }) {
+            targetMembers.insert(
+                memberViewModel.makeSharedOwnerMember(
+                    userScopeId: authStore.currentUserScopeId,
+                    email: authStore.userEmail
+                ),
+                at: 0
+            )
+        }
+
+        let normalizedInviteEmail = invitedMember.email?.lowercased()
+        if !targetMembers.contains(where: { member in
+            member.email?.lowercased() == normalizedInviteEmail
+        }) {
+            targetMembers.append(invitedMember)
+        }
+
+        return targetMembers
+    }
+
+    private func loadOwnedBudgets() async {
+        do {
+            ownedBudgets = try await cloudSyncStore.fetchOwnedBudgets(userScopeId: authStore.currentUserScopeId)
+        } catch {
+            ownedBudgets = []
+        }
     }
 
     private func memberRow(_ member: BudgetMember) -> some View {
@@ -242,6 +312,7 @@ struct BudgetMembersView: View {
             .environmentObject(MemberViewModel())
             .environmentObject(AuthSessionStore())
             .environmentObject(CloudSyncStore())
+            .environmentObject(SettingsStore())
     }
 }
 

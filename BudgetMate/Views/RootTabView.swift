@@ -31,7 +31,7 @@ struct RootTabView: View {
     }
 
     private var customTabBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 4) {
             tabButton(for: .dashboard, title: "Dashboard", icon: "house")
             tabButton(for: .transactions, title: "Transactions", icon: "list.bullet.rectangle")
 
@@ -40,7 +40,7 @@ struct RootTabView: View {
             tabButton(for: .budget, title: "Budget", icon: "chart.bar")
             tabButton(for: .settings, title: "Settings", icon: "gearshape")
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, 14)
         .padding(.top, 9)
         .padding(.bottom, 3)
         .frame(maxWidth: .infinity)
@@ -63,7 +63,10 @@ struct RootTabView: View {
                 Image(systemName: selectedTab == tab ? "\(icon).fill" : icon)
                     .font(.system(size: 21, weight: .semibold))
                 Text(title)
-                    .font(.caption2.weight(.bold))
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .allowsTightening(true)
             }
                 .foregroundStyle(selectedTab == tab ? AppTheme.brand : BudgetBeaverPalette.wood)
                 .frame(height: 50)

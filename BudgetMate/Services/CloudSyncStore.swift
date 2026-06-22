@@ -199,10 +199,39 @@ final class CloudSyncStore: ObservableObject {
         }
     }
 
-    func inviteMember(displayName: String, email: String, userScopeId: String) async throws {
+    func ensureSharedBudget(name: String, userScopeId: String) async throws -> BudgetSummary {
+        do {
+            let budget = try await runWithRetry {
+                try await self.service.ensureSharedBudget(name: name, userScopeId: userScopeId)
+            }
+            markSynced()
+            return budget
+        } catch {
+            markFailed(error, context: "Creating shared budget")
+            throw error
+        }
+    }
+
+    func fetchOwnedBudgets(userScopeId: String) async throws -> [BudgetSummary] {
+        do {
+            return try await runWithRetry {
+                try await self.service.fetchOwnedBudgets(userScopeId: userScopeId)
+            }
+        } catch {
+            markFailed(error, context: "Fetching households")
+            throw error
+        }
+    }
+
+    func inviteMember(displayName: String, email: String, userScopeId: String, budgetId: UUID) async throws {
         do {
             try await runWithRetry {
-                try await self.service.createInvite(displayName: displayName, email: email, userScopeId: userScopeId)
+                try await self.service.createInvite(
+                    displayName: displayName,
+                    email: email,
+                    userScopeId: userScopeId,
+                    budgetId: budgetId
+                )
             }
             markSynced()
         } catch {

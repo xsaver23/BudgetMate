@@ -161,6 +161,15 @@ final class MemberViewModel: ObservableObject {
 
     @discardableResult
     func inviteMember(displayName: String, email: String?) -> BudgetMember? {
+        guard let newMember = makeInvitedMember(displayName: displayName, email: email) else {
+            return nil
+        }
+
+        members.append(newMember)
+        return newMember
+    }
+
+    func makeInvitedMember(displayName: String, email: String?) -> BudgetMember? {
         let trimmedName = BudgetMember.normalizedDisplayName(displayName)
         guard !trimmedName.isEmpty else { return nil }
         guard !displayName.containsEmoji else { return nil }
@@ -168,7 +177,7 @@ final class MemberViewModel: ObservableObject {
         let trimmedEmail = email?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedEmail = (trimmedEmail?.isEmpty == true) ? nil : trimmedEmail?.lowercased()
 
-        let newMember = BudgetMember(
+        return BudgetMember(
             displayName: trimmedName,
             email: normalizedEmail,
             initials: BudgetMember.initials(from: trimmedName),
@@ -177,9 +186,21 @@ final class MemberViewModel: ObservableObject {
             inviteStatus: .invited,
             joinedDate: nil
         )
+    }
 
-        members.append(newMember)
-        return newMember
+    func makeSharedOwnerMember(userScopeId: String, email: String?) -> BudgetMember {
+        let source = profileMember(userScopeId: userScopeId, email: email) ?? activeMember
+        return BudgetMember(
+            displayName: source.displayName,
+            email: source.email ?? email,
+            initials: source.displayInitials,
+            color: source.color,
+            authUserId: UUID(uuidString: userScopeId) ?? source.authUserId,
+            role: .owner,
+            inviteStatus: .active,
+            joinedDate: source.joinedDate ?? .now,
+            createdDate: .now
+        )
     }
 
     func completeProfile(displayName: String) {

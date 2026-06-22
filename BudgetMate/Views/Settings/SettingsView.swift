@@ -130,44 +130,6 @@ struct SettingsView: View {
                         }
                     }
 
-                    #if DEBUG
-                    settingsSection("Developer Testing") {
-                        settingsRow("Using app as") {
-                            Menu {
-                                ForEach(memberViewModel.members) { member in
-                                    Button {
-                                        memberViewModel.activeMemberId = member.id
-                                    } label: {
-                                        if member.id == memberViewModel.activeMemberId {
-                                            Label(member.displayName, systemImage: "checkmark")
-                                        } else {
-                                            Text(member.displayName)
-                                        }
-                                    }
-                                }
-                            } label: {
-                                settingsValue(memberViewModel.activeMember.displayName)
-                            }
-                        }
-
-                        Text("Preview the app as another member. This section is hidden in release builds.")
-                            .font(settingsHelperFont)
-                            .foregroundStyle(BudgetBeaverPalette.wood)
-
-                        Divider()
-
-                        rowButton("Load Sample Data (Only Me)", tint: AppTheme.brand) {
-                            loadSampleData(mode: .currentUserOnly)
-                        }
-
-                        Divider()
-
-                        rowButton("Load Sample Data (Demo Household)", tint: AppTheme.brand) {
-                            loadSampleData(mode: .household)
-                        }
-                    }
-                    #endif
-
                     settingsSection("Shared Budget") {
                         if !memberships.isEmpty {
                             settingsRow("Viewing") {
@@ -510,51 +472,6 @@ struct SettingsView: View {
         )
         isShowingProfileEditor = false
         clearFeedbackMessage = "Profile name updated."
-    }
-
-    private func loadSampleData(mode: SampleDataSeeder.Mode) {
-        if mode == .household {
-            memberViewModel.replaceMembers(with: BudgetSampleData.householdMembers(owner: memberViewModel.activeMember))
-        }
-
-        settingsStore.updateCategoryBudgets(BudgetSampleData.categoryBudgets)
-        syncFieldsFromStore()
-        cloudSyncStore.saveSettings(
-            settingsStore.settings,
-            userScopeId: authStore.currentUserScopeId,
-            budgetScopeId: authStore.currentBudgetScopeId
-        )
-
-        let sampleMembers: [BudgetMember]
-        switch mode {
-        case .currentUserOnly:
-            sampleMembers = [memberViewModel.activeMember]
-        case .household:
-            sampleMembers = memberViewModel.members
-        }
-
-        let count = SampleDataSeeder.seed(
-            into: modelContext,
-            members: sampleMembers,
-            ownerUserId: authStore.currentBudgetScopeId,
-            mode: mode
-        )
-        do {
-            try modelContext.save()
-        } catch {
-            cloudSyncStore.recordSyncIssue(error, context: "Loading sample data")
-        }
-        if mode == .household {
-            let memberCount = memberViewModel.members.count
-            cloudSyncStore.saveMembers(
-                memberViewModel.members,
-                userScopeId: authStore.currentUserScopeId,
-                budgetScopeId: authStore.currentBudgetScopeId
-            )
-            clearFeedbackMessage = "Added \(count) sample transaction\(count == 1 ? "" : "s"), sample budgets, and \(memberCount) demo member\(memberCount == 1 ? "" : "s")."
-        } else {
-            clearFeedbackMessage = "Added \(count) sample transaction\(count == 1 ? "" : "s") and sample budgets for \(memberViewModel.activeMember.displayName)."
-        }
     }
 
     private func clearAllTransactions() {
