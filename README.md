@@ -1,59 +1,74 @@
 # BudgetMate
 
-BudgetMate is a SwiftUI iOS budgeting app for personal and shared household budgeting. It is local-first, uses SwiftData for on-device storage, and syncs to Supabase for authentication, backup, and shared-budget collaboration.
+BudgetMate is a personal and shared-household budgeting app for iOS and the web. It is built around a local-first budgeting experience with optional Supabase cloud sync, so a household can track spending, split expenses, manage category budgets, and settle up from either the mobile app or a desktop browser.
 
-Current snapshot: `223b97e`
+The project includes:
 
-This repo now also includes a React/TypeScript web companion in `web/` that runs in desktop browsers on macOS and Windows. The web app supports desktop-local browser storage and Supabase email/password sign-in for shared backend sync.
+- A native SwiftUI iOS app.
+- A React and TypeScript desktop web app.
+- Shared Supabase schema and sync contracts used by both clients.
 
-## What It Does
+Live web app: [budgetmate.pages.dev](https://budgetmate.pages.dev)
 
-- Email/password authentication through Supabase.
-- First-run profile setup and editable profile names.
-- Personal budgets and named shared household budgets.
-- Invite flow for creating a new household or adding someone to an owned household.
-- Member-aware transactions with per-member filtering.
-- Split expenses, settlement suggestions, and balance breakdowns.
-- Category budgets with custom category emoji and monthly pacing.
+## Features
+
+- Email and password authentication with Supabase.
+- Personal budgets and shared household budgets.
+- Member-aware transaction tracking.
+- Income, expense, category, date, payment method, and member metadata.
+- Split expenses across household members.
+- Settlement suggestions and balance breakdowns.
+- Category budgets and monthly pacing.
 - Recurring expenses with optional stop dates.
-- Currency display selection.
-- Light, dark, and system appearance options.
-- Manual sync, auto sync, and pull-to-refresh on main pages.
+- Currency display preferences.
+- Member filters for dashboard, transactions, and budget views.
+- Local desktop mode for development and offline demos.
+- Cloud sync between iOS and web using the same Supabase tables.
 
-## App Structure
+## Apps
 
-- `BudgetMate/BudgetMateApp.swift` handles app startup, auth/profile flow, and sync bootstrapping.
+### iOS
+
+The iOS app is built with SwiftUI and uses local device storage for the primary app experience. Supabase is used for authentication, backup, and shared-budget collaboration.
+
+Key areas:
+
+- `BudgetMate/BudgetMateApp.swift` handles startup, auth routing, and sync bootstrapping.
 - `BudgetMate/Services/CloudSyncStore.swift` exposes user-facing sync state and cloud actions.
 - `BudgetMate/Services/SupabaseBudgetSyncService.swift` contains Supabase read/write logic.
-- `BudgetMate/Views/Dashboard/DashboardView.swift` is the home dashboard.
+- `BudgetMate/Views/Dashboard/DashboardView.swift` is the main dashboard.
 - `BudgetMate/Views/Transactions/TransactionsView.swift` lists transactions.
-- `BudgetMate/Views/Transactions/AddTransactionView.swift` adds and edits transactions.
-- `BudgetMate/Views/Budget/BudgetView.swift` manages category budgets.
-- `BudgetMate/Views/Settings/SettingsView.swift` manages account, household, sync, and app settings.
-- `BudgetMate/Views/Settings/BudgetMembersView.swift` manages shared-budget members.
-- `BudgetMate/Views/Settings/InviteMemberView.swift` creates or targets shared households for invites.
-- `supabase/budgetmate_schema.sql` contains the Supabase schema and migrations.
-- `docs/shared-budgets-architecture.md` documents the shared household architecture.
-- `web/` contains the React/TypeScript desktop web app.
-- `web/src/data/cloudRepository.ts` maps the web app to the same Supabase tables used by the iOS sync service.
+- `BudgetMate/Views/Transactions/AddTransactionView.swift` creates transactions.
+- `BudgetMate/Views/Budget/BudgetView.swift` manages monthly category budgets.
+- `BudgetMate/Views/Settings/SettingsView.swift` manages account, household, sync, and data settings.
 
-## Local Setup
+### Web
 
-1. Open `BudgetMate.xcodeproj` in Xcode.
-2. Use an iOS Simulator or a signed physical device target.
-3. Add a local Supabase config file at `BudgetMate/Config/Supabase.local.xcconfig`.
-4. Provide these build settings:
+The web app is a Vite, React, and TypeScript companion app designed for desktop browsers on macOS and Windows.
 
-```xcconfig
-BUDGETMATE_SUPABASE_URL = https://your-project.supabase.co
-BUDGETMATE_SUPABASE_PUBLISHABLE_KEY = your-publishable-key
-```
+Key areas:
 
-The local Supabase config should stay out of source control. The app expects those values through the bundle info dictionary at runtime.
+- `web/src/App.tsx` contains the main app shell and views.
+- `web/src/domain/` contains budgeting math, types, categories, formatting, and local domain logic.
+- `web/src/data/cloudRepository.ts` maps web actions to the same Supabase tables used by iOS.
+- `web/src/data/storage.ts` handles local browser storage and import/export.
 
-## Supabase Setup
+## Tech Stack
 
-Run the SQL in `supabase/budgetmate_schema.sql` against the Supabase project. The app currently uses these tables:
+- SwiftUI
+- SwiftData/local iOS persistence
+- React
+- TypeScript
+- Vite
+- Supabase Auth
+- Supabase Postgres
+- Cloudflare Pages
+
+## Data Model
+
+BudgetMate uses shared Supabase tables so iOS and web can read and write the same budget data.
+
+Core tables:
 
 - `budgets`
 - `budget_memberships`
@@ -63,46 +78,80 @@ Run the SQL in `supabase/budgetmate_schema.sql` against the Supabase project. Th
 - `budget_transactions`
 - `budget_settlements`
 
-Important model distinction:
+Important distinction:
 
-- `budget_memberships` grants access to a budget.
-- `budget_members` stores the display/profile row shown in the app.
+- `budget_memberships` controls access to a budget.
+- `budget_members` stores the display/member rows shown in the app.
 
-## Build Check
+The full schema lives in:
 
-Use this simulator build command from the repo root:
-
-```bash
-xcodebuild -scheme BudgetMate -project '/Users/developer/BudgetMate/BudgetMate.xcodeproj' -destination 'generic/platform=iOS Simulator' build
+```text
+supabase/budgetmate_schema.sql
 ```
 
-## Web App
+Additional architecture notes:
 
-The web app can be run on any desktop computer with Node.js installed.
+```text
+docs/shared-budgets-architecture.md
+```
+
+## Local Setup
+
+### iOS
+
+1. Open `BudgetMate.xcodeproj` in Xcode.
+2. Select an iOS Simulator or signed physical device.
+3. Create `BudgetMate/Config/Supabase.local.xcconfig`.
+4. Add the Supabase values:
+
+```xcconfig
+BUDGETMATE_SUPABASE_URL = https://your-project.supabase.co
+BUDGETMATE_SUPABASE_PUBLISHABLE_KEY = your-publishable-key
+```
+
+The local config file should not be committed.
+
+Build check:
 
 ```bash
-cd '/Users/developer/BudgetMate/web'
+xcodebuild -scheme BudgetMate -project BudgetMate.xcodeproj -destination 'generic/platform=iOS Simulator' build
+```
+
+### Web
+
+Install dependencies and run the local dev server:
+
+```bash
+cd web
 npm install
 npm run dev
 ```
 
-Open the local URL shown by Vite, usually:
+Open the Vite URL shown in the terminal, usually:
 
 ```text
 http://localhost:5173/
 ```
 
-Production build and local preview:
+Production build:
 
 ```bash
-cd '/Users/developer/BudgetMate/web'
+cd web
 npm run build
 npm run preview
 ```
 
-Supabase config for cloud sync in the web app:
+## Web Cloud Sync
+
+The web app supports two modes:
+
+- Local mode: stores data in browser local storage and works without Supabase credentials.
+- Cloud mode: signs in with Supabase and syncs with the same backend as the iOS app.
+
+To enable cloud mode locally:
 
 ```bash
+cd web
 cp .env.example .env.local
 ```
 
@@ -113,28 +162,39 @@ VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
 ```
 
-Without `.env.local`, the web app runs in desktop-local mode. With `.env.local`, it starts at the Supabase sign-in screen and can:
+## Deployment
 
-- Sign in or create an email/password account.
-- Load active budget memberships and budget names.
-- Read and write shared settings, members, transactions, settlements, and invites.
-- Create shared household budgets.
-- Invite members by email.
-- Accept pending invites for the signed-in email.
-- Refresh cloud data and sign out.
+The web app is deployed as a static Vite app on Cloudflare Pages.
 
-The web app uses the same `budget_id`, `user_id`, `auth_user_id`, JSON `splits`, and per-budget `budget_settings` contract as the iOS app.
-
-## Backups
-
-Local backups are stored outside the repo at:
+Cloudflare Pages settings:
 
 ```text
-/Users/developer/BudgetMate Backups/
+Framework preset: Vite
+Root directory: web
+Build command: npm run build
+Build output directory: dist
 ```
 
-Most recent backup created during this README update:
+Production environment variables:
 
 ```text
-/Users/developer/BudgetMate Backups/BudgetMate-backup-20260622-004246
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
+```
+
+## Product Principles
+
+BudgetMate is designed to feel calm, clear, and practical:
+
+- Lead with financial clarity.
+- Keep sync and shared-budget state visible.
+- Make shared money understandable.
+- Use warmth with restraint.
+- Prefer familiar controls over novelty.
+
+More product notes are available in:
+
+```text
+PRODUCT.md
+DESIGN.md
 ```
