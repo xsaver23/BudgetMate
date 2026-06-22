@@ -2,6 +2,7 @@ import Charts
 import SwiftUI
 
 struct ExpenseCategoryPieChartView: View {
+    @EnvironmentObject private var settingsStore: SettingsStore
     let items: [ExpenseCategoryBreakdown]
     let currencySymbol: String
 
@@ -29,9 +30,11 @@ struct ExpenseCategoryPieChartView: View {
 
                     ForEach(items) { item in
                         HStack(spacing: 8) {
-                            Circle()
-                                .fill(CategoryColor.color(for: item.category))
-                                .frame(width: 10, height: 10)
+                            CategoryIconView(
+                                category: item.category,
+                                emoji: settingsStore.categoryEmoji(for: item.category),
+                                size: 22
+                            )
 
                             Text(item.category.displayName)
                                 .font(.subheadline)
@@ -59,4 +62,5 @@ struct ExpenseCategoryPieChartView: View {
         currencySymbol: "$"
     )
     .padding()
+    .environmentObject(SettingsStore())
 }

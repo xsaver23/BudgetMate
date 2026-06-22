@@ -204,7 +204,7 @@ struct TransactionDetailView: View {
                     HStack(spacing: 8) {
                         if let payer {
                             MemberInitialsBadge(
-                                initials: String(payer.initials.prefix(1)).uppercased(),
+                                initials: payer.displayInitials,
                                 colorHex: payer.colorHex,
                                 size: 24,
                                 accessibilityLabel: "Member \(payer.displayName)",
@@ -250,7 +250,7 @@ struct TransactionDetailView: View {
         let percent = transaction.amount > 0 ? Int((split.amount / transaction.amount * 100).rounded()) : 0
         return HStack(spacing: 10) {
             MemberInitialsBadge(
-                initials: String((member?.initials ?? "?").prefix(1)).uppercased(),
+                initials: member?.displayInitials ?? "?",
                 colorHex: member?.colorHex ?? "#9CA3AF",
                 size: 30,
                 accessibilityLabel: member.map { "Member \($0.displayName)" },

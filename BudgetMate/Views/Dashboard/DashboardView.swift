@@ -205,7 +205,7 @@ struct DashboardView: View {
             )
             ForEach(memberViewModel.members) { member in
                 memberFilterButton(
-                    title: String(member.initials.prefix(1)).uppercased(),
+                    title: member.displayInitials,
                     color: Color(hex: member.colorHex),
                     selection: member.id,
                     accessibilityLabel: "Filter dashboard to \(member.displayName)"
@@ -222,22 +222,14 @@ struct DashboardView: View {
         selection: UUID?,
         accessibilityLabel: String
     ) -> some View {
-        Button {
+        MemberFilterButton(
+            title: title,
+            color: color,
+            isSelected: selectedMemberId == selection,
+            accessibilityLabel: accessibilityLabel
+        ) {
             selectedMemberId = selection
-        } label: {
-            Text(title)
-                .font(.headline.weight(.black))
-                .foregroundStyle(.white)
-                .frame(width: 44, height: 44)
-                .background(color, in: Circle())
-                .overlay {
-                    Circle()
-                        .stroke(selectedMemberId == selection ? AppTheme.secondaryAction : .clear, lineWidth: 4)
-                }
         }
-        .buttonStyle(PressableButtonStyle(scale: 0.92))
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityValue(selectedMemberId == selection ? "Selected" : "Not selected")
     }
 
     // MARK: - Balance hero
@@ -316,8 +308,6 @@ struct DashboardView: View {
     }
 
     private var damBarSummary: some View {
-        let spent = derivedMetrics.totals.totalExpenses
-        let remaining = derivedMetrics.totals.remainingBudget
         let clampedProgress = min(max(budgetProgress, 0), 1)
 
         return VStack(alignment: .leading, spacing: 12) {
@@ -472,7 +462,7 @@ struct DashboardView: View {
     }
 
     private func settlementAvatar(member: BudgetMember, color: Color, borderColor: Color) -> some View {
-        Text(String(member.initials.prefix(1)).uppercased())
+        Text(member.displayInitials)
             .font(.system(size: 20, weight: .black, design: .rounded))
             .foregroundStyle(Color.white)
             .frame(width: 44, height: 44)
@@ -876,7 +866,7 @@ struct DashboardView: View {
 
     private func filterLabel(for member: BudgetMember) -> String {
         let trimmed = member.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return member.initials }
+        guard !trimmed.isEmpty else { return member.displayInitials }
 
         // Segmented controls are tight; prefer first name for readability.
         let firstWord = trimmed.split(separator: " ").first.map(String.init) ?? trimmed

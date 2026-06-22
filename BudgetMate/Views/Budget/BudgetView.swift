@@ -111,12 +111,13 @@ struct BudgetView: View {
                 CategoryEditorView(
                     mode: categoryBeingEdited == nil ? .add : .edit,
                     initialName: categoryBeingEdited?.displayName ?? "",
+                    initialEmoji: categoryBeingEdited.flatMap { settingsStore.categoryEmoji(for: $0) } ?? "",
                     onCancel: {
                         isShowingCategoryEditor = false
                         categoryBeingEdited = nil
                     },
-                    onSave: { name in
-                        saveCategoryName(name)
+                    onSave: { name, emoji in
+                        saveCategoryName(name, emoji: emoji)
                     }
                 )
             }
@@ -219,7 +220,9 @@ struct BudgetView: View {
 
                     Button(isEditingCategories ? "Done" : "Edit") {
                         withAnimation(.easeInOut(duration: 0.2)) {
-                            if !isEditingCategories {
+                            if isEditingCategories {
+                                saveCategoryBudgets(showMessage: false)
+                            } else {
                                 loadCategoryBudgetInputs()
                             }
                             isEditingCategories.toggle()
@@ -251,16 +254,6 @@ struct BudgetView: View {
                 }
 
                 if isEditingCategories {
-                    Button("Save Category Budgets") {
-                        saveCategoryBudgets()
-                    }
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(Color.white)
-                    .frame(maxWidth: .infinity, minHeight: 46)
-                    .background(AppTheme.brand, in: Capsule())
-                    .buttonStyle(.plain)
-                    .buttonStyle(PressableButtonStyle(scale: 0.98))
-
                     Button {
                         categoryBeingEdited = nil
                         isShowingCategoryEditor = true
@@ -279,6 +272,12 @@ struct BudgetView: View {
     private func categoryBudgetRow(for category: TransactionCategory) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
+                CategoryIconView(
+                    category: category,
+                    emoji: settingsStore.categoryEmoji(for: category),
+                    size: 28
+                )
+
                 if isEditingCategories {
                     Button {
                         categoryBeingEdited = category
@@ -371,7 +370,7 @@ struct BudgetView: View {
                 ForEach(tabMetrics.expensesByMember, id: \.member.id) { entry in
                     HStack(spacing: 10) {
                         MemberInitialsBadge(
-                            initials: entry.member.initials,
+                            initials: entry.member.displayInitials,
                             colorHex: entry.member.colorHex,
                             size: 20,
                             accessibilityLabel: "Member \(entry.member.displayName)"
@@ -475,7 +474,7 @@ struct BudgetView: View {
         categoryBudgetInputs = values
     }
 
-    private func saveCategoryBudgets() {
+    private func saveCategoryBudgets(showMessage: Bool = true) {
         var updates: [TransactionCategory: Double] = [:]
         for category in categories {
             let raw = categoryBudgetInputs[category.rawValue]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -493,12 +492,19 @@ struct BudgetView: View {
             userScopeId: authStore.currentUserScopeId,
             budgetScopeId: authStore.currentBudgetScopeId
         )
-        saveMessage = "Category budgets updated."
+        if showMessage {
+            saveMessage = "Category budgets updated."
+        }
     }
 
-    private func saveCategoryName(_ name: String) {
+    private func saveCategoryName(_ name: String, emoji: String?) {
         guard let rawValue = TransactionCategory.customRawValue(from: name) else {
             saveMessage = "Enter a category name."
+            return
+        }
+        let normalizedEmoji = emoji?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard normalizedEmoji.isEmpty || normalizedEmoji.isSingleEmoji else {
+            saveMessage = "Use one emoji for the category icon."
             return
         }
 
@@ -516,11 +522,13 @@ struct BudgetView: View {
             return
         }
 
-        if let oldCategory {
-            settingsStore.renameCategory(from: oldCategory, to: newCategory)
+        if let oldCategory, oldCategory == newCategory {
+            settingsStore.updateCategoryEmoji(normalizedEmoji.isEmpty ? nil : normalizedEmoji, for: oldCategory)
+        } else if let oldCategory {
+            settingsStore.renameCategory(from: oldCategory, to: newCategory, emoji: normalizedEmoji.isEmpty ? nil : normalizedEmoji)
             reassignTransactions(from: oldCategory, to: newCategory)
         } else {
-            settingsStore.upsertCategory(newCategory)
+            settingsStore.upsertCategory(newCategory, emoji: normalizedEmoji.isEmpty ? nil : normalizedEmoji)
         }
 
         loadCategoryBudgetInputs()
@@ -568,8 +576,30 @@ struct BudgetView: View {
     private func budgetBinding(for category: TransactionCategory) -> Binding<String> {
         Binding(
             get: { categoryBudgetInputs[category.rawValue] ?? "" },
-            set: { categoryBudgetInputs[category.rawValue] = $0 }
+            set: { categoryBudgetInputs[category.rawValue] = Self.sanitizedMoneyText($0) }
         )
+    }
+
+    private static func sanitizedMoneyText(_ text: String) -> String {
+        var result = ""
+        var hasDecimalSeparator = false
+        var fractionalDigitCount = 0
+
+        for character in text {
+            if character.isNumber {
+                if hasDecimalSeparator {
+                    guard fractionalDigitCount < 2 else { continue }
+                    fractionalDigitCount += 1
+                }
+                result.append(character)
+            } else if character == "." || character == "," {
+                guard !hasDecimalSeparator else { continue }
+                hasDecimalSeparator = true
+                result.append(".")
+            }
+        }
+
+        return result
     }
 
     private func budgetDisplayValue(for category: TransactionCategory) -> String {
@@ -673,23 +703,29 @@ private struct CategoryEditorView: View {
 
     let mode: Mode
     let initialName: String
+    let initialEmoji: String
     let onCancel: () -> Void
-    let onSave: (String) -> Void
+    let onSave: (String, String?) -> Void
 
     @State private var name: String
+    @State private var emoji: String
+    @State private var validationMessage: String?
     @FocusState private var nameFocused: Bool
 
     init(
         mode: Mode,
         initialName: String,
+        initialEmoji: String,
         onCancel: @escaping () -> Void,
-        onSave: @escaping (String) -> Void
+        onSave: @escaping (String, String?) -> Void
     ) {
         self.mode = mode
         self.initialName = initialName
+        self.initialEmoji = initialEmoji
         self.onCancel = onCancel
         self.onSave = onSave
         _name = State(initialValue: initialName)
+        _emoji = State(initialValue: initialEmoji)
     }
 
     var body: some View {
@@ -701,6 +737,24 @@ private struct CategoryEditorView: View {
                         .textInputAutocapitalization(.words)
                         .submitLabel(.done)
                         .onSubmit(save)
+
+                    TextField("Emoji icon", text: $emoji)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .onChange(of: emoji) { _, value in
+                            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if trimmed.isEmpty || trimmed.isSingleEmoji {
+                                validationMessage = nil
+                            } else {
+                                validationMessage = "Use one emoji, or leave it blank."
+                            }
+                        }
+
+                    if let validationMessage {
+                        Text(validationMessage)
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.expense)
+                    }
                 }
             }
             .navigationTitle(mode.title)
@@ -723,6 +777,11 @@ private struct CategoryEditorView: View {
     }
 
     private func save() {
-        onSave(name)
+        let trimmedEmoji = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedEmoji.isEmpty || trimmedEmoji.isSingleEmoji else {
+            validationMessage = "Use one emoji, or leave it blank."
+            return
+        }
+        onSave(name, trimmedEmoji.isEmpty ? nil : trimmedEmoji)
     }
 }

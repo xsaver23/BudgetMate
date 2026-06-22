@@ -27,6 +27,9 @@ struct EditProfileNameView: View {
                     TextField("Profile name", text: $name)
                         .textContentType(.name)
                         .focused($isFocused)
+                        .onChange(of: name) { _, value in
+                            validationMessage = value.containsEmoji ? "Names cannot include emoji." : nil
+                        }
 
                     if let validationMessage {
                         Text(validationMessage)
@@ -62,6 +65,10 @@ struct EditProfileNameView: View {
     private func save() {
         guard !trimmedName.isEmpty else {
             validationMessage = "Enter a profile name."
+            return
+        }
+        guard !name.containsEmoji else {
+            validationMessage = "Names cannot include emoji."
             return
         }
 

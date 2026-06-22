@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct TransactionRowView: View {
+    @EnvironmentObject private var settingsStore: SettingsStore
     let transaction: Transaction
     let currencySymbol: String
     let members: [BudgetMember]
@@ -19,7 +20,7 @@ struct TransactionRowView: View {
     }
 
     private var badgeInitials: String {
-        createdByMember?.initials ?? "?"
+        createdByMember?.displayInitials ?? "?"
     }
 
     private var badgeSymbol: String {
@@ -48,13 +49,11 @@ struct TransactionRowView: View {
     var body: some View {
         CardContainer {
             HStack(spacing: 12) {
-                Circle()
-                    .fill(Color.black.opacity(0.06))
-                    .frame(width: 38, height: 38)
-                    .overlay(
-                        Image(systemName: transaction.type == .income ? "arrow.down.circle" : "arrow.up.circle")
-                            .foregroundStyle(.primary)
-                    )
+                CategoryIconView(
+                    category: transaction.category,
+                    emoji: settingsStore.categoryEmoji(for: transaction.category),
+                    size: 38
+                )
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
@@ -90,6 +89,7 @@ struct TransactionRowView: View {
 /// Lightweight transaction row used inside grouped day cards and dashboard
 /// summaries. The payer's avatar leads the row for shared-context color-coding.
 struct CompactTransactionRow: View {
+    @EnvironmentObject private var settingsStore: SettingsStore
     let transaction: Transaction
     let currencySymbol: String
     let members: [BudgetMember]
@@ -122,7 +122,7 @@ struct CompactTransactionRow: View {
     }
 
     private var badgeSymbol: String {
-        String((createdByMember?.initials ?? "?").prefix(1)).uppercased()
+        createdByMember?.displayInitials ?? "?"
     }
 
     private var badgeAccessibilityLabel: String {
@@ -144,12 +144,21 @@ struct CompactTransactionRow: View {
                 MemberAvatarCluster(members: participantMembers, size: 34)
                     .frame(minWidth: 78, alignment: .leading)
             } else {
-                MemberInitialsBadge(
-                    initials: badgeSymbol,
-                    colorHex: createdByMember?.colorHex ?? "#9CA3AF",
-                    size: 38,
-                    accessibilityLabel: badgeAccessibilityLabel
-                )
+                ZStack(alignment: .bottomTrailing) {
+                    CategoryIconView(
+                        category: transaction.category,
+                        emoji: settingsStore.categoryEmoji(for: transaction.category),
+                        size: 38
+                    )
+                    MemberInitialsBadge(
+                        initials: badgeSymbol,
+                        colorHex: createdByMember?.colorHex ?? "#9CA3AF",
+                        size: 18,
+                        accessibilityLabel: badgeAccessibilityLabel
+                    )
+                    .offset(x: 4, y: 4)
+                }
+                .frame(width: 44, height: 44)
             }
 
             VStack(alignment: .leading, spacing: 3) {
@@ -192,4 +201,5 @@ struct CompactTransactionRow: View {
     }
     .padding()
     .background(AppTheme.background)
+    .environmentObject(SettingsStore())
 }

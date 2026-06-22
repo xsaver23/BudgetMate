@@ -46,7 +46,7 @@ struct AppTopBar: View {
 
             Button(action: onProfileTap) {
                 MemberInitialsBadge(
-                    initials: member.initials,
+                    initials: member.displayInitials,
                     colorHex: member.colorHex,
                     size: 48,
                     accessibilityLabel: "Open settings. Active member \(member.displayName)"

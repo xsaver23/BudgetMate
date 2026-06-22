@@ -98,7 +98,7 @@ struct BudgetMembersView: View {
     private func memberRow(_ member: BudgetMember) -> some View {
         HStack(spacing: 12) {
             MemberInitialsBadge(
-                initials: member.initials,
+                initials: member.displayInitials,
                 colorHex: member.colorHex,
                 size: 52,
                 accessibilityLabel: "Member \(member.displayName)"

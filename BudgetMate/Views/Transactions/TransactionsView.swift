@@ -117,33 +117,38 @@ struct TransactionsView: View {
 
     private var memberFilterCard: some View {
         HStack(spacing: 12) {
-            memberFilterButton(title: "All", color: AppTheme.brand, selection: nil)
+            memberFilterButton(
+                title: "All",
+                color: AppTheme.brand,
+                selection: nil,
+                accessibilityLabel: "Show all members"
+            )
             ForEach(memberViewModel.members) { member in
                 memberFilterButton(
-                    title: String(member.initials.prefix(1)).uppercased(),
+                    title: member.displayInitials,
                     color: Color(hex: member.colorHex),
-                    selection: member.id
+                    selection: member.id,
+                    accessibilityLabel: "Filter transactions to \(member.displayName)"
                 )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func memberFilterButton(title: String, color: Color, selection: UUID?) -> some View {
-        Button {
+    private func memberFilterButton(
+        title: String,
+        color: Color,
+        selection: UUID?,
+        accessibilityLabel: String
+    ) -> some View {
+        MemberFilterButton(
+            title: title,
+            color: color,
+            isSelected: selectedMemberId == selection,
+            accessibilityLabel: accessibilityLabel
+        ) {
             selectedMemberId = selection
-        } label: {
-            Text(title)
-                .font(.headline.weight(.black))
-                .foregroundStyle(.white)
-                .frame(width: 42, height: 42)
-                .background(color, in: Circle())
-                .overlay {
-                    Circle()
-                        .stroke(selectedMemberId == selection ? AppTheme.secondaryAction : .clear, lineWidth: 4)
-                }
         }
-        .buttonStyle(PressableButtonStyle(scale: 0.92))
     }
 
     private func dayCard(date: Date, items: [Transaction]) -> some View {

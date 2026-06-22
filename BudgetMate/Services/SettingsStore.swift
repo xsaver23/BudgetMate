@@ -31,8 +31,7 @@ final class SettingsStore: ObservableObject {
     }
 
     func updateMonthlyBudget(_ amount: Double) {
-        settings.monthlyBudget = max(0, amount)
-        persist()
+        // Monthly budget is derived from visible category budgets.
     }
 
     func updateCurrencyCode(_ code: String) {
@@ -52,6 +51,10 @@ final class SettingsStore: ObservableObject {
 
     func budgetAmount(for category: TransactionCategory) -> Double {
         settings.categoryBudgets[category.rawValue] ?? 0
+    }
+
+    func categoryEmoji(for category: TransactionCategory) -> String? {
+        settings.emoji(for: category)
     }
 
     func hiddenExpenseCategoryRawValues() -> Set<String> {
@@ -77,25 +80,44 @@ final class SettingsStore: ObservableObject {
         persist()
     }
 
-    func upsertCategory(_ category: TransactionCategory, budgetAmount: Double = 0) {
+    func upsertCategory(_ category: TransactionCategory, budgetAmount: Double = 0, emoji: String? = nil) {
         settings.categoryBudgets[category.rawValue] = max(0, budgetAmount)
         settings.categoryBudgets.removeValue(forKey: TransactionCategory.hiddenMarkerKey(for: category))
+        updateCategoryEmojiInMemory(emoji, for: category)
         persist()
     }
 
-    func renameCategory(from oldCategory: TransactionCategory, to newCategory: TransactionCategory) {
+    func renameCategory(from oldCategory: TransactionCategory, to newCategory: TransactionCategory, emoji: String? = nil) {
         guard oldCategory != newCategory else { return }
         let currentBudget = settings.categoryBudgets[oldCategory.rawValue] ?? 0
+        let currentEmoji = emoji ?? settings.categoryEmojis[oldCategory.rawValue]
         settings.categoryBudgets[newCategory.rawValue] = currentBudget
+        updateCategoryEmojiInMemory(currentEmoji, for: newCategory)
 
         if oldCategory.isBuiltInExpenseCategory {
             settings.categoryBudgets[TransactionCategory.hiddenMarkerKey(for: oldCategory)] = 1
+            settings.categoryEmojis.removeValue(forKey: oldCategory.rawValue)
         } else {
             settings.categoryBudgets.removeValue(forKey: oldCategory.rawValue)
+            settings.categoryEmojis.removeValue(forKey: oldCategory.rawValue)
         }
 
         settings.categoryBudgets.removeValue(forKey: TransactionCategory.hiddenMarkerKey(for: newCategory))
         persist()
+    }
+
+    func updateCategoryEmoji(_ emoji: String?, for category: TransactionCategory) {
+        updateCategoryEmojiInMemory(emoji, for: category)
+        persist()
+    }
+
+    private func updateCategoryEmojiInMemory(_ emoji: String?, for category: TransactionCategory) {
+        let trimmed = emoji?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
+            settings.categoryEmojis.removeValue(forKey: category.rawValue)
+        } else if trimmed.isSingleEmoji {
+            settings.categoryEmojis[category.rawValue] = trimmed
+        }
     }
 
     func removeCategory(_ category: TransactionCategory) {
@@ -104,8 +126,10 @@ final class SettingsStore: ObservableObject {
         if category.isBuiltInExpenseCategory {
             settings.categoryBudgets[TransactionCategory.hiddenMarkerKey(for: category)] = 1
             settings.categoryBudgets[category.rawValue] = 0
+            settings.categoryEmojis.removeValue(forKey: category.rawValue)
         } else {
             settings.categoryBudgets.removeValue(forKey: category.rawValue)
+            settings.categoryEmojis.removeValue(forKey: category.rawValue)
         }
 
         persist()

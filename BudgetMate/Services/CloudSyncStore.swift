@@ -375,6 +375,18 @@ final class CloudSyncStore: ObservableObject {
         }
     }
 
+    func deleteAllBudgetDataNow(userScopeId: String, budgetScopeId: String? = nil) async throws {
+        do {
+            try await runWithRetry {
+                try await self.service.deleteAllBudgetData(userScopeId: userScopeId, budgetScopeId: budgetScopeId)
+            }
+            markSynced()
+        } catch {
+            markFailed(error, context: "Clearing cloud budget data")
+            throw error
+        }
+    }
+
     private func runSave(_ operation: @escaping () async throws -> Void) async {
         do {
             try await runWithRetry(operation)

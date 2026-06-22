@@ -109,7 +109,7 @@ struct SettlementListView: View {
     }
 
     private func avatar(for member: BudgetMember) -> some View {
-        Text(String(member.initials.prefix(1)).uppercased())
+        Text(member.displayInitials)
             .font(.system(size: 20, weight: .black, design: .rounded))
             .foregroundStyle(Color.white)
             .frame(width: 44, height: 44)

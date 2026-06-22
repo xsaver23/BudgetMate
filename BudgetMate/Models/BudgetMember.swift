@@ -60,9 +60,10 @@ struct BudgetMember: Identifiable, Codable, Hashable {
     // Backward-compatible aliases while we migrate UI naming.
     var name: String { displayName }
     var colorHex: String { color }
+    var displayInitials: String { Self.initials(from: displayName) }
 
     static func normalizedDisplayName(_ displayName: String) -> String {
-        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = displayName.withoutEmoji().trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Member" : trimmed
     }
 
@@ -74,20 +75,38 @@ struct BudgetMember: Identifiable, Codable, Hashable {
 
     static func normalizedInitials(_ initials: String, displayName: String) -> String {
         let trimmed = initials.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
-            return String(trimmed.prefix(2)).uppercased()
+        if !trimmed.isEmpty, trimmed != "?" {
+            let safeInitials = trimmed.withoutEmoji()
+            if !safeInitials.isEmpty {
+                return String(safeInitials.prefix(2)).uppercased()
+            }
         }
 
-        return displayName
+        return Self.initials(from: displayName)
+    }
+
+    static func initials(from displayName: String) -> String {
+        let parts = displayName
+            .withoutEmoji()
             .split(separator: " ")
-            .prefix(2)
-            .compactMap(\.first)
-            .map { String($0).uppercased() }
-            .joined()
+            .filter { !$0.isEmpty }
+
+        if parts.count >= 2 {
+            return (String(parts[0].prefix(1)) + String(parts[1].prefix(1))).uppercased()
+        }
+
+        if let first = parts.first?.first {
+            return String(first).uppercased()
+        }
+
+        return "?"
     }
 
     func validateForSync() throws {
         guard !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw BudgetDataValidationError.emptyMemberName
+        }
+        guard !displayName.containsEmoji else {
             throw BudgetDataValidationError.emptyMemberName
         }
     }

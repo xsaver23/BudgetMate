@@ -22,7 +22,6 @@ struct SettingsView: View {
         )
     }
 
-    @State private var monthlyBudgetText: String = ""
     @State private var isShowingClearConfirmation = false
     @State private var isShowingLeaveBudgetConfirmation = false
     @State private var isShowingProfileEditor = false
@@ -62,18 +61,6 @@ struct SettingsView: View {
             ScrollView {
                 VStack(spacing: 18) {
                     AppTopBar(member: memberViewModel.activeMember)
-
-                    settingsSection("Budget") {
-                        settingsRow("Monthly budget") {
-                            TextField("0.00", text: $monthlyBudgetText)
-                                .keyboardType(.decimalPad)
-                                .multilineTextAlignment(.trailing)
-                                .font(settingsRowValueFont)
-                                .foregroundStyle(BudgetBeaverPalette.ink)
-                                .frame(width: 120)
-                                .onSubmit { applyMonthlyBudget() }
-                        }
-                    }
 
                     settingsSection("Currency") {
                         settingsRow("Household Currency") {
@@ -475,18 +462,6 @@ struct SettingsView: View {
     }
 
     private func syncFieldsFromStore() {
-        monthlyBudgetText = String(format: "%.2f", settingsStore.settings.monthlyBudget)
-    }
-
-    private func applyMonthlyBudget() {
-        guard let value = Double(monthlyBudgetText) else { return }
-        settingsStore.updateMonthlyBudget(value)
-        syncFieldsFromStore()
-        cloudSyncStore.saveSettings(
-            settingsStore.settings,
-            userScopeId: authStore.currentUserScopeId,
-            budgetScopeId: authStore.currentBudgetScopeId
-        )
     }
 
     private var profileDisplayName: String {
@@ -529,7 +504,6 @@ struct SettingsView: View {
             memberViewModel.replaceMembers(with: BudgetSampleData.householdMembers(owner: memberViewModel.activeMember))
         }
 
-        settingsStore.updateMonthlyBudget(BudgetSampleData.monthlyBudget)
         settingsStore.updateCategoryBudgets(BudgetSampleData.categoryBudgets)
         syncFieldsFromStore()
         cloudSyncStore.saveSettings(
@@ -574,29 +548,35 @@ struct SettingsView: View {
         let transactionCount = scopedTransactions.count
         let settlementCount = scopedSettlements.count
 
-        cloudSyncStore.deleteAllBudgetData(
-            userScopeId: authStore.currentUserScopeId,
-            budgetScopeId: authStore.currentBudgetScopeId
-        )
-        scopedTransactions.forEach { modelContext.delete($0) }
-        scopedSettlements.forEach { modelContext.delete($0) }
-        do {
-            try modelContext.save()
-        } catch {
-            cloudSyncStore.recordSyncIssue(error, context: "Clearing local budget data")
-        }
+        Task {
+            do {
+                try await cloudSyncStore.deleteAllBudgetDataNow(
+                    userScopeId: authStore.currentUserScopeId,
+                    budgetScopeId: authStore.currentBudgetScopeId
+                )
+                scopedTransactions.forEach { modelContext.delete($0) }
+                scopedSettlements.forEach { modelContext.delete($0) }
+                do {
+                    try modelContext.save()
+                } catch {
+                    cloudSyncStore.recordSyncIssue(error, context: "Clearing local budget data")
+                }
 
-        if transactionCount == 0 && settlementCount == 0 {
-            clearFeedbackMessage = "Nothing to clear."
-        } else {
-            var parts: [String] = []
-            if transactionCount > 0 {
-                parts.append("\(transactionCount) transaction\(transactionCount == 1 ? "" : "s")")
+                if transactionCount == 0 && settlementCount == 0 {
+                    clearFeedbackMessage = "Nothing to clear."
+                } else {
+                    var parts: [String] = []
+                    if transactionCount > 0 {
+                        parts.append("\(transactionCount) transaction\(transactionCount == 1 ? "" : "s")")
+                    }
+                    if settlementCount > 0 {
+                        parts.append("\(settlementCount) settle-up record\(settlementCount == 1 ? "" : "s")")
+                    }
+                    clearFeedbackMessage = "Cleared " + parts.joined(separator: " and ") + "."
+                }
+            } catch {
+                clearFeedbackMessage = cloudSyncStore.userFacingMessage(for: error)
             }
-            if settlementCount > 0 {
-                parts.append("\(settlementCount) settle-up record\(settlementCount == 1 ? "" : "s")")
-            }
-            clearFeedbackMessage = "Cleared " + parts.joined(separator: " and ") + "."
         }
     }
 

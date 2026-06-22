@@ -94,7 +94,7 @@ struct SettlementBreakdownView: View {
 
     private func memberBadge(_ member: BudgetMember, size: CGFloat) -> some View {
         MemberInitialsBadge(
-            initials: String(member.initials.prefix(1)).uppercased(),
+            initials: member.displayInitials,
             colorHex: member.colorHex,
             size: size,
             accessibilityLabel: "Member \(member.displayName)"
@@ -372,7 +372,7 @@ private struct SettlementDetailView: View {
         HStack(spacing: 8) {
             if let member {
                 MemberInitialsBadge(
-                    initials: String(member.initials.prefix(1)).uppercased(),
+                    initials: member.displayInitials,
                     colorHex: member.colorHex,
                     size: 24,
                     accessibilityLabel: "Member \(member.displayName)",

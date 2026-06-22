@@ -38,7 +38,7 @@ struct MemberAvatarCluster: View {
         HStack(spacing: -size * 0.38) {
             ForEach(visible) { member in
                 MemberInitialsBadge(
-                    initials: String(member.initials.prefix(1)).uppercased(),
+                    initials: member.displayInitials,
                     colorHex: member.colorHex,
                     size: size,
                     accessibilityLabel: "Member \(member.displayName)"

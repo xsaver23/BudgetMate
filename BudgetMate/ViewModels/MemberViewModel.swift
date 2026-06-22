@@ -161,8 +161,9 @@ final class MemberViewModel: ObservableObject {
 
     @discardableResult
     func inviteMember(displayName: String, email: String?) -> BudgetMember? {
-        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedName = BudgetMember.normalizedDisplayName(displayName)
         guard !trimmedName.isEmpty else { return nil }
+        guard !displayName.containsEmoji else { return nil }
 
         let trimmedEmail = email?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedEmail = (trimmedEmail?.isEmpty == true) ? nil : trimmedEmail?.lowercased()
@@ -170,7 +171,7 @@ final class MemberViewModel: ObservableObject {
         let newMember = BudgetMember(
             displayName: trimmedName,
             email: normalizedEmail,
-            initials: initials(from: trimmedName),
+            initials: BudgetMember.initials(from: trimmedName),
             color: nextColor(),
             role: .member,
             inviteStatus: .invited,
@@ -182,15 +183,16 @@ final class MemberViewModel: ObservableObject {
     }
 
     func completeProfile(displayName: String) {
-        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedName = BudgetMember.normalizedDisplayName(displayName)
         guard !trimmedName.isEmpty else { return }
+        guard !displayName.containsEmoji else { return }
 
         let current = activeMember
         let profileMember = BudgetMember(
             id: current.id,
             displayName: trimmedName,
             email: current.email,
-            initials: initials(from: trimmedName),
+            initials: BudgetMember.initials(from: trimmedName),
             color: current.color,
             authUserId: UUID(uuidString: currentUserScopeId) ?? current.authUserId,
             role: .owner,
@@ -214,8 +216,9 @@ final class MemberViewModel: ObservableObject {
 
     @discardableResult
     func updateProfileName(_ displayName: String, userScopeId: String) -> Bool {
-        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedName = BudgetMember.normalizedDisplayName(displayName)
         guard !trimmedName.isEmpty else { return false }
+        guard !displayName.containsEmoji else { return false }
 
         let profileId = UUID(uuidString: userScopeId)
         let normalizedEmail = Self.normalizedEmail(currentUserEmail)
@@ -235,7 +238,7 @@ final class MemberViewModel: ObservableObject {
             id: current.id,
             displayName: trimmedName,
             email: current.email,
-            initials: initials(from: trimmedName),
+            initials: BudgetMember.initials(from: trimmedName),
             color: current.color,
             authUserId: current.authUserId,
             role: current.role,
@@ -286,20 +289,6 @@ final class MemberViewModel: ObservableObject {
     private func persistMembers() {
         currentBudget.members = members
         repository.saveCurrentBudget(currentBudget)
-    }
-
-    private func initials(from displayName: String) -> String {
-        let parts = displayName
-            .split(separator: " ")
-            .filter { !$0.isEmpty }
-
-        if parts.count >= 2 {
-            let first = String(parts[0].prefix(1))
-            let second = String(parts[1].prefix(1))
-            return (first + second).uppercased()
-        }
-
-        return String(displayName.prefix(2)).uppercased()
     }
 
     private func nextColor() -> String {
@@ -362,7 +351,7 @@ final class MemberViewModel: ObservableObject {
             id: memberId,
             displayName: displayName,
             email: email,
-            initials: initials(from: displayName),
+            initials: BudgetMember.initials(from: displayName),
             color: "#3B82F6",
             authUserId: memberId,
             role: .owner,
@@ -404,17 +393,6 @@ final class MemberViewModel: ObservableObject {
             .joined(separator: " ")
     }
 
-    private static func initials(from displayName: String) -> String {
-        let parts = displayName
-            .split(separator: " ")
-            .filter { !$0.isEmpty }
-
-        if parts.count >= 2 {
-            return (parts[0].prefix(1) + parts[1].prefix(1)).uppercased()
-        }
-
-        return String(displayName.prefix(2)).uppercased()
-    }
 }
 
 private extension Array {

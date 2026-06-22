@@ -137,6 +137,7 @@ create table if not exists public.budget_settings (
   currency_code text not null default 'USD',
   appearance text not null default 'system' check (appearance in ('system', 'light', 'dark')),
   category_budgets jsonb not null default '{}'::jsonb,
+  category_emojis jsonb not null default '{}'::jsonb,
   updated_at timestamptz not null default now()
 );
 
@@ -701,3 +702,37 @@ from auth.users auth_user
 where lower(invite.email) = lower(auth_user.email)
   and invite.status = 'accepted'
   and invite.accepted_by_user_id is null;
+
+-- Migration: support category emoji icons and shared-budget clear-all.
+alter table public.budget_settings
+add column if not exists category_emojis jsonb not null default '{}'::jsonb;
+
+drop policy if exists "Budget members can delete shared transactions" on public.budget_transactions;
+create policy "Budget members can delete shared transactions"
+on public.budget_transactions
+for delete
+to authenticated
+using (
+  exists (
+    select 1
+    from public.budget_memberships membership
+    where membership.budget_id = budget_transactions.budget_id
+      and membership.user_id = auth.uid()
+      and membership.status = 'active'
+  )
+);
+
+drop policy if exists "Budget members can delete shared settlements" on public.budget_settlements;
+create policy "Budget members can delete shared settlements"
+on public.budget_settlements
+for delete
+to authenticated
+using (
+  exists (
+    select 1
+    from public.budget_memberships membership
+    where membership.budget_id = budget_settlements.budget_id
+      and membership.user_id = auth.uid()
+      and membership.status = 'active'
+  )
+);

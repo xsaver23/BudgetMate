@@ -14,7 +14,7 @@ struct ProfileSetupView: View {
     }
 
     private var canContinue: Bool {
-        !trimmedName.isEmpty
+        !trimmedName.isEmpty && !displayName.containsEmoji
     }
 
     var body: some View {
@@ -83,6 +83,9 @@ struct ProfileSetupView: View {
                         .focused($isNameFocused)
                         .padding(12)
                         .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .onChange(of: displayName) { _, value in
+                            validationMessage = value.containsEmoji ? "Names can use letters, spaces, hyphens, and apostrophes, but not emoji." : nil
+                        }
                 }
 
                 if let validationMessage {
@@ -118,7 +121,9 @@ struct ProfileSetupView: View {
 
     private func continueToApp() {
         guard canContinue else {
-            validationMessage = "Enter your name to continue."
+            validationMessage = displayName.containsEmoji
+                ? "Names can use letters, spaces, hyphens, and apostrophes, but not emoji."
+                : "Enter your name to continue."
             return
         }
 

@@ -189,8 +189,6 @@ struct BudgetMateApp: App {
             return
         }
 
-        lastAutoSyncedAtByScope[syncKey] = .now
-
         let context = persistenceController.container.mainContext
         let transactions: [Transaction]
         let settlements: [Settlement]
@@ -216,6 +214,7 @@ struct BudgetMateApp: App {
             budgetScopeId: budgetScopeId
         )
         guard didRunSync else { return }
+        lastAutoSyncedAtByScope[syncKey] = .now
 
         do {
             if let cloudSettings = try await cloudSyncStore.fetchSettings(userScopeId: userScopeId, budgetScopeId: budgetScopeId) {
@@ -244,10 +243,11 @@ struct BudgetMateApp: App {
     @MainActor
     private func runAutoSyncLoop(userScopeId: String, budgetScopeId: String) async {
         guard memberViewModel.isProfileComplete else { return }
+        await autoSyncAuthenticatedUser(userScopeId, budgetScopeId: budgetScopeId, force: false)
 
         while !Task.isCancelled {
             do {
-                try await Task.sleep(for: .seconds(60))
+                try await Task.sleep(for: .seconds(30))
             } catch {
                 return
             }

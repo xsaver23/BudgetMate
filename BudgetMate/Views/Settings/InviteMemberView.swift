@@ -5,12 +5,14 @@ struct InviteMemberView: View {
 
     @State private var displayName: String = ""
     @State private var email: String = ""
+    @State private var validationMessage: String?
 
     let onSave: (_ displayName: String, _ email: String?) -> Void
 
     private var canSave: Bool {
         !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-            !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            !displayName.containsEmoji
     }
 
     var body: some View {
@@ -18,10 +20,18 @@ struct InviteMemberView: View {
             Form {
                 Section("Member Details") {
                     TextField("Name", text: $displayName)
+                        .onChange(of: displayName) { _, value in
+                            validationMessage = value.containsEmoji ? "Names cannot include emoji." : nil
+                        }
                     TextField("Email", text: $email)
                         .keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                    if let validationMessage {
+                        Text(validationMessage)
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.expense)
+                    }
                 }
 
                 Section {

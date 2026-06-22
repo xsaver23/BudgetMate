@@ -46,6 +46,7 @@ struct CloudBudgetSettingsRow: Codable {
     let currencyCode: String
     let appearance: String
     let categoryBudgets: [String: Double]
+    let categoryEmojis: [String: String]
 
     enum CodingKeys: String, CodingKey {
         case userId = "user_id"
@@ -54,6 +55,25 @@ struct CloudBudgetSettingsRow: Codable {
         case currencyCode = "currency_code"
         case appearance
         case categoryBudgets = "category_budgets"
+        case categoryEmojis = "category_emojis"
+    }
+
+    init(
+        userId: UUID,
+        budgetId: UUID,
+        monthlyBudget: Double,
+        currencyCode: String,
+        appearance: String,
+        categoryBudgets: [String: Double],
+        categoryEmojis: [String: String] = [:]
+    ) {
+        self.userId = userId
+        self.budgetId = budgetId
+        self.monthlyBudget = monthlyBudget
+        self.currencyCode = currencyCode
+        self.appearance = appearance
+        self.categoryBudgets = categoryBudgets
+        self.categoryEmojis = categoryEmojis.filter { $0.value.isSingleEmoji }
     }
 
     init(settings: BudgetSettings, userId: UUID, budgetId: UUID? = nil) {
@@ -63,6 +83,19 @@ struct CloudBudgetSettingsRow: Codable {
         currencyCode = settings.currencyCode
         appearance = settings.appearance.rawValue
         categoryBudgets = settings.categoryBudgets
+        categoryEmojis = settings.categoryEmojis
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        userId = try container.decode(UUID.self, forKey: .userId)
+        budgetId = try container.decode(UUID.self, forKey: .budgetId)
+        monthlyBudget = try container.decodeIfPresent(Double.self, forKey: .monthlyBudget) ?? 0
+        currencyCode = try container.decodeIfPresent(String.self, forKey: .currencyCode) ?? CurrencyOption.usd.code
+        appearance = try container.decodeIfPresent(String.self, forKey: .appearance) ?? AppearanceOption.system.rawValue
+        categoryBudgets = try container.decodeIfPresent([String: Double].self, forKey: .categoryBudgets) ?? [:]
+        let decodedEmojis = try container.decodeIfPresent([String: String].self, forKey: .categoryEmojis) ?? [:]
+        categoryEmojis = decodedEmojis.filter { $0.value.isSingleEmoji }
     }
 
     func makeSettings() -> BudgetSettings {
@@ -70,7 +103,8 @@ struct CloudBudgetSettingsRow: Codable {
             monthlyBudget: monthlyBudget,
             currencyCode: currencyCode,
             appearance: AppearanceOption(rawValue: appearance) ?? .system,
-            categoryBudgets: categoryBudgets
+            categoryBudgets: categoryBudgets,
+            categoryEmojis: categoryEmojis
         )
     }
 }
@@ -110,7 +144,7 @@ struct CloudBudgetMemberRow: Codable {
         self.budgetId = budgetId ?? userId
         displayName = member.displayName
         email = member.email
-        initials = member.initials
+        initials = member.displayInitials
         color = member.color
         authUserId = member.authUserId
         role = member.role.rawValue

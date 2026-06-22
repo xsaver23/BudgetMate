@@ -250,7 +250,7 @@ struct AddTransactionView: View {
             .accessibilityLabel(isIncluded ? "Remove \(member.displayName) from split" : "Include \(member.displayName) in split")
 
             MemberInitialsBadge(
-                initials: member.initials,
+                initials: member.displayInitials,
                 colorHex: member.colorHex,
                 size: 28,
                 accessibilityLabel: "Member \(member.displayName)"
