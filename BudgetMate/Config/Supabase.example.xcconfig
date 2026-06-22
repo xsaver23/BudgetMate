@@ -1,2 +1,4 @@
-SUPABASE_PROJECT_URL = https:/$()/your-project.supabase.co
+# Host only — do not include the "https://" scheme. xcconfig treats "//" as a
+# comment, so the scheme is added back in code (see SupabaseConfig.swift).
+SUPABASE_PROJECT_URL = your-project.supabase.co
 SUPABASE_PUBLISHABLE_KEY = your-publishable-key

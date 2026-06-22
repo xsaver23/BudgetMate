@@ -3,10 +3,18 @@ import Supabase
 
 enum SupabaseConfig {
     static let projectURL: URL = {
-        guard let rawValue = value(infoKey: "BUDGETMATE_SUPABASE_URL", configKey: "SUPABASE_PROJECT_URL"),
-              let url = URL(string: rawValue),
-              !rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard let rawValue = value(infoKey: "BUDGETMATE_SUPABASE_URL", configKey: "SUPABASE_PROJECT_URL")?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawValue.isEmpty else {
             preconditionFailure("Missing BUDGETMATE_SUPABASE_URL. Add it to BudgetMate/Config/Supabase.local.xcconfig.")
+        }
+
+        // The config stores the host without a scheme because xcconfig treats
+        // "//" as a comment, which prevented "https://" from surviving into the
+        // generated Info.plist. Add the scheme back here.
+        let normalized = rawValue.contains("://") ? rawValue : "https://\(rawValue)"
+        guard let url = URL(string: normalized) else {
+            preconditionFailure("Invalid BUDGETMATE_SUPABASE_URL value: \(rawValue)")
         }
 
         return url
