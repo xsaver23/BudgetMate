@@ -8,8 +8,19 @@ struct SettingsView: View {
     @EnvironmentObject private var cloudSyncStore: CloudSyncStore
     @EnvironmentObject private var appRefreshStore: AppRefreshStore
     @Environment(\.modelContext) private var modelContext
+    let budgetScopeId: String
     @Query private var transactions: [Transaction]
     @Query private var settlements: [Settlement]
+
+    init(budgetScopeId: String) {
+        self.budgetScopeId = budgetScopeId
+        _transactions = Query(
+            filter: #Predicate<Transaction> { $0.ownerUserId == budgetScopeId }
+        )
+        _settlements = Query(
+            filter: #Predicate<Settlement> { $0.ownerUserId == budgetScopeId }
+        )
+    }
 
     @State private var monthlyBudgetText: String = ""
     @State private var isShowingClearConfirmation = false
@@ -20,13 +31,9 @@ struct SettingsView: View {
     @State private var memberships: [BudgetMembership] = []
     @State private var isLoadingInvites = false
 
-    private var scopedTransactions: [Transaction] {
-        transactions.filter { $0.ownerUserId == authStore.currentBudgetScopeId }
-    }
-
-    private var scopedSettlements: [Settlement] {
-        settlements.filter { $0.ownerUserId == authStore.currentBudgetScopeId }
-    }
+    // Queries are already scoped to the active budget in init.
+    private var scopedTransactions: [Transaction] { transactions }
+    private var scopedSettlements: [Settlement] { settlements }
 
     private var recurringExpenses: [Transaction] {
         scopedTransactions
@@ -841,7 +848,7 @@ struct SettingsView: View {
 }
 
 #Preview {
-    SettingsView()
+    SettingsView(budgetScopeId: "local")
         .environmentObject(SettingsStore())
         .environmentObject(MemberViewModel())
         .environmentObject(AuthSessionStore())

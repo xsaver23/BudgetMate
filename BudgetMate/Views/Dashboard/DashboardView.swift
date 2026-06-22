@@ -9,6 +9,7 @@ struct DashboardView: View {
     @EnvironmentObject private var cloudSyncStore: CloudSyncStore
     @EnvironmentObject private var appRefreshStore: AppRefreshStore
     var onOpenSettings: () -> Void = {}
+    let budgetScopeId: String
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selectedMemberId: UUID? = nil
@@ -18,18 +19,25 @@ struct DashboardView: View {
     @State private var isShowingSettlementList = false
     @State private var derivedMetrics = DashboardDerivedMetrics()
 
-    @Query(sort: \Transaction.date, order: .reverse)
-    private var transactions: [Transaction]
-
+    @Query private var transactions: [Transaction]
     @Query private var settlementRecords: [Settlement]
 
-    private var scopedTransactions: [Transaction] {
-        transactions.filter { $0.ownerUserId == authStore.currentBudgetScopeId }
+    init(budgetScopeId: String, onOpenSettings: @escaping () -> Void = {}) {
+        self.budgetScopeId = budgetScopeId
+        self.onOpenSettings = onOpenSettings
+        _transactions = Query(
+            filter: #Predicate<Transaction> { $0.ownerUserId == budgetScopeId },
+            sort: \Transaction.date,
+            order: .reverse
+        )
+        _settlementRecords = Query(
+            filter: #Predicate<Settlement> { $0.ownerUserId == budgetScopeId }
+        )
     }
 
-    private var scopedSettlementRecords: [Settlement] {
-        settlementRecords.filter { $0.ownerUserId == authStore.currentBudgetScopeId }
-    }
+    // Queries are already scoped to the active budget in init.
+    private var scopedTransactions: [Transaction] { transactions }
+    private var scopedSettlementRecords: [Settlement] { settlementRecords }
 
     private var monthlyBudget: Double {
         settingsStore.settings.monthlyBudget
@@ -877,7 +885,7 @@ struct DashboardView: View {
 }
 
 #Preview {
-    DashboardView()
+    DashboardView(budgetScopeId: "local")
         .environmentObject(SettingsStore())
         .environmentObject(MemberViewModel())
         .environmentObject(MonthSelectionStore())

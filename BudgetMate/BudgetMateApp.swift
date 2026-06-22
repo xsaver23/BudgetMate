@@ -44,9 +44,12 @@ struct BudgetMateApp: App {
                             .task(id: authStore.currentUserScopeId + authStore.currentBudgetScopeId + String(memberViewModel.isProfileComplete)) {
                                 applyUserScope(authStore.currentUserScopeId, budgetScopeId: authStore.currentBudgetScopeId)
                                 await restoreCloudProfileIfNeeded(authStore.currentUserScopeId)
+                                // Reveal the app with on-device data as soon as the
+                                // profile is known, instead of blocking the tabs on the
+                                // shared-budget lookup and full sync that follow.
+                                appliedUserScopeId = authStore.currentUserScopeId
                                 await selectSharedBudgetIfNeeded(authStore.currentUserScopeId)
                                 applyUserScope(authStore.currentUserScopeId, budgetScopeId: authStore.currentBudgetScopeId)
-                                appliedUserScopeId = authStore.currentUserScopeId
                                 await autoSyncAuthenticatedUser(
                                     authStore.currentUserScopeId,
                                     budgetScopeId: authStore.currentBudgetScopeId,

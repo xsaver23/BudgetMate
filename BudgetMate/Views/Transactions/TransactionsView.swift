@@ -11,8 +11,19 @@ struct TransactionsView: View {
     @EnvironmentObject private var appRefreshStore: AppRefreshStore
     @Environment(\.modelContext) private var modelContext
     var onOpenSettings: () -> Void = {}
+    let budgetScopeId: String
     @State private var selectedMemberId: UUID? = nil
     @State private var selectedTransaction: Transaction?
+
+    init(budgetScopeId: String, onOpenSettings: @escaping () -> Void = {}) {
+        self.budgetScopeId = budgetScopeId
+        self.onOpenSettings = onOpenSettings
+        _transactions = Query(
+            filter: #Predicate<Transaction> { $0.ownerUserId == budgetScopeId },
+            sort: \Transaction.date,
+            order: .reverse
+        )
+    }
 
     private var isShowingAddTransaction: Binding<Bool> {
         Binding(
@@ -21,12 +32,10 @@ struct TransactionsView: View {
         )
     }
 
-    @Query(sort: \Transaction.date, order: .reverse)
-    private var transactions: [Transaction]
+    @Query private var transactions: [Transaction]
 
-    private var scopedTransactions: [Transaction] {
-        transactions.filter { $0.ownerUserId == authStore.currentBudgetScopeId }
-    }
+    // Query is already scoped to the active budget in init.
+    private var scopedTransactions: [Transaction] { transactions }
 
     private var monthTransactions: [Transaction] {
         guard let monthInterval = monthSelectionStore.monthInterval() else { return [] }
@@ -229,7 +238,7 @@ struct TransactionsView: View {
 }
 
 #Preview {
-    TransactionsView()
+    TransactionsView(budgetScopeId: "local")
         .environmentObject(SettingsStore())
         .environmentObject(MemberViewModel())
         .environmentObject(TransactionFlowCoordinator())

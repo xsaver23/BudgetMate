@@ -43,14 +43,27 @@ final class AuthSessionStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
+        // Apply any locally-persisted session immediately so the UI can render
+        // from on-device data without waiting for a network token refresh.
+        let cachedSession = client.auth.currentSession
+        if let cachedSession {
+            apply(session: cachedSession)
+            isLoading = false
+        }
+
         do {
             let session = try await client.auth.session
             apply(session: session)
         } catch {
-            isAuthenticated = false
-            userId = nil
-            userEmail = nil
-            activeBudgetScopeId = nil
+            // Only drop back to sign-in when there was no usable cached session.
+            // With a cached session we keep the user on their local data (e.g.
+            // an offline launch) and let background sync recover later.
+            if cachedSession == nil {
+                isAuthenticated = false
+                userId = nil
+                userEmail = nil
+                activeBudgetScopeId = nil
+            }
         }
     }
 

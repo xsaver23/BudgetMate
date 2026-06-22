@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RootTabView: View {
     @EnvironmentObject private var transactionFlow: TransactionFlowCoordinator
+    @EnvironmentObject private var authStore: AuthSessionStore
     @State private var selectedTab: AppTab = .dashboard
 
     var body: some View {
@@ -16,15 +17,16 @@ struct RootTabView: View {
 
     @ViewBuilder
     private var selectedContent: some View {
+        let scope = authStore.currentBudgetScopeId
         switch selectedTab {
         case .dashboard:
-            DashboardView(onOpenSettings: { selectedTab = .settings })
+            DashboardView(budgetScopeId: scope, onOpenSettings: { selectedTab = .settings })
         case .transactions:
-            TransactionsView(onOpenSettings: { selectedTab = .settings })
+            TransactionsView(budgetScopeId: scope, onOpenSettings: { selectedTab = .settings })
         case .budget:
-            BudgetView(onOpenSettings: { selectedTab = .settings })
+            BudgetView(budgetScopeId: scope, onOpenSettings: { selectedTab = .settings })
         case .settings:
-            SettingsView()
+            SettingsView(budgetScopeId: scope)
         }
     }
 
