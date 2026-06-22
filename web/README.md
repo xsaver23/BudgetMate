@@ -42,8 +42,6 @@ VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
 ```
 
-The app includes `public/_redirects` so browser refreshes keep loading the app if client-side routes are added later.
-
 You can also deploy from the CLI after signing in to Cloudflare:
 
 ```bash
