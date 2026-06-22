@@ -26,6 +26,15 @@ struct AddTransactionView: View {
         settingsStore.settings.currencySymbol
     }
 
+    private var amountDisplayText: String {
+        viewModel.amountText.isEmpty ? "0" : viewModel.amountText
+    }
+
+    private var amountFieldWidth: CGFloat {
+        let characterCount = max(amountDisplayText.count, 1)
+        return min(max(CGFloat(characterCount) * 38, 54), 270)
+    }
+
     private var amountBinding: Binding<String> {
         Binding(
             get: { viewModel.amountText },
@@ -139,14 +148,16 @@ struct AddTransactionView: View {
                 Text(currencySymbol)
                     .font(.roundedBold(34))
                     .foregroundStyle(AppTheme.textSecondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
 
                 TextField("0", text: amountBinding)
                     .keyboardType(.decimalPad)
-                    .multilineTextAlignment(.center)
+                    .multilineTextAlignment(.leading)
                     .font(.roundedBold(60))
                     .foregroundStyle(BudgetBeaverPalette.ink)
                     .lineLimit(1)
-                    .frame(minWidth: 120)
+                    .frame(width: amountFieldWidth, alignment: .leading)
                     .focused($amountFocused)
                     .accessibilityLabel("Amount")
             }

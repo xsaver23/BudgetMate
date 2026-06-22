@@ -446,6 +446,11 @@ final class CloudSyncStore: ObservableObject {
             return "We couldn't save to this shared budget yet. Check your access or try syncing again."
         }
 
+        if message.localizedCaseInsensitiveContains("ON CONFLICT DO UPDATE") ||
+            message.localizedCaseInsensitiveContains("cannot affect row a second time") {
+            return "We found duplicate local rows while syncing. Tap Retry Sync to clean them up and try again."
+        }
+
         if message.localizedCaseInsensitiveContains("Could not find the table") ||
             message.localizedCaseInsensitiveContains("budget_transactions") {
             return "Cloud tables are not ready yet. Finish the Supabase setup, then sync again."

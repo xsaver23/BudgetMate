@@ -76,7 +76,6 @@ final class AddTransactionViewModel: ObservableObject {
 
     func updateAmountText(_ text: String) {
         let sanitized = Self.sanitizedMoneyText(text)
-        guard sanitized != amountText else { return }
         amountText = sanitized
     }
 
@@ -86,7 +85,6 @@ final class AddTransactionViewModel: ObservableObject {
 
     func updateCustomAmount(_ text: String, for memberId: UUID) {
         let sanitized = Self.sanitizedMoneyText(text)
-        guard sanitized != customAmounts[memberId] else { return }
         customAmounts[memberId] = sanitized
     }
 

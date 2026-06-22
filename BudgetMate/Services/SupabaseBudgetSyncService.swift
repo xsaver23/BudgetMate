@@ -540,7 +540,10 @@ final class SupabaseBudgetSyncService {
 
         let existingSettings = try await fetchSettings(userScopeId: userScopeId, budgetScopeId: budgetId.uuidString)
         let settingsRow = CloudBudgetSettingsRow(settings: settings, userId: userId, budgetId: budgetId)
-        let memberRows = members.map { CloudBudgetMemberRow(member: $0, userId: userId, budgetId: budgetId) }
+        let memberRows = Self.uniqueRows(
+            members.map { CloudBudgetMemberRow(member: $0, userId: userId, budgetId: budgetId) },
+            by: \.id
+        )
         let signedInMemberIds = signedInMemberIds(for: userId, userEmail: userEmail, in: members)
         let cloudTransactionIDRows: [CloudRecordIDRow] = try await client
             .from("budget_transactions")
@@ -556,7 +559,7 @@ final class SupabaseBudgetSyncService {
             .execute()
             .value
         let cloudSettlementOwnersByID = Dictionary(cloudSettlementIDRows.map { ($0.id, $0.userId) }, uniquingKeysWith: { first, _ in first })
-        let transactionRows = transactions
+        let transactionRows = Self.uniqueRows(transactions
             .filter {
                 shouldBulkPush(
                     transaction: $0,
@@ -565,9 +568,11 @@ final class SupabaseBudgetSyncService {
                     cloudOwnersByID: cloudTransactionOwnersByID
                 )
             }
-            .map { CloudTransactionRow(transaction: $0, userId: userId, budgetId: budgetId) }
+            .map { CloudTransactionRow(transaction: $0, userId: userId, budgetId: budgetId) },
+            by: \.id
+        )
         let pushedTransactionIDs = Set(transactionRows.map(\.id))
-        let settlementRows = settlements
+        let settlementRows = Self.uniqueRows(settlements
             .filter {
                 shouldBulkPush(
                     settlement: $0,
@@ -576,7 +581,9 @@ final class SupabaseBudgetSyncService {
                     cloudOwnersByID: cloudSettlementOwnersByID
                 )
             }
-            .map { CloudSettlementRow(settlement: $0, userId: userId, budgetId: budgetId) }
+            .map { CloudSettlementRow(settlement: $0, userId: userId, budgetId: budgetId) },
+            by: \.id
+        )
         let pushedSettlementIDs = Set(settlementRows.map(\.id))
 
         if budgetId == userId && (existingSettings == nil || settings != .default) {
@@ -707,7 +714,10 @@ final class SupabaseBudgetSyncService {
 
         guard !members.isEmpty else { return }
         try members.forEach { try $0.validateForSync() }
-        let rows = members.map { CloudBudgetMemberRow(member: $0, userId: userId, budgetId: budgetId) }
+        let rows = Self.uniqueRows(
+            members.map { CloudBudgetMemberRow(member: $0, userId: userId, budgetId: budgetId) },
+            by: \.id
+        )
         try await client
             .from("budget_members")
             .upsert(rows, onConflict: "id")
@@ -982,6 +992,21 @@ final class SupabaseBudgetSyncService {
         guard let email else { return nil }
         let normalized = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized.isEmpty ? nil : normalized
+    }
+
+    private static func uniqueRows<Row>(_ rows: [Row], by keyPath: KeyPath<Row, UUID>) -> [Row] {
+        var orderedIds: [UUID] = []
+        var rowsById: [UUID: Row] = [:]
+
+        for row in rows {
+            let id = row[keyPath: keyPath]
+            if rowsById[id] == nil {
+                orderedIds.append(id)
+            }
+            rowsById[id] = row
+        }
+
+        return orderedIds.compactMap { rowsById[$0] }
     }
 
     private func shouldBulkPush(
