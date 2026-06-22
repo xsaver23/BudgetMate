@@ -5,11 +5,12 @@ import {
   BarChart3,
   CalendarDays,
   CheckCircle2,
-  CircleDollarSign,
+  ChevronDown,
   Cloud,
   Download,
   HardDrive,
   Home,
+  Lightbulb,
   LogIn,
   LogOut,
   Mail,
@@ -100,6 +101,74 @@ function memberInitials(name: string): string {
 
 function normalizedEmail(email: string) {
   return email.trim().toLowerCase();
+}
+
+function firstName(name: string): string {
+  return name.trim().split(/\s+/)[0] || name;
+}
+
+function formatMonthLabel(monthKeyValue: string): string {
+  const [year, month] = monthKeyValue.split("-").map(Number);
+  if (!year || !month) {
+    return monthKeyValue;
+  }
+  return new Date(year, month - 1, 1).toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric"
+  });
+}
+
+function formatDateLabel(value: string): string {
+  return new Date(value).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  });
+}
+
+function formatShortDate(value: string): string {
+  return new Date(value).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric"
+  });
+}
+
+function daysLeftInMonth(monthKeyValue: string): number {
+  const [year, month] = monthKeyValue.split("-").map(Number);
+  if (!year || !month) {
+    return 0;
+  }
+  const today = new Date();
+  const lastDay = new Date(year, month, 0);
+  if (today > lastDay) {
+    return 0;
+  }
+  if (today.getFullYear() !== year || today.getMonth() !== month - 1) {
+    return lastDay.getDate();
+  }
+  return Math.max(0, lastDay.getDate() - today.getDate());
+}
+
+function categoryPillStyle(category: string): CSSProperties {
+  const color = categoryColor(category);
+  return {
+    "--category-color": color,
+    "--category-ink": categoryTextColor(category)
+  } as CSSProperties;
+}
+
+function budgetPaceTone(spent: number, budget: number): "good" | "watch" | "over" {
+  if (budget <= 0) {
+    return "good";
+  }
+  const ratio = spent / budget;
+  if (ratio >= 1) {
+    return "over";
+  }
+  if (ratio >= 0.8) {
+    return "watch";
+  }
+  return "good";
 }
 
 function App() {
@@ -539,19 +608,23 @@ function App() {
       <main className="workspace">
         <header className="topbar">
           <div className="topbar-title">
-            <p className="eyebrow">BudgetMate</p>
+            <p className="context-label">
+              <Home size={13} aria-hidden="true" />
+              {currentBudget.name}
+            </p>
             <h1>{activeTabTitle[activeTab]}</h1>
-            <span>{currentBudget.name}</span>
           </div>
           <div className="topbar-actions">
             <label className="month-control">
               <CalendarDays size={18} aria-hidden="true" />
+              <span>{formatMonthLabel(selectedMonth)}</span>
               <input
                 type="month"
                 value={selectedMonth}
                 onChange={(event) => setSelectedMonth(event.target.value)}
                 aria-label="Selected month"
               />
+              <ChevronDown size={14} aria-hidden="true" />
             </label>
             {state.budgets.length > 1 && (
               <label className="budget-picker">
@@ -577,11 +650,6 @@ function App() {
                 Cloud
               </button>
             )}
-            {canUseCloud && (
-              <button className="icon-button" onClick={() => void handleSignOut()} title="Sign out">
-                <LogOut size={17} aria-hidden="true" />
-              </button>
-            )}
             <button
               className="primary-action"
               onClick={() => setIsAddingTransaction(true)}
@@ -589,17 +657,17 @@ function App() {
               type="button"
             >
               <Plus size={18} aria-hidden="true" />
-              Add
+              Add transaction
             </button>
           </div>
         </header>
 
-        <div className="context-strip">
-          <StatusBanner syncMode={syncMode} message={cloudError || cloudMessage} isError={!!cloudError} isLoading={isCloudLoading} />
-          {activeTab !== "settings" && (
+        {activeTab !== "settings" && (
+          <div className="member-subbar">
+            <span>Filter by member</span>
             <MemberFilter members={budgetMembers} selectedMemberId={selectedMemberId} onSelect={setSelectedMemberId} />
-          )}
-        </div>
+          </div>
+        )}
 
         {activeTab === "dashboard" && (
           <DashboardView
@@ -608,6 +676,8 @@ function App() {
             categoryTotals={categoryTotals}
             settlements={settlements}
             transactions={displayedTransactions}
+            selectedMonth={selectedMonth}
+            members={budgetMembers}
           />
         )}
 
@@ -628,6 +698,7 @@ function App() {
             totals={totals}
             transactions={monthTransactions}
             members={budgetMembers}
+            memberId={memberFilter}
             onSettingsChange={updateSettings}
           />
         )}
@@ -782,29 +853,6 @@ function AuthGate({
   );
 }
 
-function StatusBanner({
-  syncMode,
-  message,
-  isError,
-  isLoading
-}: {
-  syncMode: SyncMode;
-  message: string;
-  isError: boolean;
-  isLoading: boolean;
-}) {
-  return (
-    <div
-      className={isError ? "status-banner error" : "status-banner"}
-      role={isError ? "alert" : "status"}
-      aria-live={isError ? "assertive" : "polite"}
-    >
-      {syncMode === "cloud" ? <Cloud size={17} aria-hidden="true" /> : <HardDrive size={17} aria-hidden="true" />}
-      <span>{isLoading ? "Syncing now" : message}</span>
-    </div>
-  );
-}
-
 function Sidebar({
   activeTab,
   onTabChange,
@@ -828,12 +876,12 @@ function Sidebar({
   return (
     <aside className="sidebar">
       <div className="brand-lockup">
-        <div className="brand-mark">BM</div>
+        <div className="brand-mark">B</div>
         <div>
           <strong>BudgetMate</strong>
-          <span>Household hub</span>
         </div>
       </div>
+      <p className="sidebar-label">Menu</p>
       <nav aria-label="Primary navigation">
         {tabs.map((tab) => {
           const Icon = tab.icon;
@@ -852,9 +900,9 @@ function Sidebar({
         })}
       </nav>
       <div className="sync-card">
-        {syncMode === "cloud" ? <Cloud size={18} aria-hidden="true" /> : <CheckCircle2 size={18} aria-hidden="true" />}
+        <span className={syncMode === "cloud" ? "sync-dot cloud" : "sync-dot local"} aria-hidden="true" />
         <div>
-          <strong>{syncMode === "cloud" ? "Cloud sync" : "Device data"}</strong>
+          <strong>{syncMode === "cloud" ? "Cloud sync" : "Local data"}</strong>
           <span>{userEmail ?? statusText}</span>
         </div>
       </div>
@@ -888,10 +936,11 @@ function MemberFilter({
           className={selectedMemberId === member.id ? "member-chip active" : "member-chip"}
           onClick={() => onSelect(member.id)}
           aria-pressed={selectedMemberId === member.id}
+          style={{ "--member-color": member.color } as CSSProperties}
           type="button"
         >
           <MemberBadge member={member} />
-          {member.displayName.split(" ")[0]}
+          <span>{firstName(member.displayName)}</span>
         </button>
       ))}
     </div>
@@ -903,13 +952,17 @@ function DashboardView({
   totals,
   categoryTotals,
   settlements,
-  transactions
+  transactions,
+  selectedMonth,
+  members
 }: {
   settings: BudgetSettings;
   totals: ReturnType<typeof dashboardTotals>;
   categoryTotals: ReturnType<typeof categoryBreakdown>;
   settlements: ReturnType<typeof settlementSuggestions>;
   transactions: BudgetTransaction[];
+  selectedMonth: string;
+  members: BudgetMember[];
 }) {
   const budgetLimit = monthlyBudget(settings);
   const spentRatio = budgetLimit > 0 ? Math.min(1, Math.max(0, totals.totalExpenses / budgetLimit)) : 0;
@@ -917,48 +970,73 @@ function DashboardView({
     ? Math.max(0, ((totals.totalIncome - totals.totalExpenses) / totals.totalIncome) * 100)
     : 0;
   const topCategory = categoryTotals[0];
+  const topCategoryPercent = topCategory && totals.totalExpenses > 0 ? Math.round((topCategory.amount / totals.totalExpenses) * 100) : 0;
   const insightText = topCategory
-    ? `${categoryName(topCategory.category)} is your largest expense this month.`
+    ? `${categoryName(topCategory.category)} is your largest expense this month - ${topCategoryPercent}% of all spending.`
     : "Add expenses to unlock category insights.";
 
   return (
     <section className="dashboard-grid">
-      <div className="balance-panel">
-        <p className="eyebrow">Total balance</p>
-        <strong>{formatMoney(totals.currentBalance, settings.currencyCode)}</strong>
-        <div className="pacing">
-          <div>
-            <span>Monthly budget</span>
-            <b>{formatMoney(budgetLimit, settings.currencyCode)}</b>
-          </div>
-          <div className="progress-track" aria-hidden="true">
-            <span style={{ width: `${spentRatio * 100}%` }} />
+      <div className="kpi-band">
+        <div className="balance-panel">
+          <p className="eyebrow">Total balance</p>
+          <strong>{formatMoney(totals.currentBalance, settings.currencyCode)}</strong>
+          <div className="pacing">
+            <div>
+              <span>Monthly budget pacing</span>
+              <b>{Math.round(spentRatio * 100)}%</b>
+            </div>
+            <div className="progress-track" aria-hidden="true">
+              <span style={{ width: `${spentRatio * 100}%` }} />
+            </div>
+            <small>
+              {formatMoney(totals.totalExpenses, settings.currencyCode)} of {formatMoney(budgetLimit, settings.currencyCode)}
+            </small>
           </div>
         </div>
-      </div>
 
-      <SummaryTile label="Income" amount={totals.totalIncome} currencyCode={settings.currencyCode} tone="income" />
-      <SummaryTile label="Expenses" amount={totals.totalExpenses} currencyCode={settings.currencyCode} tone="expense" />
-      <SummaryTile
-        label="Savings rate"
-        amount={savingsRate}
-        currencyCode={settings.currencyCode}
-        tone="warning"
-        format="percent"
-      />
+        <SummaryTile
+          label="Income"
+          amount={totals.totalIncome}
+          currencyCode={settings.currencyCode}
+          tone="income"
+          footnote={`${transactions.filter((transaction) => transaction.type === "income").length} deposit this month`}
+        />
+        <SummaryTile
+          label="Expenses"
+          amount={totals.totalExpenses}
+          currencyCode={settings.currencyCode}
+          tone="expense"
+          footnote={`across ${categoryTotals.length} ${categoryTotals.length === 1 ? "category" : "categories"}`}
+        />
+        <SummaryTile
+          label="Savings rate"
+          amount={savingsRate}
+          currencyCode={settings.currencyCode}
+          tone="warning"
+          format="percent"
+          footnote={savingsRate >= 30 ? "healthy - target 30%" : "target 30%"}
+        />
+      </div>
 
       <section className="panel category-panel">
         <div className="panel-heading">
           <h2>Expense breakdown</h2>
-          <span>{categoryTotals.length} active</span>
+          <span>
+            {formatMoney(totals.totalExpenses, settings.currencyCode)} · {categoryTotals.length} active
+          </span>
         </div>
-        <ExpenseBreakdownChart items={categoryTotals.slice(0, 5)} total={totals.totalExpenses} />
+        <ExpenseBreakdownChart
+          items={categoryTotals.slice(0, 5)}
+          total={totals.totalExpenses}
+          currencyCode={settings.currencyCode}
+        />
       </section>
 
       <section className="panel settlement-panel">
         <div className="panel-heading">
-          <h2>Top spending categories</h2>
-          <span>{formatMoney(totals.totalExpenses, settings.currencyCode)}</span>
+          <h2>Top categories</h2>
+          <span>This month</span>
         </div>
         <TopSpendingChart items={categoryTotals.slice(0, 6)} currencyCode={settings.currencyCode} />
       </section>
@@ -966,15 +1044,17 @@ function DashboardView({
       <section className="panel recent-panel">
         <div className="panel-heading">
           <h2>Recent activity</h2>
-          <span>{transactions.length} rows</span>
+          <button className="text-action" type="button" onClick={() => undefined}>
+            View all
+          </button>
         </div>
-        <TransactionList transactions={transactions.slice(0, 5)} settings={settings} />
+        <TransactionList transactions={transactions.slice(0, 5)} settings={settings} members={members} />
       </section>
 
       <section className="panel settle-panel">
         <div className="panel-heading">
           <h2>Settle up</h2>
-          <span>{settlements.length ? "Open" : "Clear"}</span>
+          <span>{settlements.length ? `${settlements.length} suggestions` : "Clear"}</span>
         </div>
         <div className="settlement-list">
           {settlements.length === 0 ? (
@@ -988,29 +1068,34 @@ function DashboardView({
                 </div>
                 <div>
                   <strong>
-                    {settlement.from.displayName.split(" ")[0]} pays {settlement.to.displayName.split(" ")[0]}
+                    {firstName(settlement.from.displayName)} pays {firstName(settlement.to.displayName)}
                   </strong>
                   <span>{formatMoney(settlement.amount, settings.currencyCode)}</span>
                 </div>
+                <button className="ghost-button small" type="button">
+                  Settle
+                </button>
               </div>
             ))
           )}
         </div>
       </section>
 
-      <section className="panel insight-panel">
-        <div className="panel-heading">
-          <h2>Spending insights</h2>
-          <span>This month</span>
+      <section className="insight-panel">
+        <div className="insight-icon">
+          <Lightbulb size={18} aria-hidden="true" />
         </div>
-        <div className="insight-card">
+        <div>
           <strong>{insightText}</strong>
           <span>
             {budgetLimit > 0
-              ? `${Math.round(spentRatio * 100)}% of your monthly budget is used.`
+              ? `${Math.round(spentRatio * 100)}% of your ${formatMoney(budgetLimit, settings.currencyCode)} monthly budget is used${
+                  daysLeftInMonth(selectedMonth) ? ` with ${daysLeftInMonth(selectedMonth)} days left` : ""
+                }.`
               : "Set a monthly budget to track your pacing."}
           </span>
         </div>
+        <em>Spending insight</em>
       </section>
     </section>
   );
@@ -1021,31 +1106,37 @@ function SummaryTile({
   amount,
   currencyCode,
   tone,
-  format = "money"
+  format = "money",
+  footnote
 }: {
   label: string;
   amount: number;
   currencyCode: string;
   tone: "income" | "expense" | "warning";
   format?: "money" | "percent";
+  footnote: string;
 }) {
-  const Icon = tone === "income" ? ArrowUpCircle : tone === "expense" ? ArrowDownCircle : CircleDollarSign;
   const displayValue = format === "percent" ? `${amount.toFixed(2)}%` : formatMoney(amount, currencyCode);
   return (
     <section className={`summary-tile ${tone}`} aria-label={`${label}: ${displayValue}`}>
-      <Icon size={20} aria-hidden="true" />
-      <span>{label}</span>
+      <span className="metric-label">
+        <i aria-hidden="true" />
+        {label}
+      </span>
       <strong>{displayValue}</strong>
+      <small>{footnote}</small>
     </section>
   );
 }
 
 function ExpenseBreakdownChart({
   items,
-  total
+  total,
+  currencyCode
 }: {
   items: ReturnType<typeof categoryBreakdown>;
   total: number;
+  currencyCode: string;
 }) {
   if (items.length === 0 || total <= 0) {
     return <div className="empty-state">No expenses in this view.</div>;
@@ -1053,25 +1144,30 @@ function ExpenseBreakdownChart({
 
   return (
     <div className="breakdown-chart" aria-label="Expense breakdown">
-      {items.map((item, index) => {
-        const percentage = Math.round((item.amount / total) * 100);
-        const heightPercentage = Math.max(8, percentage);
-        const style = {
-          "--category-color": categoryColor(item.category),
-          "--category-ink": categoryTextColor(item.category),
-          height: `${Math.min(100, heightPercentage + 18)}%`
-        } as CSSProperties;
-        return (
-          <div
+      <div className="stacked-bar" aria-hidden="true">
+        {items.map((item) => (
+          <span
             key={item.category}
-            className={`breakdown-bar bar-${index % 5}`}
-            style={style}
-          >
-            <strong>{percentage}%</strong>
+            style={{
+              "--category-color": categoryColor(item.category),
+              width: `${Math.max(3, (item.amount / total) * 100)}%`
+            } as CSSProperties}
+          />
+        ))}
+      </div>
+      <div className="breakdown-legend">
+        {items.map((item) => {
+        const percentage = Math.round((item.amount / total) * 100);
+        return (
+          <div key={item.category} className="breakdown-row">
+            <i style={{ backgroundColor: categoryColor(item.category) }} aria-hidden="true" />
             <span>{categoryName(item.category)}</span>
+            <em>{percentage}%</em>
+            <strong>{formatMoney(item.amount, currencyCode)}</strong>
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
@@ -1123,65 +1219,118 @@ function TransactionsView({
   onSearch: (search: string) => void;
   onDelete: (id: string) => void;
 }) {
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState<"all" | TransactionType>("all");
   const memberById = new Map(members.map((member) => [member.id, member]));
-  const filteredTransactions = transactions.filter((transaction) =>
-    `${transaction.title} ${categoryName(transaction.category)}`
-      .toLowerCase()
-      .includes(search.trim().toLowerCase())
+  const visibleCategories = [...expenseCategories, ...incomeCategories].filter((category, index, categories) =>
+    categories.findIndex((candidate) => candidate.id === category.id) === index
   );
+  const filteredTransactions = transactions.filter((transaction) => {
+    const query = search.trim().toLowerCase();
+    const matchesSearch = `${transaction.title} ${categoryName(transaction.category)}`
+      .toLowerCase()
+      .includes(query);
+    const matchesCategory = categoryFilter === "all" || transaction.category === categoryFilter;
+    const matchesType = typeFilter === "all" || transaction.type === typeFilter;
+    return matchesSearch && matchesCategory && matchesType;
+  });
 
   return (
-    <section className="stack-view">
+    <section className="transactions-view">
       <div className="toolbar">
         <label className="search-control">
           <Search size={17} aria-hidden="true" />
           <input
             value={search}
             onChange={(event) => onSearch(event.target.value)}
-            placeholder="Search transactions"
+            placeholder="Search transactions..."
             aria-label="Search transactions"
           />
         </label>
-        <span>{filteredTransactions.length} shown</span>
+        <label className="select-control">
+          <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} aria-label="Filter by category">
+            <option value="all">All categories</option>
+            {visibleCategories.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+          <ChevronDown size={14} aria-hidden="true" />
+        </label>
+        <label className="select-control">
+          <select
+            value={typeFilter}
+            onChange={(event) => setTypeFilter(event.target.value as "all" | TransactionType)}
+            aria-label="Filter by transaction type"
+          >
+            <option value="all">All types</option>
+            <option value="income">Income</option>
+            <option value="expense">Expenses</option>
+          </select>
+          <ChevronDown size={14} aria-hidden="true" />
+        </label>
+        <span className="toolbar-count">
+          {filteredTransactions.length} of {transactions.length}
+        </span>
       </div>
       <div className="panel table-panel">
         {filteredTransactions.length === 0 ? (
           <div className="empty-state">No transactions in this view.</div>
         ) : (
-          filteredTransactions.map((transaction) => (
-            <article key={transaction.id} className="transaction-row">
-              <div className={`transaction-icon ${transaction.type}`}>
-                {transaction.type === "income" ? (
-                  <ArrowUpCircle size={19} aria-hidden="true" />
-                ) : (
-                  <ArrowDownCircle size={19} aria-hidden="true" />
-                )}
-              </div>
-              <div className="transaction-main">
-                <strong>{transaction.title}</strong>
-                <span>
-                  {categoryName(transaction.category)} ·{" "}
-                  {memberById.get(transaction.createdByMemberId)?.displayName ?? "Member"}
-                </span>
-              </div>
-              <div className="transaction-amount">
-                <strong>
-                  {transaction.type === "expense" ? "-" : "+"}
-                  {formatMoney(transaction.amount, settings.currencyCode)}
-                </strong>
-                <span>{new Date(transaction.date).toLocaleDateString()}</span>
-              </div>
-              <button
-                className="icon-button subtle"
-                onClick={() => onDelete(transaction.id)}
-                title="Delete transaction"
-                aria-label={`Delete ${transaction.title}`}
-                type="button"
-              >
-                <Trash2 size={17} aria-hidden="true" />
-              </button>
-            </article>
-          ))
+          <>
+            <div className="transaction-head" aria-hidden="true">
+              <span>Transaction</span>
+              <span>Member</span>
+              <span>Amount</span>
+              <span>Date</span>
+              <span />
+            </div>
+            {filteredTransactions.map((transaction) => {
+              const member = memberById.get(transaction.createdByMemberId);
+              return (
+                <article key={transaction.id} className="transaction-row">
+                  <div className="transaction-main">
+                    <div className={`transaction-icon ${transaction.type}`}>
+                      {transaction.type === "income" ? (
+                        <ArrowUpCircle size={18} aria-hidden="true" />
+                      ) : (
+                        <ArrowDownCircle size={18} aria-hidden="true" />
+                      )}
+                    </div>
+                    <div>
+                      <strong>{transaction.title}</strong>
+                      <span className="category-pill" style={categoryPillStyle(transaction.category)}>
+                        {categoryName(transaction.category)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="transaction-member">
+                    {member ? <MemberBadge member={member} /> : null}
+                    <span>{member?.displayName ?? "Member"}</span>
+                  </div>
+                  <div className={`transaction-amount ${transaction.type}`}>
+                    <strong>
+                      {transaction.type === "expense" ? "-" : "+"}
+                      {formatMoney(transaction.amount, settings.currencyCode)}
+                    </strong>
+                  </div>
+                  <time className="transaction-date" dateTime={transaction.date}>
+                    {formatDateLabel(transaction.date)}
+                  </time>
+                  <button
+                    className="icon-button subtle"
+                    onClick={() => onDelete(transaction.id)}
+                    title="Delete transaction"
+                    aria-label={`Delete ${transaction.title}`}
+                    type="button"
+                  >
+                    <Trash2 size={17} aria-hidden="true" />
+                  </button>
+                </article>
+              );
+            })}
+          </>
         )}
       </div>
     </section>
@@ -1193,17 +1342,30 @@ function BudgetView({
   totals,
   transactions,
   members,
+  memberId,
   onSettingsChange
 }: {
   settings: BudgetSettings;
   totals: ReturnType<typeof dashboardTotals>;
   transactions: BudgetTransaction[];
   members: BudgetMember[];
+  memberId?: string;
   onSettingsChange: (settings: BudgetSettings) => void;
 }) {
-  const spending = categoryBreakdown(transactions);
+  const [showUnbudgeted, setShowUnbudgeted] = useState(false);
+  const spending = categoryBreakdown(transactions, memberId);
   const spendingByCategory = new Map(spending.map((item) => [item.category, item.amount]));
   const memberSpending = memberExpenseTotals(transactions, members);
+  const budgetLimit = monthlyBudget(settings);
+  const visibleCategoryRows = expenseCategories.map((category) => {
+    const budget = settings.categoryBudgets[category.id] ?? 0;
+    const spent = spendingByCategory.get(category.id) ?? 0;
+    return { category, budget, spent };
+  });
+  const budgetedRows = visibleCategoryRows.filter((row) => row.budget > 0 || row.spent > 0);
+  const unbudgetedRows = visibleCategoryRows.filter((row) => row.budget <= 0 && row.spent <= 0);
+  const rowsToShow = showUnbudgeted ? visibleCategoryRows : budgetedRows;
+  const maxMemberSpend = Math.max(...memberSpending.map((item) => item.amount), 0);
 
   function updateCategoryBudget(category: string, value: string) {
     onSettingsChange({
@@ -1222,40 +1384,81 @@ function BudgetView({
           <h2>Category budgets</h2>
           <span>{formatMoney(totals.remainingBudget, settings.currencyCode)} left</span>
         </div>
+        <p className="panel-intro">
+          {budgetedRows.length} of {expenseCategories.length} categories budgeted this month.
+        </p>
         <div className="budget-list">
-          {expenseCategories.map((category) => (
-            <div key={category.id} className="budget-row">
+          {rowsToShow.map(({ category, spent, budget }) => {
+            const ratio = budget > 0 ? Math.min(1, spent / budget) : 0;
+            const tone = budgetPaceTone(spent, budget);
+            return (
+            <div key={category.id} className={`budget-row ${tone}`}>
               <div>
                 <strong>{category.name}</strong>
-                <span>{formatMoney(spendingByCategory.get(category.id) ?? 0, settings.currencyCode)} spent</span>
+                <span>
+                  {formatMoney(spent, settings.currencyCode)} of {formatMoney(budget, settings.currencyCode)}
+                </span>
+                <div className="budget-progress" aria-hidden="true">
+                  <b style={{ width: `${ratio * 100}%` }} />
+                </div>
               </div>
-              <input
-                type="number"
-                min="0"
-                step="10"
-                value={settings.categoryBudgets[category.id] ?? 0}
-                onChange={(event) => updateCategoryBudget(category.id, event.target.value)}
-                aria-label={`${category.name} budget`}
-              />
+              <label className="budget-input">
+                <span>$</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="10"
+                  value={settings.categoryBudgets[category.id] ?? 0}
+                  onChange={(event) => updateCategoryBudget(category.id, event.target.value)}
+                  aria-label={`${category.name} budget`}
+                />
+              </label>
             </div>
-          ))}
+            );
+          })}
         </div>
+        {!showUnbudgeted && unbudgetedRows.length > 0 && (
+          <button className="dashed-action" type="button" onClick={() => setShowUnbudgeted(true)}>
+            Show {unbudgetedRows.length} unbudgeted categories
+          </button>
+        )}
       </section>
 
-      <aside className="panel member-spending">
-        <div className="panel-heading">
-          <h2>Member spending</h2>
-          <span>{members.length} members</span>
-        </div>
-        {memberSpending.map(({ member, amount }) => (
-          <div key={member.id} className="member-spend-row">
-            <MemberBadge member={member} />
-            <div>
-              <strong>{member.displayName}</strong>
-              <span>{formatMoney(amount, settings.currencyCode)}</span>
-            </div>
+      <aside className="budget-rail">
+        <section className="budget-summary">
+          <p className="eyebrow">Budget summary</p>
+          <div>
+            <span>Budgeted</span>
+            <strong>{formatMoney(budgetLimit, settings.currencyCode)}</strong>
           </div>
-        ))}
+          <div>
+            <span>Spent</span>
+            <strong>{formatMoney(totals.totalExpenses, settings.currencyCode)}</strong>
+          </div>
+          <hr />
+          <div>
+            <span>Remaining</span>
+            <strong>{formatMoney(totals.remainingBudget, settings.currencyCode)}</strong>
+          </div>
+        </section>
+        <section className="panel member-spending">
+          <div className="panel-heading">
+            <h2>Member spending</h2>
+            <span>{members.length} members</span>
+          </div>
+          {memberSpending.map(({ member, amount }) => (
+            <div key={member.id} className="member-spend-row" style={{ "--member-color": member.color } as CSSProperties}>
+              <div>
+                <MemberBadge member={member} />
+                <strong>{member.displayName}</strong>
+                <span>{formatMoney(amount, settings.currencyCode)}</span>
+              </div>
+              <div className="member-spend-track" aria-hidden="true">
+                <b style={{ width: `${maxMemberSpend > 0 ? Math.max(4, (amount / maxMemberSpend) * 100) : 0}%` }} />
+              </div>
+            </div>
+          ))}
+        </section>
       </aside>
     </section>
   );
@@ -1370,6 +1573,7 @@ function SettingsView({
       : syncMode === "cloud"
         ? "Enter a name to add someone. Email is optional."
         : "Enter a name to add someone locally.");
+  const currentBudget = state.budgets.find((budget) => budget.id === state.currentBudgetId) ?? state.budgets[0];
 
   return (
     <section className="settings-grid">
@@ -1382,15 +1586,16 @@ function SettingsView({
           {syncMode === "cloud" ? <CheckCircle2 size={18} aria-hidden="true" /> : <HardDrive size={18} aria-hidden="true" />}
           <div>
             <strong>{syncMode === "cloud" ? user?.email ?? "Signed in" : "Desktop local"}</strong>
-            <span>{cloudError || cloudMessage}</span>
+            <span>{syncMode === "cloud" ? cloudError || cloudMessage : "Data stored on this device only"}</span>
           </div>
+          <em className="status-pill">{syncMode === "cloud" ? "Cloud" : "Active"}</em>
         </div>
         <div className="data-actions">
-          <button className="secondary-action" onClick={onRefresh} disabled={syncMode !== "cloud"}>
+          <button className="ghost-button" onClick={onRefresh} disabled={syncMode !== "cloud"}>
             <RefreshCcw size={17} aria-hidden="true" />
             Refresh
           </button>
-          <button className="secondary-action quiet" onClick={onSignOut} disabled={syncMode !== "cloud"}>
+          <button className="ghost-button" onClick={onSignOut} disabled={syncMode !== "cloud"}>
             <LogOut size={17} aria-hidden="true" />
             Sign out
           </button>
@@ -1415,7 +1620,7 @@ function SettingsView({
             ))}
           </select>
         </label>
-        <div className="status-row">
+        <div className="status-row compact-status">
           <RefreshCcw size={18} aria-hidden="true" />
           <div>
             <strong>Cloud backup</strong>
@@ -1427,13 +1632,16 @@ function SettingsView({
                   : "Ready for Supabase config"}
             </span>
           </div>
+          <span className={syncMode === "cloud" ? "switch is-on" : "switch"} aria-hidden="true">
+            <i />
+          </span>
         </div>
       </section>
 
       <section className="panel settings-panel">
         <div className="panel-heading">
           <h2>Households</h2>
-          <span>{state.budgets.length}</span>
+          <span>{state.budgets.length} active</span>
         </div>
         <div className="member-list">
           {state.budgets.map((budget) => (
@@ -1443,8 +1651,9 @@ function SettingsView({
               </span>
               <div>
                 <strong>{budget.name}</strong>
-                <span>{budget.id === state.currentUserId ? "Personal" : "Shared"}</span>
+                <span>{budget.id === state.currentUserId ? "Personal" : `Shared · ${members.length} members`}</span>
               </div>
+              {currentBudget?.id === budget.id && <em className="status-pill">Current</em>}
             </div>
           ))}
         </div>
@@ -1480,8 +1689,9 @@ function SettingsView({
               <MemberBadge member={member} />
               <div>
                 <strong>{member.displayName}</strong>
-                <span>{member.inviteStatus}</span>
+                <span>{member.email ?? member.role}</span>
               </div>
+              <em className="status-pill">{member.inviteStatus}</em>
             </div>
           ))}
         </div>
@@ -1545,34 +1755,42 @@ function SettingsView({
       <section className="panel settings-panel data-panel">
         <div className="panel-heading">
           <h2>Data</h2>
-          <span>{syncMode === "cloud" ? "Cached" : "Local"}</span>
+          <span>{syncMode === "cloud" ? "Cached" : "Stored locally"}</span>
         </div>
-        <textarea readOnly value={exportState(state)} aria-label="Exported BudgetMate data" />
-        <div className="data-actions">
-          <a
-            className="secondary-action"
-            href={`data:application/json;charset=utf-8,${encodeURIComponent(exportState(state))}`}
-            download="budgetmate-web-data.json"
-          >
-            <Download size={17} aria-hidden="true" />
-            Export
-          </a>
+        <p className="panel-intro">Export a backup, import from another device, or reset everything on this device.</p>
+        <div className="data-tools">
+          <textarea readOnly value={exportState(state)} aria-label="Exported BudgetMate data" />
+          <div className="data-tool-actions">
+            <a
+              className="primary-action"
+              href={`data:application/json;charset=utf-8,${encodeURIComponent(exportState(state))}`}
+              download="budgetmate-web-data.json"
+            >
+              <Download size={17} aria-hidden="true" />
+              Export
+            </a>
+            <textarea
+              value={importText}
+              onChange={(event) => onImportTextChange(event.target.value)}
+              placeholder="Paste exported data"
+              aria-label="Import BudgetMate data"
+            />
+            {importError && <p className="form-error" role="alert">{importError}</p>}
+            <button className="ghost-button" onClick={onImport}>
+              <Upload size={17} aria-hidden="true" />
+              Import
+            </button>
+          </div>
+        </div>
+        <div className="danger-zone">
+          <div>
+            <strong>Reset all data</strong>
+            <span>Permanently deletes every transaction, budget, and member on this device.</span>
+          </div>
           <button className="danger-action" onClick={onReset}>
-            <RefreshCcw size={17} aria-hidden="true" />
             Reset
           </button>
         </div>
-        <textarea
-          value={importText}
-          onChange={(event) => onImportTextChange(event.target.value)}
-          placeholder="Paste exported data"
-          aria-label="Import BudgetMate data"
-        />
-        {importError && <p className="form-error" role="alert">{importError}</p>}
-        <button className="secondary-action" onClick={onImport}>
-          <Upload size={17} aria-hidden="true" />
-          Import
-        </button>
       </section>
     </section>
   );
@@ -1683,7 +1901,7 @@ function TransactionDialog({
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
       <form
-        className="dialog"
+        className={`dialog ${form.type}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="transaction-dialog-title"
@@ -1692,7 +1910,7 @@ function TransactionDialog({
         noValidate
         ref={dialogRef}
       >
-        <div className="panel-heading">
+        <div className="dialog-header">
           <h2 id="transaction-dialog-title">Add transaction</h2>
           <button className="icon-button" onClick={onClose} title="Close" aria-label="Close add transaction" type="button">
             <X size={18} aria-hidden="true" />
@@ -1718,11 +1936,31 @@ function TransactionDialog({
           </button>
         </div>
 
+        <label className="amount-hero">
+          <span>Amount</span>
+          <div>
+            <b>$</b>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={form.amount}
+              onChange={(event) => updateForm({ amount: event.target.value })}
+              placeholder="0.00"
+              required
+              aria-label="Transaction amount"
+              aria-invalid={!!formError && normalizeAmount(Number(form.amount)) <= 0}
+              aria-describedby={formError ? "transaction-form-error" : undefined}
+            />
+          </div>
+        </label>
+
         <label className="field-row vertical">
           <span>Title</span>
           <input
             value={form.title}
             onChange={(event) => updateForm({ title: event.target.value })}
+            placeholder="e.g. Groceries"
             autoFocus
             required
             aria-invalid={!!formError && !form.title.trim()}
@@ -1732,37 +1970,23 @@ function TransactionDialog({
 
         <div className="form-grid">
           <label className="field-row vertical">
-            <span>Amount</span>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={form.amount}
-              onChange={(event) => updateForm({ amount: event.target.value })}
-              required
-              aria-invalid={!!formError && normalizeAmount(Number(form.amount)) <= 0}
-              aria-describedby={formError ? "transaction-form-error" : undefined}
-            />
-          </label>
-          <label className="field-row vertical">
             <span>Date</span>
             <input type="date" value={form.date} onChange={(event) => updateForm({ date: event.target.value })} required />
+          </label>
+          <label className="field-row vertical">
+            <span>Category</span>
+            <select value={form.category} onChange={(event) => updateForm({ category: event.target.value })} required>
+              {categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
           </label>
         </div>
 
         <label className="field-row vertical">
-          <span>Category</span>
-          <select value={form.category} onChange={(event) => updateForm({ category: event.target.value })} required>
-            {categories.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.name}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="field-row vertical">
-          <span>Member</span>
+          <span>Paid by</span>
           <select value={form.createdByMemberId} onChange={(event) => updateForm({ createdByMemberId: event.target.value })} required>
             {members.map((member) => (
               <option key={member.id} value={member.id}>
@@ -1779,7 +2003,10 @@ function TransactionDialog({
               checked={form.splitWithHousehold}
               onChange={(event) => updateForm({ splitWithHousehold: event.target.checked })}
             />
-            <span>Split with household</span>
+            <span>
+              <strong>Split with household</strong>
+              <small>Divide evenly across {members.length} {members.length === 1 ? "member" : "members"}</small>
+            </span>
           </label>
         )}
 
@@ -1789,34 +2016,57 @@ function TransactionDialog({
           </p>
         )}
 
-        <button className="primary-action full" type="submit">
-          <Plus size={18} aria-hidden="true" />
-          Add transaction
-        </button>
+        <div className="dialog-actions">
+          <button className="ghost-button" onClick={onClose} type="button">
+            Cancel
+          </button>
+          <button className="primary-action full" type="submit">
+            <Plus size={18} aria-hidden="true" />
+            Add transaction
+          </button>
+        </div>
       </form>
     </div>
   );
 }
 
-function TransactionList({ transactions, settings }: { transactions: BudgetTransaction[]; settings: BudgetSettings }) {
+function TransactionList({
+  transactions,
+  settings,
+  members
+}: {
+  transactions: BudgetTransaction[];
+  settings: BudgetSettings;
+  members: BudgetMember[];
+}) {
+  const memberById = new Map(members.map((member) => [member.id, member]));
+
   return (
     <div className="compact-list">
       {transactions.length === 0 ? (
         <div className="empty-state">No transactions in this view.</div>
       ) : (
-        transactions.map((transaction) => (
-          <div key={transaction.id} className="compact-row">
-            <span className={`dot ${transaction.type}`} />
-            <div>
-              <strong>{transaction.title}</strong>
-              <span>{categoryName(transaction.category)}</span>
+        transactions.map((transaction) => {
+          const member = memberById.get(transaction.createdByMemberId);
+          return (
+            <div key={transaction.id} className="compact-row">
+              <span className={`transaction-icon ${transaction.type}`} aria-hidden="true">
+                {transaction.type === "income" ? <ArrowUpCircle size={17} /> : <ArrowDownCircle size={17} />}
+              </span>
+              <div>
+                <strong>{transaction.title}</strong>
+                <span>
+                  {categoryName(transaction.category)} · {member ? member.displayName : "Member"}
+                </span>
+              </div>
+              <b className={transaction.type}>
+                {transaction.type === "expense" ? "-" : "+"}
+                {formatMoney(transaction.amount, settings.currencyCode)}
+                <small>{formatShortDate(transaction.date)}</small>
+              </b>
             </div>
-            <b>
-              {transaction.type === "expense" ? "-" : "+"}
-              {formatMoney(transaction.amount, settings.currencyCode)}
-            </b>
-          </div>
-        ))
+          );
+        })
       )}
     </div>
   );

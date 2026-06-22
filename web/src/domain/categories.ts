@@ -37,30 +37,30 @@ const allCategories = new Map(
 );
 
 const categoryColors: Record<string, string> = {
-  rent: "#173404",
-  bills: "#FFCF70",
-  studentLoans: "#7B6EE6",
-  subscription: "#1FA37D",
-  food: "#9CC957",
-  groceries: "#9CC957",
-  health: "#3B8FE2",
-  household: "#F5E6C9",
-  gas: "#FFCA6A",
-  parking: "#8B4E0A",
-  transportation: "#1FA37D",
-  shopping: "#F49379",
-  restaurant: "#E2572E",
-  date: "#F49379",
-  vacation: "#7B6EE6",
-  entertainment: "#3B8FE2",
-  gift: "#FFCF70",
-  refund: "#1FA37D",
-  work: "#9CC957",
-  eTransfer: "#1FA37D",
-  other: "#FFCF70"
+  rent: "#1E3A2B",
+  bills: "#E7B84B",
+  studentLoans: "#5E5D50",
+  subscription: "#3F9E5E",
+  food: "#3F9E5E",
+  groceries: "#3F9E5E",
+  health: "#3B82C4",
+  household: "#9A9788",
+  gas: "#E7B84B",
+  parking: "#9A8128",
+  transportation: "#3F9E5E",
+  shopping: "#E7B84B",
+  restaurant: "#D6694C",
+  date: "#D6694C",
+  vacation: "#3B82C4",
+  entertainment: "#3B82C4",
+  gift: "#E7B84B",
+  refund: "#3F9E5E",
+  work: "#3F9E5E",
+  eTransfer: "#3F9E5E",
+  other: "#E7B84B"
 };
 
-const darkCategoryColors = new Set(["#173404", "#8B4E0A", "#1FA37D", "#E2572E", "#7B6EE6", "#3B8FE2"]);
+const darkCategoryColors = new Set(["#1E3A2B", "#3F9E5E", "#D6694C", "#3B82C4", "#5E5D50"]);
 
 export function categoryName(id: string): string {
   if (allCategories.has(id)) {
@@ -78,5 +78,5 @@ export function categoryColor(id: string): string {
 }
 
 export function categoryTextColor(id: string): string {
-  return darkCategoryColors.has(categoryColor(id)) ? "#FFFDF7" : "#173404";
+  return darkCategoryColors.has(categoryColor(id)) ? "#FFFFFF" : "#1F2419";
 }
