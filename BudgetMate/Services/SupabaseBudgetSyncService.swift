@@ -538,7 +538,8 @@ final class SupabaseBudgetSyncService {
             throw SupabaseBudgetSyncError.missingUser
         }
         let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
-        try members.forEach { try $0.validateForSync() }
+        let normalizedMembers = BudgetMember.deduplicatedForBudget(members)
+        try normalizedMembers.forEach { try $0.validateForSync() }
         try transactions.forEach { try $0.validateForSync() }
         try settlements.forEach { try $0.validateForSync() }
 
@@ -553,11 +554,17 @@ final class SupabaseBudgetSyncService {
 
         let existingSettings = try await fetchSettings(userScopeId: userScopeId, budgetScopeId: budgetId.uuidString)
         let settingsRow = CloudBudgetSettingsRow(settings: settings, userId: userId, budgetId: budgetId)
-        let memberRows = Self.uniqueRows(
-            members.map { CloudBudgetMemberRow(member: $0, userId: userId, budgetId: budgetId) },
+        let candidateMemberRows = Self.uniqueRows(
+            normalizedMembers.map { CloudBudgetMemberRow(member: $0, userId: userId, budgetId: budgetId) },
             by: \.id
         )
-        let signedInMemberIds = signedInMemberIds(for: userId, userEmail: userEmail, in: members)
+        let signedInMemberIds = signedInMemberIds(for: userId, userEmail: userEmail, in: normalizedMembers)
+        let memberRows = try await writableMemberRows(
+            candidateMemberRows,
+            userId: userId,
+            budgetId: budgetId,
+            signedInMemberIds: signedInMemberIds
+        )
         let cloudTransactionIDRows: [CloudRecordIDRow] = try await client
             .from("budget_transactions")
             .select("id,user_id")
@@ -606,7 +613,7 @@ final class SupabaseBudgetSyncService {
                 .execute()
         }
 
-        if !memberRows.isEmpty && !Self.isDefaultSampleMembers(members) {
+        if !memberRows.isEmpty && !Self.isDefaultSampleMembers(normalizedMembers) {
             try await client
                 .from("budget_members")
                 .upsert(memberRows, onConflict: "id")
@@ -712,7 +719,21 @@ final class SupabaseBudgetSyncService {
             .value
 
         try rows.forEach { try $0.validateDates() }
-        return rows.map { $0.makeMember() }
+        let memberships: [CloudBudgetMembershipRow] = try await client
+            .from("budget_memberships")
+            .select()
+            .eq("budget_id", value: budgetId)
+            .eq("status", value: "active")
+            .execute()
+            .value
+        let rolesByUserId = Dictionary(
+            memberships.map { ($0.userId, BudgetMemberRole(rawValue: $0.role) ?? .member) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let members = rows.map { row in
+            memberWithMembershipRole(row.makeMember(), rolesByUserId: rolesByUserId)
+        }
+        return BudgetMember.deduplicatedForBudget(members)
     }
 
     func upsertMembers(_ members: [BudgetMember], userScopeId: String, budgetScopeId: String? = nil) async throws {
@@ -724,11 +745,19 @@ final class SupabaseBudgetSyncService {
         try await ensurePersonalBudget(userId: userId)
 
         guard !members.isEmpty else { return }
-        try members.forEach { try $0.validateForSync() }
-        let rows = Self.uniqueRows(
-            members.map { CloudBudgetMemberRow(member: $0, userId: userId, budgetId: budgetId) },
+        let normalizedMembers = BudgetMember.deduplicatedForBudget(members)
+        try normalizedMembers.forEach { try $0.validateForSync() }
+        let candidateRows = Self.uniqueRows(
+            normalizedMembers.map { CloudBudgetMemberRow(member: $0, userId: userId, budgetId: budgetId) },
             by: \.id
         )
+        let rows = try await writableMemberRows(
+            candidateRows,
+            userId: userId,
+            budgetId: budgetId,
+            signedInMemberIds: signedInMemberIds(for: userId, userEmail: nil, in: normalizedMembers)
+        )
+        guard !rows.isEmpty else { return }
         try await client
             .from("budget_members")
             .upsert(rows, onConflict: "id")
@@ -1100,6 +1129,72 @@ final class SupabaseBudgetSyncService {
         }
 
         return Set(matchingIds.isEmpty ? [userId] : matchingIds)
+    }
+
+    private func writableMemberRows(
+        _ rows: [CloudBudgetMemberRow],
+        userId: UUID,
+        budgetId: UUID,
+        signedInMemberIds: Set<UUID>
+    ) async throws -> [CloudBudgetMemberRow] {
+        guard !rows.isEmpty else { return [] }
+
+        let cloudMemberIDRows: [CloudRecordIDRow] = try await client
+            .from("budget_members")
+            .select("id,user_id")
+            .eq("budget_id", value: budgetId)
+            .execute()
+            .value
+        let cloudMemberOwnersByID = Dictionary(cloudMemberIDRows.map { ($0.id, $0.userId) }, uniquingKeysWith: { first, _ in first })
+        let canCreateMemberRows = try await isActiveBudgetOwner(userId: userId, budgetId: budgetId)
+
+        return rows.filter { row in
+            if let existingOwnerId = cloudMemberOwnersByID[row.id] {
+                return existingOwnerId == userId || row.authUserId == userId || signedInMemberIds.contains(row.id)
+            }
+
+            return canCreateMemberRows || row.authUserId == userId || signedInMemberIds.contains(row.id)
+        }
+    }
+
+    private func isActiveBudgetOwner(userId: UUID, budgetId: UUID) async throws -> Bool {
+        let rows: [CloudBudgetMembershipRow] = try await client
+            .from("budget_memberships")
+            .select()
+            .eq("budget_id", value: budgetId)
+            .eq("user_id", value: userId)
+            .eq("role", value: "owner")
+            .eq("status", value: "active")
+            .execute()
+            .value
+
+        return !rows.isEmpty
+    }
+
+    private func memberWithMembershipRole(
+        _ member: BudgetMember,
+        rolesByUserId: [UUID: BudgetMemberRole]
+    ) -> BudgetMember {
+        let membershipRole = member.authUserId.flatMap { rolesByUserId[$0] }
+            ?? rolesByUserId[member.id]
+            ?? member.role
+
+        guard membershipRole != member.role else {
+            return member
+        }
+
+        return BudgetMember(
+            id: member.id,
+            displayName: member.displayName,
+            email: member.email,
+            initials: member.displayInitials,
+            color: member.color,
+            authUserId: member.authUserId,
+            role: membershipRole,
+            inviteStatus: member.inviteStatus,
+            joinedDate: member.joinedDate,
+            createdDate: member.createdDate
+        )
     }
 
     private static func normalizedEmail(_ email: String?) -> String? {

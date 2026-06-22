@@ -100,6 +100,16 @@ struct BudgetMembersView: View {
                 targetBudget = budget
             }
 
+            let existingTargetMembers = await membersForInviteTarget(targetBudgetId: targetBudget.id)
+            if let existingMember = existingMember(matching: invitedMember.email, in: existingTargetMembers),
+               existingMember.inviteStatus == .active {
+                authStore.switchBudgetScope(to: targetBudget.id.uuidString)
+                settingsStore.switchUser(to: targetBudget.id.uuidString)
+                memberViewModel.replaceMembers(with: existingTargetMembers)
+                feedbackMessage = "\(existingMember.displayName) already uses \(email) in \(targetBudget.name)."
+                return
+            }
+
             try await cloudSyncStore.inviteMember(
                 displayName: name,
                 email: email,
@@ -127,13 +137,13 @@ struct BudgetMembersView: View {
         }
     }
 
-    private func membersForInviteTarget(targetBudgetId: UUID, invitedMember: BudgetMember) async -> [BudgetMember] {
+    private func membersForInviteTarget(targetBudgetId: UUID, invitedMember: BudgetMember? = nil) async -> [BudgetMember] {
         let existingMembers = (try? await cloudSyncStore.fetchMembers(
             userScopeId: authStore.currentUserScopeId,
             budgetScopeId: targetBudgetId.uuidString
         )) ?? []
 
-        var targetMembers = existingMembers
+        var targetMembers = BudgetMember.deduplicatedForBudget(existingMembers)
         if !targetMembers.contains(where: { member in
             member.authUserId?.uuidString == authStore.currentUserScopeId ||
                 member.id.uuidString == authStore.currentUserScopeId
@@ -147,14 +157,25 @@ struct BudgetMembersView: View {
             )
         }
 
-        let normalizedInviteEmail = invitedMember.email?.lowercased()
-        if !targetMembers.contains(where: { member in
-            member.email?.lowercased() == normalizedInviteEmail
-        }) {
+        let normalizedInviteEmail = BudgetMember.normalizedEmail(invitedMember?.email)
+        if let invitedMember,
+           !targetMembers.contains(where: { member in
+               BudgetMember.normalizedEmail(member.email) == normalizedInviteEmail
+           }) {
             targetMembers.append(invitedMember)
         }
 
-        return targetMembers
+        return BudgetMember.deduplicatedForBudget(targetMembers)
+    }
+
+    private func existingMember(matching email: String?, in members: [BudgetMember]) -> BudgetMember? {
+        guard let normalizedEmail = BudgetMember.normalizedEmail(email) else {
+            return nil
+        }
+
+        return members.first {
+            BudgetMember.normalizedEmail($0.email) == normalizedEmail
+        }
     }
 
     private func loadOwnedBudgets() async {

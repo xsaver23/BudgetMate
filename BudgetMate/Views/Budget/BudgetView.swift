@@ -710,7 +710,16 @@ private struct CategoryEditorView: View {
     @State private var name: String
     @State private var emoji: String
     @State private var validationMessage: String?
-    @FocusState private var nameFocused: Bool
+    @FocusState private var focusedField: Field?
+
+    private enum Field: Hashable {
+        case name
+        case emoji
+    }
+
+    private var canSave: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && validationMessage == nil
+    }
 
     init(
         mode: Mode,
@@ -730,53 +739,118 @@ private struct CategoryEditorView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Category") {
-                    TextField("Category name", text: $name)
-                        .focused($nameFocused)
-                        .textInputAutocapitalization(.words)
-                        .submitLabel(.done)
-                        .onSubmit(save)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    header
 
-                    TextField("Emoji icon", text: $emoji)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .onChange(of: emoji) { _, value in
-                            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if trimmed.isEmpty || trimmed.isSingleEmoji {
-                                validationMessage = nil
-                            } else {
-                                validationMessage = "Use one emoji, or leave it blank."
-                            }
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Category")
+                            .font(.roundedBold(26))
+                            .foregroundStyle(BudgetBeaverPalette.wood)
+
+                        VStack(spacing: 0) {
+                            TextField("Category name", text: $name)
+                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .foregroundStyle(BudgetBeaverPalette.ink)
+                                .focused($focusedField, equals: .name)
+                                .textInputAutocapitalization(.words)
+                                .submitLabel(.done)
+                                .onSubmit(save)
+                                .frame(minHeight: 58)
+                                .padding(.horizontal, 16)
+
+                            Divider()
+                                .padding(.horizontal, 16)
+
+                            TextField("Emoji icon", text: $emoji)
+                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .foregroundStyle(BudgetBeaverPalette.ink)
+                                .focused($focusedField, equals: .emoji)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .submitLabel(.done)
+                                .onSubmit(save)
+                                .frame(minHeight: 58)
+                                .padding(.horizontal, 16)
+                                .onChange(of: emoji) { _, value in
+                                    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    if trimmed.isEmpty || trimmed.isSingleEmoji {
+                                        validationMessage = nil
+                                    } else {
+                                        validationMessage = "Use one emoji, or leave it blank."
+                                    }
+                                }
                         }
+                        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                .stroke(AppTheme.surfaceStroke, lineWidth: 1)
+                        )
 
-                    if let validationMessage {
-                        Text(validationMessage)
-                            .font(.caption)
-                            .foregroundStyle(AppTheme.expense)
+                        if let validationMessage {
+                            Text(validationMessage)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(AppTheme.danger)
+                        }
                     }
-                }
-            }
-            .navigationTitle(mode.title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
-                }
 
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(mode.saveTitle, action: save)
-                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Spacer(minLength: 24)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 18)
+                .padding(.bottom, 28)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .background(AppTheme.background)
+            .toolbar(.hidden, for: .navigationBar)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        focusedField = nil
+                    }
+                    .fontWeight(.bold)
+                    .foregroundStyle(AppTheme.brand)
                 }
             }
             .task {
                 await Task.yield()
-                nameFocused = true
+                focusedField = .name
+            }
+        }
+    }
+
+    private var header: some View {
+        ZStack {
+            Text(mode.title)
+                .font(.roundedBold(22))
+                .foregroundStyle(BudgetBeaverPalette.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.88)
+
+            HStack {
+                Button("Cancel", action: onCancel)
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundStyle(BudgetBeaverPalette.wood)
+                    .frame(width: 92, height: 52)
+                    .background(AppTheme.surface, in: Capsule())
+                    .buttonStyle(PressableButtonStyle(scale: 0.96))
+
+                Spacer()
+
+                Button(mode.saveTitle, action: save)
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundStyle(canSave ? AppTheme.brand : BudgetBeaverPalette.wood.opacity(0.45))
+                    .frame(width: 92, height: 52)
+                    .background(AppTheme.surface, in: Capsule())
+                    .buttonStyle(PressableButtonStyle(scale: 0.96))
+                    .disabled(!canSave)
             }
         }
     }
 
     private func save() {
+        guard canSave else { return }
         let trimmedEmoji = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmedEmoji.isEmpty || trimmedEmoji.isSingleEmoji else {
             validationMessage = "Use one emoji, or leave it blank."

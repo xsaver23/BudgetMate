@@ -92,7 +92,8 @@ final class MemberViewModel: ObservableObject {
 
     func replaceMembers(with cloudMembers: [BudgetMember]) {
         guard !cloudMembers.isEmpty else { return }
-        let sortedMembers = cloudMembers.sorted { lhs, rhs in
+        let normalizedMembers = BudgetMember.deduplicatedForBudget(cloudMembers)
+        let sortedMembers = normalizedMembers.sorted { lhs, rhs in
             if lhs.role != rhs.role {
                 return lhs.role == .owner
             }
@@ -148,11 +149,12 @@ final class MemberViewModel: ObservableObject {
 
     @discardableResult
     func restoreProfileIfPresent(from cloudMembers: [BudgetMember], userScopeId: String, email: String?) -> Bool {
-        guard let cloudProfile = signedInMember(in: cloudMembers, userScopeId: userScopeId, email: email) else {
+        let normalizedMembers = BudgetMember.deduplicatedForBudget(cloudMembers)
+        guard let cloudProfile = signedInMember(in: normalizedMembers, userScopeId: userScopeId, email: email) else {
             return false
         }
 
-        replaceMembers(with: cloudMembers)
+        replaceMembers(with: normalizedMembers)
         activeMemberId = cloudProfile.id
         isProfileComplete = true
         persistProfileCompleted()

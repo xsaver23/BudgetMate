@@ -73,6 +73,20 @@ struct BudgetMember: Identifiable, Codable, Hashable {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    static func deduplicatedForBudget(_ members: [BudgetMember]) -> [BudgetMember] {
+        var mergedMembers: [BudgetMember] = []
+
+        for member in members {
+            if let existingIndex = mergedMembers.firstIndex(where: { $0.representsSamePerson(as: member) }) {
+                mergedMembers[existingIndex] = mergedMembers[existingIndex].mergedIdentity(with: member)
+            } else {
+                mergedMembers.append(member)
+            }
+        }
+
+        return mergedMembers
+    }
+
     static func normalizedInitials(_ initials: String, displayName: String) -> String {
         let trimmed = initials.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty, trimmed != "?" {
@@ -109,5 +123,69 @@ struct BudgetMember: Identifiable, Codable, Hashable {
         guard !displayName.containsEmoji else {
             throw BudgetDataValidationError.invalidMemberNameEmoji
         }
+    }
+
+    private func representsSamePerson(as other: BudgetMember) -> Bool {
+        if id == other.id {
+            return true
+        }
+
+        if let authUserId,
+           authUserId == other.authUserId || authUserId == other.id {
+            return true
+        }
+
+        if let otherAuthUserId = other.authUserId,
+           otherAuthUserId == id {
+            return true
+        }
+
+        guard let email = Self.normalizedEmail(email),
+              let otherEmail = Self.normalizedEmail(other.email) else {
+            return false
+        }
+
+        return email == otherEmail
+    }
+
+    private func mergedIdentity(with other: BudgetMember) -> BudgetMember {
+        let preferred = Self.preferredCanonicalMember(self, other)
+        let secondary = preferred.id == id ? other : self
+        let mergedRole: BudgetMemberRole = (role == .owner || other.role == .owner) ? .owner : preferred.role
+        let mergedInviteStatus: InviteStatus = (inviteStatus == .active || other.inviteStatus == .active) ? .active : preferred.inviteStatus
+
+        return BudgetMember(
+            id: preferred.id,
+            displayName: preferred.displayName,
+            email: preferred.email ?? secondary.email,
+            initials: BudgetMember.initials(from: preferred.displayName),
+            color: preferred.color,
+            authUserId: preferred.authUserId ?? secondary.authUserId,
+            role: mergedRole,
+            inviteStatus: mergedInviteStatus,
+            joinedDate: preferred.joinedDate ?? secondary.joinedDate,
+            createdDate: min(preferred.createdDate, secondary.createdDate)
+        )
+    }
+
+    private static func preferredCanonicalMember(_ lhs: BudgetMember, _ rhs: BudgetMember) -> BudgetMember {
+        let lhsScore = canonicalScore(lhs)
+        let rhsScore = canonicalScore(rhs)
+
+        if lhsScore != rhsScore {
+            return lhsScore > rhsScore ? lhs : rhs
+        }
+
+        return lhs.createdDate <= rhs.createdDate ? lhs : rhs
+    }
+
+    private static func canonicalScore(_ member: BudgetMember) -> Int {
+        var score = 0
+        if member.role == .owner { score += 100 }
+        if member.inviteStatus == .active { score += 40 }
+        if member.authUserId != nil { score += 20 }
+        if member.joinedDate != nil { score += 10 }
+        if member.email != nil { score += 5 }
+        return score
     }
 }

@@ -22,6 +22,34 @@ npm run build
 npm run preview
 ```
 
+## Deploy To Cloudflare Pages
+
+BudgetMate Web is a static Vite app, so Cloudflare Pages can host it directly.
+
+Use these Pages settings:
+
+```text
+Framework preset: Vite
+Root directory: web
+Build command: npm run build
+Build output directory: dist
+```
+
+Add these production environment variables in Cloudflare Pages:
+
+```text
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
+```
+
+The app includes `public/_redirects` so browser refreshes keep loading the app if client-side routes are added later.
+
+You can also deploy from the CLI after signing in to Cloudflare:
+
+```bash
+npx wrangler pages deploy dist --project-name budgetmate
+```
+
 ## Data Modes
 
 The web app has two modes.

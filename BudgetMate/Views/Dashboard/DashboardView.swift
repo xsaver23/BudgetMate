@@ -619,9 +619,10 @@ struct DashboardView: View {
             Image(systemName: iconName)
                 .font(.system(size: 110, weight: .black))
                 .foregroundStyle(BudgetBeaverPalette.water.opacity(0.03))
-                .offset(x: 12, y: 18)
+                .offset(x: 6, y: 10)
         }
         .background(BudgetBeaverPalette.bank.opacity(0.6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(BudgetBeaverPalette.border, lineWidth: 1)

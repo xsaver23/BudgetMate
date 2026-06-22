@@ -9,6 +9,7 @@ import type {
   BudgetMember,
   BudgetSettings,
   BudgetTransaction,
+  MemberRole,
   Settlement,
   TransactionSplit
 } from "../domain/types";
@@ -157,6 +158,104 @@ function mapMember(row: MemberRow): BudgetMember {
     joinedDate: row.joined_date ?? undefined,
     createdDate: row.created_date
   };
+}
+
+function memberRoleKey(budgetId: string, userId: string) {
+  return `${budgetId}:${userId}`;
+}
+
+function memberIdentityKeys(member: BudgetMember) {
+  const keys = [`id:${member.budgetId}:${member.id}`];
+  const normalizedEmail = normalizeEmail(member.email);
+
+  if (member.authUserId) {
+    keys.push(`auth:${member.budgetId}:${member.authUserId}`);
+  }
+  if (normalizedEmail) {
+    keys.push(`email:${member.budgetId}:${normalizedEmail}`);
+  }
+
+  return keys;
+}
+
+function applyMembershipRoles(members: BudgetMember[], memberships: MembershipRow[]) {
+  const rolesByBudgetUser = new Map<string, MemberRole>();
+
+  memberships
+    .filter((membership) => membership.status === "active")
+    .forEach((membership) => {
+      rolesByBudgetUser.set(memberRoleKey(membership.budget_id, membership.user_id), membership.role);
+    });
+
+  return members.map((member) => {
+    const membershipRole = member.authUserId
+      ? rolesByBudgetUser.get(memberRoleKey(member.budgetId, member.authUserId))
+      : undefined;
+
+    return membershipRole && membershipRole !== member.role
+      ? { ...member, role: membershipRole }
+      : member;
+  });
+}
+
+function memberPreferenceScore(member: BudgetMember) {
+  let score = 0;
+  if (member.inviteStatus === "active") score += 100;
+  if (member.authUserId) score += 80;
+  if (member.joinedDate) score += 20;
+  if (member.email) score += 10;
+  if (member.role === "owner") score += 5;
+  return score;
+}
+
+function mergeMemberIdentity(left: BudgetMember, right: BudgetMember): BudgetMember {
+  const preferred = memberPreferenceScore(right) > memberPreferenceScore(left) ? right : left;
+  const fallback = preferred === left ? right : left;
+
+  return {
+    ...preferred,
+    displayName: preferred.displayName.trim() || fallback.displayName,
+    email: normalizeEmail(preferred.email) ?? normalizeEmail(fallback.email),
+    initials: preferred.initials || fallback.initials,
+    color: preferred.color || fallback.color,
+    authUserId: preferred.authUserId ?? fallback.authUserId,
+    inviteStatus: preferred.inviteStatus === "active" || fallback.inviteStatus === "active" ? "active" : preferred.inviteStatus,
+    joinedDate: preferred.joinedDate ?? fallback.joinedDate,
+    createdDate: preferred.createdDate || fallback.createdDate
+  };
+}
+
+function deduplicateMembersForBudget(members: BudgetMember[]) {
+  const membersByKey = new Map<string, BudgetMember>();
+  const primaryKeyByKey = new Map<string, string>();
+
+  for (const member of members) {
+    const keys = memberIdentityKeys(member);
+    const existingPrimaryKey = keys.map((key) => primaryKeyByKey.get(key)).find(Boolean);
+
+    if (!existingPrimaryKey) {
+      const primaryKey = keys[0];
+      membersByKey.set(primaryKey, member);
+      keys.forEach((key) => primaryKeyByKey.set(key, primaryKey));
+      continue;
+    }
+
+    const existing = membersByKey.get(existingPrimaryKey);
+    const merged = existing ? mergeMemberIdentity(existing, member) : member;
+    const mergedKeys = Array.from(new Set([...keys, ...memberIdentityKeys(merged)]));
+    membersByKey.set(existingPrimaryKey, merged);
+    mergedKeys.forEach((key) => primaryKeyByKey.set(key, existingPrimaryKey));
+  }
+
+  return Array.from(membersByKey.values()).sort((left, right) => {
+    if (left.role !== right.role) {
+      return left.role === "owner" ? -1 : 1;
+    }
+    if (left.inviteStatus !== right.inviteStatus) {
+      return left.inviteStatus === "active" ? -1 : 1;
+    }
+    return left.displayName.localeCompare(right.displayName);
+  });
 }
 
 function mapSplits(splits: TransactionRow["splits"]): TransactionSplit[] {
@@ -378,15 +477,17 @@ export async function fetchCloudState(user: User, preferredBudgetId?: string): P
     });
   }
 
-  const [settingsResult, membersResult, transactionsResult, settlementsResult] = await Promise.all([
+  const [settingsResult, membersResult, membershipsResult, transactionsResult, settlementsResult] = await Promise.all([
     client.from("budget_settings").select().in("budget_id", budgetIds),
     client.from("budget_members").select().in("budget_id", budgetIds),
+    client.from("budget_memberships").select().in("budget_id", budgetIds).eq("status", "active"),
     client.from("budget_transactions").select().in("budget_id", budgetIds),
     client.from("budget_settlements").select().in("budget_id", budgetIds)
   ]);
 
   if (settingsResult.error) throw settingsResult.error;
   if (membersResult.error) throw membersResult.error;
+  if (membershipsResult.error) throw membershipsResult.error;
   if (transactionsResult.error) throw transactionsResult.error;
   if (settlementsResult.error) throw settlementsResult.error;
 
@@ -411,11 +512,15 @@ export async function fetchCloudState(user: User, preferredBudgetId?: string): P
         ? user.id
         : budgetIds[0];
 
+  const cloudMembers = ((membersResult.data ?? []) as MemberRow[]).map(mapMember);
+  const allMemberships = (membershipsResult.data ?? []) as MembershipRow[];
+  const normalizedMembers = deduplicateMembersForBudget(applyMembershipRoles(cloudMembers, allMemberships));
+
   return {
     budgets,
     currentBudgetId,
     currentUserId: user.id,
-    members: ((membersResult.data ?? []) as MemberRow[]).map(mapMember),
+    members: normalizedMembers,
     transactions: ((transactionsResult.data ?? []) as TransactionRow[]).map(mapTransaction),
     settlements: ((settlementsResult.data ?? []) as SettlementRow[]).map(mapSettlement),
     settingsByBudgetId

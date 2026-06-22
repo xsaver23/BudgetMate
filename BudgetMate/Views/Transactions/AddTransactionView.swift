@@ -11,7 +11,12 @@ struct AddTransactionView: View {
     @StateObject private var viewModel: AddTransactionViewModel
     private let transactionToEdit: Transaction?
     @State private var selectedMemberId: UUID?
-    @FocusState private var amountFocused: Bool
+    @FocusState private var focusedInput: FocusedInput?
+
+    private enum FocusedInput: Hashable {
+        case amount
+        case customSplit(UUID)
+    }
 
     init(transactionToEdit: Transaction? = nil) {
         self.transactionToEdit = transactionToEdit
@@ -32,7 +37,26 @@ struct AddTransactionView: View {
 
     private var amountFieldWidth: CGFloat {
         let characterCount = max(amountDisplayText.count, 1)
-        return min(max(CGFloat(characterCount) * 38, 54), 270)
+        return min(max(CGFloat(characterCount) * amountCharacterWidth, 54), UIScreen.main.bounds.width - 118)
+    }
+
+    private var amountFontSize: CGFloat {
+        switch amountDisplayText.count {
+        case 0...6:
+            return 60
+        case 7...8:
+            return 54
+        case 9...10:
+            return 48
+        case 11...12:
+            return 42
+        default:
+            return 36
+        }
+    }
+
+    private var amountCharacterWidth: CGFloat {
+        amountFontSize * 0.58
     }
 
     private var amountBinding: Binding<String> {
@@ -88,6 +112,7 @@ struct AddTransactionView: View {
                     recurringSection
                 }
                 .scrollContentBackground(.hidden)
+                .scrollDismissesKeyboard(.interactively)
                 .background(AppTheme.background)
                 .tint(AppTheme.brand)
             }
@@ -128,6 +153,15 @@ struct AddTransactionView: View {
                     .foregroundStyle(AppTheme.brand)
                     .disabled(!viewModel.canSave)
                 }
+
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        focusedInput = nil
+                    }
+                    .fontWeight(.bold)
+                    .foregroundStyle(AppTheme.brand)
+                }
             }
         }
     }
@@ -154,11 +188,12 @@ struct AddTransactionView: View {
                 TextField("0", text: amountBinding)
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.leading)
-                    .font(.roundedBold(60))
+                    .font(.roundedBold(amountFontSize))
                     .foregroundStyle(BudgetBeaverPalette.ink)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.72)
                     .frame(width: amountFieldWidth, alignment: .leading)
-                    .focused($amountFocused)
+                    .focused($focusedInput, equals: .amount)
                     .accessibilityLabel("Amount")
             }
             .frame(maxWidth: .infinity)
@@ -175,7 +210,7 @@ struct AddTransactionView: View {
         .padding(.bottom, 24)
         .background(AppTheme.background)
         .contentShape(Rectangle())
-        .onTapGesture { amountFocused = true }
+        .onTapGesture { focusedInput = .amount }
     }
 
     private var recurringSection: some View {
@@ -284,6 +319,7 @@ struct AddTransactionView: View {
                         .multilineTextAlignment(.trailing)
                         .frame(width: 90)
                         .textFieldStyle(.roundedBorder)
+                        .focused($focusedInput, equals: .customSplit(member.id))
                 }
             }
         }

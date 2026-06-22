@@ -98,6 +98,10 @@ function memberInitials(name: string): string {
   return parts[0]?.[0]?.toUpperCase() ?? "?";
 }
 
+function normalizedEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
 function App() {
   const [state, setState] = useState<AppState>(() => loadState());
   const [syncMode, setSyncMode] = useState<SyncMode>(supabaseConfigStatus === "configured" ? "cloud" : "local");
@@ -361,11 +365,21 @@ function App() {
 
   function addMember(name: string, email: string) {
     if (!name.trim()) {
-      return;
+      return false;
     }
 
     const palette = ["#3B8FE2", "#E2572E", "#1FA37D", "#7B6EE6"];
     const emailValue = email.trim();
+    const emailKey = normalizedEmail(emailValue);
+    const existingActiveMember = emailKey
+      ? budgetMembers.some((member) => normalizedEmail(member.email ?? "") === emailKey && member.inviteStatus === "active")
+      : false;
+
+    if (existingActiveMember) {
+      setCloudMessage("That email is already an active member of this budget.");
+      return false;
+    }
+
     const shouldSendInvite = canUseCloud && !!emailValue;
     const member: BudgetMember = {
       id: makeId(),
@@ -389,6 +403,8 @@ function App() {
       () => (shouldSendInvite ? createCloudInvite(member, state.currentUserId) : upsertCloudMember(member, state.currentUserId)),
       shouldSendInvite ? "Invite saved" : "Member saved"
     );
+
+    return true;
   }
 
   function handleImport() {
@@ -1277,7 +1293,7 @@ function SettingsView({
   cloudError: string;
   pendingInvites: BudgetInvite[];
   onSettingsChange: (settings: BudgetSettings) => void;
-  onAddMember: (name: string, email: string) => void;
+  onAddMember: (name: string, email: string) => boolean;
   onImportTextChange: (value: string) => void;
   onImport: () => void;
   onReset: () => void;
@@ -1302,7 +1318,12 @@ function SettingsView({
       return;
     }
 
-    onAddMember(trimmedName, trimmedEmail);
+    const didAddMember = onAddMember(trimmedName, trimmedEmail);
+    if (!didAddMember) {
+      setMemberMessage("That email is already an active member of this budget.");
+      return;
+    }
+
     setMemberName("");
     setMemberEmail("");
     setMemberMessage(
