@@ -657,7 +657,8 @@ function App() {
               type="button"
             >
               <Plus size={18} aria-hidden="true" />
-              Add transaction
+              <span className="desktop-action-label">Add transaction</span>
+              <span className="mobile-action-label">Add</span>
             </button>
           </div>
         </header>
