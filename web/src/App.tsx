@@ -55,7 +55,16 @@ import {
   upsertCloudSettings,
   upsertCloudTransaction
 } from "./data/cloudRepository";
-import { exportState, importState, loadState, resetState, saveState } from "./data/storage";
+import {
+  clearState,
+  cloudStateStorageKey,
+  exportState,
+  importState,
+  loadState,
+  localStateStorageKey,
+  resetState,
+  saveState
+} from "./data/storage";
 import { supabase, supabaseConfigStatus } from "./data/supabaseClient";
 
 type Tab = "dashboard" | "transactions" | "budget" | "settings";
@@ -111,6 +120,9 @@ function App() {
   const addTransactionButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const canUseCloud = syncMode === "cloud" && !!session?.user && !!supabase;
+  const activeStorageKey =
+    syncMode === "cloud" && session?.user ? cloudStateStorageKey(session.user.id) : localStateStorageKey;
+  const canPersistState = syncMode !== "cloud" || !session?.user || state.currentUserId === session.user.id;
   const currentBudget =
     state.budgets.find((budget) => budget.id === state.currentBudgetId) ??
     state.budgets[0] ?? {
@@ -157,11 +169,19 @@ function App() {
         setCloudError(error.message);
       }
       setSession(data.session);
+      if (data.session?.user) {
+        setState(loadState(cloudStateStorageKey(data.session.user.id)));
+      }
       setAuthLoading(false);
     });
 
     const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
+      if (nextSession?.user) {
+        setSyncMode("cloud");
+        setState(loadState(cloudStateStorageKey(nextSession.user.id)));
+        setCloudMessage("Signed in. Loading cloud data.");
+      }
       if (!nextSession) {
         setPendingInvites([]);
         setCloudMessage("Signed out. Desktop local data is still available.");
@@ -175,8 +195,11 @@ function App() {
   }, []);
 
   useEffect(() => {
-    saveState(state);
-  }, [state]);
+    if (!canPersistState) {
+      return;
+    }
+    saveState(state, activeStorageKey);
+  }, [activeStorageKey, canPersistState, state]);
 
   useEffect(() => {
     if (selectedMemberId !== "all" && !budgetMembers.some((member) => member.id === selectedMemberId)) {
@@ -391,6 +414,7 @@ function App() {
       if (nextSession) {
         setSession(nextSession);
         setSyncMode("cloud");
+        setState(loadState(cloudStateStorageKey(nextSession.user.id)));
         setCloudMessage("Signed in. Loading cloud data.");
       } else {
         setCloudMessage("Check your email to finish creating the account.");
@@ -409,6 +433,7 @@ function App() {
     try {
       await signOut();
       setSession(null);
+      setState(loadState(localStateStorageKey));
       setSyncMode("local");
       setCloudMessage("Signed out. Desktop local mode is active.");
     } catch (error) {
@@ -477,6 +502,7 @@ function App() {
         statusMessage={cloudMessage}
         onSubmit={handleAuthSubmit}
         onUseLocal={() => {
+          setState(loadState(localStateStorageKey));
           setSyncMode("local");
           setCloudError("");
           setCloudMessage("Desktop local mode.");
@@ -603,7 +629,12 @@ function App() {
             onImport={handleImport}
             onReset={() => {
               if (window.confirm("Reset all BudgetMate web data on this computer? This cannot be undone.")) {
-                setState(resetState());
+                if (syncMode === "cloud" && session?.user) {
+                  clearState(activeStorageKey);
+                  void reloadCloudState();
+                } else {
+                  setState(resetState(localStateStorageKey));
+                }
               }
             }}
             syncMode={syncMode}

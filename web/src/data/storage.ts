@@ -1,7 +1,12 @@
 import { createSeedState } from "./seedData";
 import type { AppState } from "../domain/types";
 
-const storageKey = "budgetmate-web-state-v1";
+const baseStorageKey = "budgetmate-web-state-v1";
+export const localStateStorageKey = `${baseStorageKey}:local`;
+
+export function cloudStateStorageKey(userId: string): string {
+  return `${baseStorageKey}:cloud:${userId}`;
+}
 
 function isAppState(value: unknown): value is AppState {
   if (!value || typeof value !== "object") {
@@ -20,7 +25,7 @@ function isAppState(value: unknown): value is AppState {
   );
 }
 
-export function loadState(): AppState {
+export function loadState(storageKey = localStateStorageKey): AppState {
   const rawState = window.localStorage.getItem(storageKey);
   if (!rawState) {
     return createSeedState();
@@ -34,13 +39,17 @@ export function loadState(): AppState {
   }
 }
 
-export function saveState(state: AppState): void {
+export function saveState(state: AppState, storageKey = localStateStorageKey): void {
   window.localStorage.setItem(storageKey, JSON.stringify(state));
 }
 
-export function resetState(): AppState {
+export function clearState(storageKey: string): void {
+  window.localStorage.removeItem(storageKey);
+}
+
+export function resetState(storageKey = localStateStorageKey): AppState {
   const nextState = createSeedState();
-  saveState(nextState);
+  saveState(nextState, storageKey);
   return nextState;
 }
 
@@ -54,7 +63,6 @@ export function importState(rawState: string): AppState | null {
     if (!isAppState(parsed)) {
       return null;
     }
-    saveState(parsed);
     return parsed;
   } catch {
     return null;
