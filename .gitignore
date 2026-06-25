@@ -27,3 +27,8 @@ BudgetMate/Config/Supabase.local.xcconfig
 # Editor and OS noise
 .idea/
 .vscode/
+
+# Local AI/editor tooling
+.agents/
+.cursor/
+.gemini/
