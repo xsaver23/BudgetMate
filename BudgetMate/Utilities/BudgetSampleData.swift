@@ -3,7 +3,7 @@ import Foundation
 enum BudgetSampleData {
     static let budgetId = UUID(uuidString: "C3C3C3C3-3333-3333-3333-C3C3C3C3C3C3")!
     static let averyId = UUID(uuidString: "A1A1A1A1-1111-1111-1111-A1A1A1A1A1A1")!
-    static let jordaniferId = UUID(uuidString: "B2B2B2B2-2222-2222-2222-B2B2B2B2B2B2")!
+    static let jordanId = UUID(uuidString: "B2B2B2B2-2222-2222-2222-B2B2B2B2B2B2")!
     static let marcusId = UUID(uuidString: "D4D4D4D4-4444-4444-4444-D4D4D4D4D4D4")!
     static let priyaId = UUID(uuidString: "E5E5E5E5-5555-5555-5555-E5E5E5E5E5E5")!
 
@@ -12,16 +12,16 @@ enum BudgetSampleData {
             id: averyId,
             displayName: "Avery",
             email: "avery@example.com",
-            initials: "EF",
+            initials: "A",
             color: "#3B82F6",
             role: .owner,
             inviteStatus: .active,
             joinedDate: .now
         ),
         BudgetMember(
-            id: jordaniferId,
-            displayName: "Jordanifer",
-            email: "jordanifer@example.com",
+            id: jordanId,
+            displayName: "Jordan",
+            email: "jordan@example.com",
             initials: "J",
             color: "#F97316",
             role: .member,

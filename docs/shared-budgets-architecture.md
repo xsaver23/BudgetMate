@@ -126,23 +126,25 @@ No new tables are required.
 
 ## 5. One-time migration of the current state (Option A — keep history shared)
 
-Today your data lives under `budget_id == <yourUserId>` with you + Jordan as members.
-We promote that into a new named Shared Budget and leave *My Budget* private.
+Today the existing shared data lives under `budget_id == <ownerUserId>` with the
+owner plus another household member. We promote that into a new named Shared Budget
+and leave *My Budget* private.
 
 Approach (finalized against real rows before running):
 
-1. `new_shared := gen_random_uuid()`; insert `budgets(new_shared, owner=you, name='Shared Budget')`.
-2. Insert owner membership `(new_shared, you, owner, active)`.
-3. Move the **other** member's membership: `update budget_memberships set budget_id=new_shared where budget_id=<you> and user_id<>you`.
+1. `new_shared := gen_random_uuid()`; insert `budgets(new_shared, owner=<ownerUserId>, name='Shared Budget')`.
+2. Insert owner membership `(new_shared, <ownerUserId>, owner, active)`.
+3. Move the **other** member's membership: `update budget_memberships set budget_id=new_shared where budget_id=<ownerUserId> and user_id<>ownerUserId`.
 4. Move shared data: `budget_transactions`, `budget_settlements`, `budget_invites`,
-   and the **settings** row from `budget_id=<you>` → `new_shared`.
-5. `budget_members`: move member's row to `new_shared`; for you, create a member row in
-   `new_shared` (your shared profile) while keeping your `My Budget` member row.
-6. Insert a fresh default `budget_settings` row for `budget_id=<you>` (empty My Budget).
+   and the **settings** row from `budget_id=<ownerUserId>` → `new_shared`.
+5. `budget_members`: move the other household member's row to `new_shared`; for the
+   owner, create a member row in `new_shared` (the shared profile) while keeping the
+   private `My Budget` member row.
+6. Insert a fresh default `budget_settings` row for `budget_id=<ownerUserId>` (empty My Budget).
 
-> The member-row handling in step 5 is the delicate part (your member id == your user
-> id in personal scope). I will query your actual rows and finalize this SQL before you
-> run it, so we don't strand a profile.
+> The member-row handling in step 5 is the delicate part (the owner's member id may
+> equal the owner user id in personal scope). Query the actual rows and finalize this
+> SQL before running it, so a shared profile is not stranded.
 
 ## 6. Sync layer (`SupabaseBudgetSyncService`)
 
@@ -198,7 +200,7 @@ Approach (finalized against real rows before running):
    settings keyed by `budget_id` (+ SQL 4.1); remove the `budgetId == userId` sync gates.
 2. **Phase 2 — create/choose household:** `ensureSharedBudget`, `createInvite(budgetId:)`,
    `fetchOwnedBudgets`, revised `InviteMemberView`, switch scope after invite.
-3. **Phase 3 — one-time migration** (section 5) for your existing avery+Jordan data.
+3. **Phase 3 — one-time migration** (section 5) for existing shared household data.
 4. **Phase 4 — verify** (section 11).
 
 ## 11. Test plan
@@ -211,5 +213,5 @@ Approach (finalized against real rows before running):
   budget and sync independently across both devices.
 - Clear-all in a shared budget removes both members' rows (existing fix) and prunes on
   the other device.
-- Two-device run on your iPhone + member's, console captured (same loop as before).
+- Two-device run across an owner device and member device, with console output captured.
 ```
