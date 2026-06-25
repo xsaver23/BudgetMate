@@ -35,3 +35,7 @@ BudgetMate/Config/Supabase.local.xcconfig
 
 # Local screenshots and review captures
 screenshots/
+
+# Local backup snapshots
+ui-backups/
+BudgetMate/Backup/
