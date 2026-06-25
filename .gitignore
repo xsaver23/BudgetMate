@@ -32,3 +32,6 @@ BudgetMate/Config/Supabase.local.xcconfig
 .agents/
 .cursor/
 .gemini/
+
+# Local screenshots and review captures
+screenshots/
