@@ -27,7 +27,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, FormEvent } from "react";
 import type { Session, User } from "@supabase/supabase-js";
-import { categoryColor, categoryName, categoryTextColor, expenseCategories, incomeCategories } from "./domain/categories";
+import { categoryColor, categoryName, expenseCategories, incomeCategories } from "./domain/categories";
 import { currencyOptions, formatMoney } from "./domain/currency";
 import {
   categoryBreakdown,
@@ -165,8 +165,7 @@ function daysLeftInMonth(monthKeyValue: string): number {
 function categoryPillStyle(category: string): CSSProperties {
   const color = categoryColor(category);
   return {
-    "--category-color": color,
-    "--category-ink": categoryTextColor(category)
+    "--category-color": color
   } as CSSProperties;
 }
 
