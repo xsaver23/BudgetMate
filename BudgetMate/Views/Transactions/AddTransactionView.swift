@@ -24,7 +24,14 @@ struct AddTransactionView: View {
     }
 
     private var payerId: UUID {
-        selectedMemberId ?? memberViewModel.activeMember.id
+        selectedMemberId ?? defaultTransactionMember.id
+    }
+
+    private var defaultTransactionMember: BudgetMember {
+        memberViewModel.profileMember(
+            userScopeId: authStore.currentUserScopeId,
+            email: authStore.userEmail
+        ) ?? memberViewModel.activeMember
     }
 
     private var currencySymbol: String {
@@ -96,8 +103,8 @@ struct AddTransactionView: View {
                         .pickerStyle(.menu)
                     }
 
-                    Section(viewModel.type == .expense ? "Paid By" : "Budget Member") {
-                        Picker("Log For", selection: $selectedMemberId) {
+                    Section(viewModel.type == .expense ? "Paid By" : "Income For") {
+                        Picker(viewModel.type == .expense ? "Paid By" : "Income For", selection: $selectedMemberId) {
                             ForEach(memberViewModel.members) { member in
                                 Text(member.displayName).tag(Optional(member.id))
                             }
@@ -347,7 +354,7 @@ struct AddTransactionView: View {
     }
 
     private func saveTransaction() {
-        let member = memberViewModel.members.first(where: { $0.id == selectedMemberId }) ?? memberViewModel.activeMember
+        let member = memberViewModel.members.first(where: { $0.id == selectedMemberId }) ?? defaultTransactionMember
         if let transactionToEdit {
             viewModel.applyChanges(to: transactionToEdit, paidBy: member)
             transactionToEdit.ownerUserId = authStore.currentBudgetScopeId
@@ -408,7 +415,7 @@ struct AddTransactionView: View {
         if let selectedMemberId, ids.contains(selectedMemberId) {
             return
         }
-        selectedMemberId = transactionToEdit?.createdByMemberId ?? memberViewModel.activeMember.id
+        selectedMemberId = transactionToEdit?.createdByMemberId ?? defaultTransactionMember.id
     }
 }
 

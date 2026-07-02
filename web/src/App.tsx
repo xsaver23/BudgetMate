@@ -103,6 +103,19 @@ function normalizedEmail(email: string) {
   return email.trim().toLowerCase();
 }
 
+function signedInBudgetMember(members: BudgetMember[], user?: User | null) {
+  if (!user) {
+    return members[0];
+  }
+
+  const email = user.email ? normalizedEmail(user.email) : "";
+  return (
+    members.find((member) => member.id === user.id || member.authUserId === user.id) ??
+    members.find((member) => member.email && normalizedEmail(member.email) === email) ??
+    members[0]
+  );
+}
+
 function firstName(name: string): string {
   return name.trim().split(/\s+/)[0] || name;
 }
@@ -207,6 +220,7 @@ function App() {
     };
   const settings = state.settingsByBudgetId[currentBudget.id] ?? defaultBudgetSettings(currentBudget.id);
   const budgetMembers = state.members.filter((member) => member.budgetId === currentBudget.id);
+  const currentBudgetMember = signedInBudgetMember(budgetMembers, session?.user);
   const budgetTransactions = state.transactions.filter((transaction) => transaction.budgetId === currentBudget.id);
   const budgetSettlements = state.settlements.filter((settlement) => settlement.budgetId === currentBudget.id);
   const monthTransactions = useMemo(
@@ -741,6 +755,7 @@ function App() {
       {isAddingTransaction && (
           <TransactionDialog
             members={budgetMembers}
+            defaultMemberId={currentBudgetMember?.id}
             onClose={closeTransactionDialog}
             onSubmit={addTransaction}
           />
@@ -1799,27 +1814,42 @@ function SettingsView({
 
 function TransactionDialog({
   members,
+  defaultMemberId,
   onClose,
   onSubmit
 }: {
   members: BudgetMember[];
+  defaultMemberId?: string;
   onClose: () => void;
   onSubmit: (form: TransactionFormState) => void;
 }) {
+  const resolvedDefaultMemberId = defaultMemberId ?? members[0]?.id ?? "";
   const [form, setForm] = useState<TransactionFormState>({
     type: "expense",
     title: "",
     amount: "",
     category: "groceries",
     paymentMethod: "card",
-    createdByMemberId: members[0]?.id ?? "",
+    createdByMemberId: resolvedDefaultMemberId,
     date: todayInputValue(),
     splitWithHousehold: false
   });
   const [formError, setFormError] = useState("");
   const dialogRef = useRef<HTMLFormElement | null>(null);
+  const memberChoiceChangedRef = useRef(false);
 
   const categories = form.type === "income" ? incomeCategories : expenseCategories;
+
+  useEffect(() => {
+    const currentMemberStillExists = members.some((member) => member.id === form.createdByMemberId);
+    if (memberChoiceChangedRef.current && currentMemberStillExists) {
+      return;
+    }
+    if (currentMemberStillExists && form.createdByMemberId === resolvedDefaultMemberId) {
+      return;
+    }
+    updateForm({ createdByMemberId: resolvedDefaultMemberId });
+  }, [form.createdByMemberId, members, resolvedDefaultMemberId]);
 
   useEffect(() => {
     function focusableElements() {
@@ -1987,8 +2017,15 @@ function TransactionDialog({
         </div>
 
         <label className="field-row vertical">
-          <span>Paid by</span>
-          <select value={form.createdByMemberId} onChange={(event) => updateForm({ createdByMemberId: event.target.value })} required>
+          <span>{form.type === "income" ? "Income for" : "Paid by"}</span>
+          <select
+            value={form.createdByMemberId}
+            onChange={(event) => {
+              memberChoiceChangedRef.current = true;
+              updateForm({ createdByMemberId: event.target.value });
+            }}
+            required
+          >
             {members.map((member) => (
               <option key={member.id} value={member.id}>
                 {member.displayName}
