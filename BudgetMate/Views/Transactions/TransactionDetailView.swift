@@ -213,7 +213,7 @@ struct TransactionDetailView: View {
                             Text(payer.displayName)
                                 .foregroundStyle(AppTheme.textPrimary)
                         } else {
-                            Text("Unknown")
+                            Text("Member unavailable")
                                 .foregroundStyle(AppTheme.textSecondary)
                         }
                     }
@@ -249,16 +249,23 @@ struct TransactionDetailView: View {
         let isPayer = split.memberId == transaction.createdByMemberId
         let percent = transaction.amount > 0 ? Int((split.amount / transaction.amount * 100).rounded()) : 0
         return HStack(spacing: 10) {
-            MemberInitialsBadge(
-                initials: member?.displayInitials ?? "?",
-                colorHex: member?.colorHex ?? "#9CA3AF",
-                size: 30,
-                accessibilityLabel: member.map { "Member \($0.displayName)" },
-                showsShadow: false
-            )
+            if let member {
+                MemberInitialsBadge(
+                    initials: member.displayInitials,
+                    colorHex: member.colorHex,
+                    size: 30,
+                    accessibilityLabel: "Member \(member.displayName)",
+                    showsShadow: false
+                )
+            } else {
+                Circle()
+                    .fill(AppTheme.surfaceAlt)
+                    .frame(width: 30, height: 30)
+                    .accessibilityHidden(true)
+            }
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(member?.displayName ?? "Unknown")
+                Text(member?.displayName ?? "Member unavailable")
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(BudgetBeaverPalette.ink)
                 Text(splitCaption(for: member, isPayer: isPayer))

@@ -1332,7 +1332,7 @@ function TransactionsView({
                   </div>
                   <div className="transaction-member">
                     {member ? <MemberBadge member={member} /> : null}
-                    <span>{member?.displayName ?? "Member"}</span>
+                    <span>{member?.displayName ?? "Member unavailable"}</span>
                   </div>
                   <div className={`transaction-amount ${transaction.type}`}>
                     <strong>
@@ -2145,7 +2145,7 @@ function TransactionList({
               <div>
                 <strong>{transaction.title}</strong>
                 <span>
-                  {categoryName(transaction.category)} · {member ? member.displayName : "Member"}
+                  {categoryName(transaction.category)} · {member ? member.displayName : "Member unavailable"}
                 </span>
               </div>
               <b className={transaction.type}>

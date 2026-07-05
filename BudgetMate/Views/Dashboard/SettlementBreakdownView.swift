@@ -381,7 +381,7 @@ private struct SettlementDetailView: View {
                 Text(member.displayName)
                     .foregroundStyle(AppTheme.textPrimary)
             } else {
-                Text("Unknown")
+                Text("Member unavailable")
                     .foregroundStyle(AppTheme.textSecondary)
             }
         }

@@ -19,25 +19,6 @@ struct TransactionRowView: View {
         members.first(where: { $0.id == transaction.createdByMemberId })
     }
 
-    private var badgeInitials: String {
-        createdByMember?.displayInitials ?? "?"
-    }
-
-    private var badgeSymbol: String {
-        String(badgeInitials.prefix(1)).uppercased()
-    }
-
-    private var badgeColor: String {
-        createdByMember?.colorHex ?? "#9CA3AF"
-    }
-
-    private var badgeAccessibilityLabel: String {
-        if let member = createdByMember {
-            return "Added by \(member.displayName)"
-        }
-        return "Added by unknown member"
-    }
-
     private var categoryLine: String {
         if let paymentMethod = transaction.paymentMethod {
             return "\(transaction.category.displayName) • \(paymentMethod.displayName)"
@@ -59,12 +40,14 @@ struct TransactionRowView: View {
                     HStack(spacing: 8) {
                         Text(transaction.title)
                             .font(.headline)
-                        MemberInitialsBadge(
-                            initials: badgeSymbol,
-                            colorHex: badgeColor,
-                            size: 22,
-                            accessibilityLabel: badgeAccessibilityLabel
-                        )
+                        if let createdByMember {
+                            MemberInitialsBadge(
+                                initials: createdByMember.displayInitials,
+                                colorHex: createdByMember.colorHex,
+                                size: 22,
+                                accessibilityLabel: "Added by \(createdByMember.displayName)"
+                            )
+                        }
                     }
                     Text(categoryLine)
                         .font(.caption)
@@ -121,17 +104,6 @@ struct CompactTransactionRow: View {
         return line
     }
 
-    private var badgeSymbol: String {
-        createdByMember?.displayInitials ?? "?"
-    }
-
-    private var badgeAccessibilityLabel: String {
-        if let member = createdByMember {
-            return "Added by \(member.displayName)"
-        }
-        return "Added by unknown member"
-    }
-
     private var participantMembers: [BudgetMember] {
         transaction.participantIds.compactMap { id in
             members.first(where: { $0.id == id })
@@ -140,7 +112,7 @@ struct CompactTransactionRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            if transaction.isSplit {
+            if transaction.isSplit && !participantMembers.isEmpty {
                 MemberAvatarCluster(members: participantMembers, size: 34)
                     .frame(minWidth: 78, alignment: .leading)
             } else {
@@ -150,13 +122,15 @@ struct CompactTransactionRow: View {
                         emoji: settingsStore.categoryEmoji(for: transaction.category),
                         size: 38
                     )
-                    MemberInitialsBadge(
-                        initials: badgeSymbol,
-                        colorHex: createdByMember?.colorHex ?? "#9CA3AF",
-                        size: 18,
-                        accessibilityLabel: badgeAccessibilityLabel
-                    )
-                    .offset(x: 4, y: 4)
+                    if let createdByMember {
+                        MemberInitialsBadge(
+                            initials: createdByMember.displayInitials,
+                            colorHex: createdByMember.colorHex,
+                            size: 18,
+                            accessibilityLabel: "Added by \(createdByMember.displayName)"
+                        )
+                        .offset(x: 4, y: 4)
+                    }
                 }
                 .frame(width: 44, height: 44)
             }
