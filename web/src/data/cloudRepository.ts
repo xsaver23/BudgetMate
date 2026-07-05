@@ -202,14 +202,43 @@ function memberPreferenceScore(member: BudgetMember) {
   let score = 0;
   if (member.inviteStatus === "active") score += 100;
   if (member.authUserId) score += 80;
+  if (usesDedicatedMemberId(member)) score += 60;
   if (member.joinedDate) score += 20;
   if (member.email) score += 10;
   if (member.role === "owner") score += 5;
   return score;
 }
 
+function usesDedicatedMemberId(member: BudgetMember) {
+  return !!member.authUserId && member.id !== member.authUserId;
+}
+
+function representsSamePerson(left: BudgetMember, right: BudgetMember) {
+  if (left.id === right.id) return true;
+  if (left.authUserId && (left.authUserId === right.authUserId || left.authUserId === right.id)) return true;
+  if (right.authUserId && right.authUserId === left.id) return true;
+  const leftEmail = normalizeEmail(left.email);
+  const rightEmail = normalizeEmail(right.email);
+  return !!leftEmail && leftEmail === rightEmail;
+}
+
+function preferredMember(members: BudgetMember[]) {
+  return members.reduce<BudgetMember | undefined>((best, member) => {
+    if (!best) return member;
+    const bestScore = memberPreferenceScore(best);
+    const memberScore = memberPreferenceScore(member);
+    if (memberScore !== bestScore) {
+      return memberScore > bestScore ? member : best;
+    }
+    if (usesDedicatedMemberId(member) !== usesDedicatedMemberId(best)) {
+      return usesDedicatedMemberId(member) ? member : best;
+    }
+    return new Date(member.createdDate).getTime() < new Date(best.createdDate).getTime() ? member : best;
+  }, undefined);
+}
+
 function mergeMemberIdentity(left: BudgetMember, right: BudgetMember): BudgetMember {
-  const preferred = memberPreferenceScore(right) > memberPreferenceScore(left) ? right : left;
+  const preferred = preferredMember([left, right]) ?? left;
   const fallback = preferred === left ? right : left;
 
   return {
@@ -256,6 +285,66 @@ function deduplicateMembersForBudget(members: BudgetMember[]) {
     }
     return left.displayName.localeCompare(right.displayName);
   });
+}
+
+function memberAliasMap(members: BudgetMember[], canonicalMembers: BudgetMember[], userId: string, userEmail?: string | null) {
+  const aliases = new Map<string, string>();
+  for (const member of members) {
+    const canonical = canonicalMembers.find((candidate) => representsSamePerson(candidate, member));
+    if (canonical && canonical.id !== member.id) {
+      aliases.set(member.id, canonical.id);
+    }
+    if (member.authUserId) {
+      aliases.set(member.authUserId, canonical?.id ?? member.id);
+    }
+  }
+
+  const normalizedUserEmail = normalizeEmail(userEmail);
+  const signedInCanonical = canonicalMembers.find((member) => {
+    if (member.id === userId || member.authUserId === userId) return true;
+    return !!normalizedUserEmail && normalizeEmail(member.email) === normalizedUserEmail;
+  });
+  if (signedInCanonical && signedInCanonical.id !== userId) {
+    aliases.set(userId, signedInCanonical.id);
+  }
+
+  return aliases;
+}
+
+function knownMemberIds(members: BudgetMember[], aliases: Map<string, string>) {
+  return new Set([...members.map((member) => member.id), ...aliases.values()]);
+}
+
+function remapTransactionMembers(
+  transaction: BudgetTransaction,
+  aliases: Map<string, string>,
+  validMemberIds = new Set<string>()
+): BudgetTransaction {
+  if (aliases.size === 0) return transaction;
+  const resolvedCreatedByMemberId = aliases.get(transaction.createdByMemberId) ?? transaction.createdByMemberId;
+  const resolvedUserMemberId = aliases.get(transaction.userId) ?? transaction.userId;
+  const createdByMemberId =
+    validMemberIds.size > 0 && !validMemberIds.has(resolvedCreatedByMemberId) && validMemberIds.has(resolvedUserMemberId)
+      ? resolvedUserMemberId
+      : resolvedCreatedByMemberId;
+
+  return {
+    ...transaction,
+    createdByMemberId,
+    splits: transaction.splits.map((split) => ({
+      ...split,
+      memberId: aliases.get(split.memberId) ?? split.memberId
+    }))
+  };
+}
+
+function remapSettlementMembers(settlement: Settlement, aliases: Map<string, string>): Settlement {
+  if (aliases.size === 0) return settlement;
+  return {
+    ...settlement,
+    fromMemberId: aliases.get(settlement.fromMemberId) ?? settlement.fromMemberId,
+    toMemberId: aliases.get(settlement.toMemberId) ?? settlement.toMemberId
+  };
 }
 
 function mapSplits(splits: TransactionRow["splits"]): TransactionSplit[] {
@@ -514,15 +603,22 @@ export async function fetchCloudState(user: User, preferredBudgetId?: string): P
 
   const cloudMembers = ((membersResult.data ?? []) as MemberRow[]).map(mapMember);
   const allMemberships = (membershipsResult.data ?? []) as MembershipRow[];
-  const normalizedMembers = deduplicateMembersForBudget(applyMembershipRoles(cloudMembers, allMemberships));
+  const membersWithRoles = applyMembershipRoles(cloudMembers, allMemberships);
+  const normalizedMembers = deduplicateMembersForBudget(membersWithRoles);
+  const memberAliases = memberAliasMap(membersWithRoles, normalizedMembers, user.id, user.email);
+  const validMemberIds = knownMemberIds(membersWithRoles, memberAliases);
 
   return {
     budgets,
     currentBudgetId,
     currentUserId: user.id,
     members: normalizedMembers,
-    transactions: ((transactionsResult.data ?? []) as TransactionRow[]).map(mapTransaction),
-    settlements: ((settlementsResult.data ?? []) as SettlementRow[]).map(mapSettlement),
+    transactions: ((transactionsResult.data ?? []) as TransactionRow[]).map(mapTransaction).map((transaction) =>
+      remapTransactionMembers(transaction, memberAliases, validMemberIds)
+    ),
+    settlements: ((settlementsResult.data ?? []) as SettlementRow[]).map(mapSettlement).map((settlement) =>
+      remapSettlementMembers(settlement, memberAliases)
+    ),
     settingsByBudgetId
   };
 }
@@ -535,6 +631,20 @@ export async function upsertCloudSettings(settings: BudgetSettings, userId: stri
 
 export async function upsertCloudMember(member: BudgetMember, userId: string) {
   const client = requireSupabase();
+  const { data: existingData, error: fetchError } = await client
+    .from("budget_members")
+    .select()
+    .eq("budget_id", member.budgetId);
+  if (fetchError) throw fetchError;
+
+  const existingMembers = ((existingData ?? []) as MemberRow[]).map(mapMember);
+  const canonicalMembers = deduplicateMembersForBudget([...existingMembers, member]);
+  const aliases = memberAliasMap([...existingMembers, member], canonicalMembers, userId);
+  const canonicalId = aliases.get(member.id);
+  if (canonicalId && canonicalId !== member.id) {
+    return;
+  }
+
   const { error } = await client.from("budget_members").upsert(memberRow(member, userId), { onConflict: "id" });
   if (error) throw error;
 }
@@ -618,9 +728,20 @@ export async function createCloudInvite(member: BudgetMember, userId: string) {
 
 export async function upsertCloudTransaction(transaction: BudgetTransaction, userId: string) {
   const client = requireSupabase();
+  const { data: existingData, error: fetchError } = await client
+    .from("budget_members")
+    .select()
+    .eq("budget_id", transaction.budgetId);
+  if (fetchError) throw fetchError;
+
+  const existingMembers = ((existingData ?? []) as MemberRow[]).map(mapMember);
+  const canonicalMembers = deduplicateMembersForBudget(existingMembers);
+  const aliases = memberAliasMap(existingMembers, canonicalMembers, userId);
+  const normalizedTransaction = remapTransactionMembers(transaction, aliases, knownMemberIds(existingMembers, aliases));
+
   const { error } = await client
     .from("budget_transactions")
-    .upsert(transactionRow(transaction, userId), { onConflict: "id" });
+    .upsert(transactionRow(normalizedTransaction, userId), { onConflict: "id" });
   if (error) throw error;
 }
 

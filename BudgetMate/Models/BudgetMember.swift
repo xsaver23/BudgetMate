@@ -176,16 +176,26 @@ struct BudgetMember: Identifiable, Codable, Hashable {
             return lhsScore > rhsScore ? lhs : rhs
         }
 
+        if lhs.usesDedicatedMemberId != rhs.usesDedicatedMemberId {
+            return lhs.usesDedicatedMemberId ? lhs : rhs
+        }
+
         return lhs.createdDate <= rhs.createdDate ? lhs : rhs
     }
 
     private static func canonicalScore(_ member: BudgetMember) -> Int {
         var score = 0
-        if member.role == .owner { score += 100 }
-        if member.inviteStatus == .active { score += 40 }
-        if member.authUserId != nil { score += 20 }
-        if member.joinedDate != nil { score += 10 }
-        if member.email != nil { score += 5 }
+        if member.inviteStatus == .active { score += 100 }
+        if member.authUserId != nil { score += 80 }
+        if member.usesDedicatedMemberId { score += 60 }
+        if member.joinedDate != nil { score += 20 }
+        if member.email != nil { score += 10 }
+        if member.role == .owner { score += 5 }
         return score
+    }
+
+    private var usesDedicatedMemberId: Bool {
+        guard let authUserId else { return false }
+        return id != authUserId
     }
 }

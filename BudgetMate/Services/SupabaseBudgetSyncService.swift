@@ -206,6 +206,11 @@ struct CloudBudgetMemberRow: Codable {
     private static func string(from date: Date) -> String {
         CloudISO8601DateCodec.string(from: date)
     }
+
+    var usesDedicatedMemberId: Bool {
+        guard let authUserId else { return false }
+        return id != authUserId
+    }
 }
 
 private struct CloudBudgetRow: Codable {
@@ -400,7 +405,13 @@ struct CloudTransactionRow: Codable {
         case splits
     }
 
-    init(transaction: Transaction, userId: UUID, budgetId: UUID? = nil) {
+    init(
+        transaction: Transaction,
+        userId: UUID,
+        budgetId: UUID? = nil,
+        memberAliases: [UUID: UUID] = [:],
+        validMemberIds: Set<UUID> = []
+    ) {
         id = transaction.id
         self.userId = userId
         self.budgetId = budgetId ?? userId
@@ -409,29 +420,52 @@ struct CloudTransactionRow: Codable {
         type = transaction.type.rawValue
         category = transaction.category.rawValue
         paymentMethod = transaction.paymentMethod?.rawValue
-        createdByMemberId = transaction.createdByMemberId
+        createdByMemberId = Self.resolvedCreatedByMemberId(
+            transaction.createdByMemberId,
+            rowUserId: userId,
+            aliases: memberAliases,
+            validMemberIds: validMemberIds
+        )
         date = Self.string(from: transaction.date)
         createdAt = Self.string(from: transaction.createdAt)
         recurrenceRule = transaction.recurrenceRule
         splits = transaction.splits.map {
-            CloudTransactionSplitRow(id: $0.id, memberId: $0.memberId, amount: $0.amount)
+            CloudTransactionSplitRow(
+                id: $0.id,
+                memberId: Self.resolvedMemberId($0.memberId, aliases: memberAliases),
+                amount: $0.amount
+            )
         }
     }
 
-    func apply(to transaction: Transaction, ownerUserId: String) {
+    func apply(
+        to transaction: Transaction,
+        ownerUserId: String,
+        memberAliases: [UUID: UUID] = [:],
+        validMemberIds: Set<UUID> = []
+    ) {
         transaction.title = title
         transaction.amount = amount
         transaction.type = TransactionType(rawValue: type) ?? .expense
         transaction.category = TransactionCategory(rawValue: category)
         transaction.paymentMethod = paymentMethod.flatMap(PaymentMethod.init(rawValue:))
-        transaction.createdByMemberId = createdByMemberId
+        transaction.createdByMemberId = Self.resolvedCreatedByMemberId(
+            createdByMemberId,
+            rowUserId: userId,
+            aliases: memberAliases,
+            validMemberIds: validMemberIds
+        )
         transaction.date = CloudISO8601DateCodec.dateOrNow(from: date)
         transaction.createdAt = CloudISO8601DateCodec.dateOrNow(from: createdAt)
         transaction.recurrenceRule = recurrenceRule
         transaction.ownerUserId = ownerUserId
     }
 
-    func makeTransaction(ownerUserId: String) -> Transaction {
+    func makeTransaction(
+        ownerUserId: String,
+        memberAliases: [UUID: UUID] = [:],
+        validMemberIds: Set<UUID> = []
+    ) -> Transaction {
         Transaction(
             id: id,
             title: title,
@@ -439,7 +473,12 @@ struct CloudTransactionRow: Codable {
             type: TransactionType(rawValue: type) ?? .expense,
             category: TransactionCategory(rawValue: category),
             paymentMethod: paymentMethod.flatMap(PaymentMethod.init(rawValue:)),
-            createdByMemberId: createdByMemberId,
+            createdByMemberId: Self.resolvedCreatedByMemberId(
+                createdByMemberId,
+                rowUserId: userId,
+                aliases: memberAliases,
+                validMemberIds: validMemberIds
+            ),
             date: CloudISO8601DateCodec.dateOrNow(from: date),
             createdAt: CloudISO8601DateCodec.dateOrNow(from: createdAt),
             recurrenceRule: recurrenceRule,
@@ -459,6 +498,26 @@ struct CloudTransactionRow: Codable {
 
     private static func string(from date: Date) -> String {
         CloudISO8601DateCodec.string(from: date)
+    }
+
+    static func resolvedMemberId(_ memberId: UUID, aliases: [UUID: UUID]) -> UUID {
+        aliases[memberId] ?? memberId
+    }
+
+    static func resolvedCreatedByMemberId(
+        _ memberId: UUID,
+        rowUserId: UUID,
+        aliases: [UUID: UUID],
+        validMemberIds: Set<UUID> = []
+    ) -> UUID {
+        let mappedMemberId = resolvedMemberId(memberId, aliases: aliases)
+        guard !validMemberIds.isEmpty,
+              !validMemberIds.contains(mappedMemberId) else {
+            return mappedMemberId
+        }
+
+        let resolvedRowUserId = resolvedMemberId(rowUserId, aliases: aliases)
+        return validMemberIds.contains(resolvedRowUserId) ? resolvedRowUserId : mappedMemberId
     }
 }
 
@@ -481,29 +540,29 @@ struct CloudSettlementRow: Codable {
         case date
     }
 
-    init(settlement: Settlement, userId: UUID, budgetId: UUID? = nil) {
+    init(settlement: Settlement, userId: UUID, budgetId: UUID? = nil, memberAliases: [UUID: UUID] = [:]) {
         id = settlement.id
         self.userId = userId
         self.budgetId = budgetId ?? userId
-        fromMemberId = settlement.fromMemberId
-        toMemberId = settlement.toMemberId
+        fromMemberId = CloudTransactionRow.resolvedMemberId(settlement.fromMemberId, aliases: memberAliases)
+        toMemberId = CloudTransactionRow.resolvedMemberId(settlement.toMemberId, aliases: memberAliases)
         amount = settlement.amount
         date = CloudISO8601DateCodec.string(from: settlement.date)
     }
 
-    func apply(to settlement: Settlement, ownerUserId: String) {
-        settlement.fromMemberId = fromMemberId
-        settlement.toMemberId = toMemberId
+    func apply(to settlement: Settlement, ownerUserId: String, memberAliases: [UUID: UUID] = [:]) {
+        settlement.fromMemberId = CloudTransactionRow.resolvedMemberId(fromMemberId, aliases: memberAliases)
+        settlement.toMemberId = CloudTransactionRow.resolvedMemberId(toMemberId, aliases: memberAliases)
         settlement.amount = amount
         settlement.date = CloudISO8601DateCodec.dateOrNow(from: date)
         settlement.ownerUserId = ownerUserId
     }
 
-    func makeSettlement(ownerUserId: String) -> Settlement {
+    func makeSettlement(ownerUserId: String, memberAliases: [UUID: UUID] = [:]) -> Settlement {
         Settlement(
             id: id,
-            fromMemberId: fromMemberId,
-            toMemberId: toMemberId,
+            fromMemberId: CloudTransactionRow.resolvedMemberId(fromMemberId, aliases: memberAliases),
+            toMemberId: CloudTransactionRow.resolvedMemberId(toMemberId, aliases: memberAliases),
             amount: amount,
             date: CloudISO8601DateCodec.dateOrNow(from: date),
             ownerUserId: ownerUserId
@@ -558,9 +617,26 @@ final class SupabaseBudgetSyncService {
             normalizedMembers.map { CloudBudgetMemberRow(member: $0, userId: userId, budgetId: budgetId) },
             by: \.id
         )
-        let signedInMemberIds = signedInMemberIds(for: userId, userEmail: userEmail, in: normalizedMembers)
+        let existingMemberRows = try await budgetMemberRows(budgetId: budgetId)
+        let memberAliases = self.memberAliases(
+            candidateRows: candidateMemberRows,
+            existingRows: existingMemberRows,
+            userId: userId,
+            userEmail: userEmail
+        )
+        let validMemberIds = Self.validMemberIds(
+            candidateRows: candidateMemberRows,
+            existingRows: existingMemberRows,
+            aliases: memberAliases
+        )
+        let signedInMemberIds = Self.memberIdsIncludingAliases(
+            signedInMemberIds(for: userId, userEmail: userEmail, in: normalizedMembers),
+            aliases: memberAliases
+        )
         let memberRows = try await writableMemberRows(
             candidateMemberRows,
+            existingRows: existingMemberRows,
+            memberAliases: memberAliases,
             userId: userId,
             budgetId: budgetId,
             signedInMemberIds: signedInMemberIds
@@ -585,10 +661,20 @@ final class SupabaseBudgetSyncService {
                     transaction: $0,
                     userId: userId,
                     signedInMemberIds: signedInMemberIds,
-                    cloudOwnersByID: cloudTransactionOwnersByID
+                    cloudOwnersByID: cloudTransactionOwnersByID,
+                    memberAliases: memberAliases,
+                    validMemberIds: validMemberIds
                 )
             }
-            .map { CloudTransactionRow(transaction: $0, userId: userId, budgetId: budgetId) },
+            .map {
+                CloudTransactionRow(
+                    transaction: $0,
+                    userId: userId,
+                    budgetId: budgetId,
+                    memberAliases: memberAliases,
+                    validMemberIds: validMemberIds
+                )
+            },
             by: \.id
         )
         let pushedTransactionIDs = Set(transactionRows.map(\.id))
@@ -601,7 +687,7 @@ final class SupabaseBudgetSyncService {
                     cloudOwnersByID: cloudSettlementOwnersByID
                 )
             }
-            .map { CloudSettlementRow(settlement: $0, userId: userId, budgetId: budgetId) },
+            .map { CloudSettlementRow(settlement: $0, userId: userId, budgetId: budgetId, memberAliases: memberAliases) },
             by: \.id
         )
         let pushedSettlementIDs = Set(settlementRows.map(\.id))
@@ -659,8 +745,15 @@ final class SupabaseBudgetSyncService {
             pushedSettlementIDs: pushedSettlementIDs,
             in: context
         )
-        merge(pulledTransactions, into: context, existing: transactions, ownerUserId: budgetId.uuidString)
-        merge(pulledSettlements, into: context, existing: settlements, ownerUserId: budgetId.uuidString)
+        merge(
+            pulledTransactions,
+            into: context,
+            existing: transactions,
+            ownerUserId: budgetId.uuidString,
+            memberAliases: memberAliases,
+            validMemberIds: validMemberIds
+        )
+        merge(pulledSettlements, into: context, existing: settlements, ownerUserId: budgetId.uuidString, memberAliases: memberAliases)
         let pulledMembers = try await fetchMembers(userScopeId: userScopeId, budgetScopeId: budgetId.uuidString)
 
         return CloudBudgetSyncSummary(
@@ -711,12 +804,7 @@ final class SupabaseBudgetSyncService {
         }
         let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
 
-        let rows: [CloudBudgetMemberRow] = try await client
-            .from("budget_members")
-            .select()
-            .eq("budget_id", value: budgetId)
-            .execute()
-            .value
+        let rows = try await budgetMemberRows(budgetId: budgetId)
 
         try rows.forEach { try $0.validateDates() }
         let memberships: [CloudBudgetMembershipRow] = try await client
@@ -751,11 +839,23 @@ final class SupabaseBudgetSyncService {
             normalizedMembers.map { CloudBudgetMemberRow(member: $0, userId: userId, budgetId: budgetId) },
             by: \.id
         )
+        let existingRows = try await budgetMemberRows(budgetId: budgetId)
+        let memberAliases = self.memberAliases(
+            candidateRows: candidateRows,
+            existingRows: existingRows,
+            userId: userId,
+            userEmail: nil
+        )
         let rows = try await writableMemberRows(
             candidateRows,
+            existingRows: existingRows,
+            memberAliases: memberAliases,
             userId: userId,
             budgetId: budgetId,
-            signedInMemberIds: signedInMemberIds(for: userId, userEmail: nil, in: normalizedMembers)
+            signedInMemberIds: Self.memberIdsIncludingAliases(
+                signedInMemberIds(for: userId, userEmail: nil, in: normalizedMembers),
+                aliases: memberAliases
+            )
         )
         guard !rows.isEmpty else { return }
         try await client
@@ -964,7 +1064,25 @@ final class SupabaseBudgetSyncService {
         try await ensurePersonalBudget(userId: userId)
         try transaction.validateForSync()
 
-        let row = CloudTransactionRow(transaction: transaction, userId: userId, budgetId: budgetId)
+        let existingRows = try await budgetMemberRows(budgetId: budgetId)
+        let memberAliases = self.memberAliases(
+            candidateRows: [],
+            existingRows: existingRows,
+            userId: userId,
+            userEmail: nil
+        )
+        let validMemberIds = Self.validMemberIds(
+            candidateRows: [],
+            existingRows: existingRows,
+            aliases: memberAliases
+        )
+        let row = CloudTransactionRow(
+            transaction: transaction,
+            userId: userId,
+            budgetId: budgetId,
+            memberAliases: memberAliases,
+            validMemberIds: validMemberIds
+        )
         try await client
             .from("budget_transactions")
             .upsert(row, onConflict: "id")
@@ -980,7 +1098,18 @@ final class SupabaseBudgetSyncService {
         try await ensurePersonalBudget(userId: userId)
         try settlement.validateForSync()
 
-        let row = CloudSettlementRow(settlement: settlement, userId: userId, budgetId: budgetId)
+        let memberAliases = self.memberAliases(
+            candidateRows: [],
+            existingRows: try await budgetMemberRows(budgetId: budgetId),
+            userId: userId,
+            userEmail: nil
+        )
+        let row = CloudSettlementRow(
+            settlement: settlement,
+            userId: userId,
+            budgetId: budgetId,
+            memberAliases: memberAliases
+        )
         try await client
             .from("budget_settlements")
             .upsert(row, onConflict: "id")
@@ -1115,6 +1244,15 @@ final class SupabaseBudgetSyncService {
         return memberIds == sampleIds
     }
 
+    private func budgetMemberRows(budgetId: UUID) async throws -> [CloudBudgetMemberRow] {
+        try await client
+            .from("budget_members")
+            .select()
+            .eq("budget_id", value: budgetId)
+            .execute()
+            .value
+    }
+
     private func signedInMemberIds(for userId: UUID, userEmail: String?, in members: [BudgetMember]) -> Set<UUID> {
         let normalizedSignedInEmail = Self.normalizedEmail(userEmail)
         let matchingIds = members.compactMap { member -> UUID? in
@@ -1128,33 +1266,158 @@ final class SupabaseBudgetSyncService {
             return nil
         }
 
-        return Set(matchingIds.isEmpty ? [userId] : matchingIds)
+        return Set(matchingIds + [userId])
+    }
+
+    private func memberAliases(
+        candidateRows: [CloudBudgetMemberRow],
+        existingRows: [CloudBudgetMemberRow],
+        userId: UUID,
+        userEmail: String?
+    ) -> [UUID: UUID] {
+        let rows = existingRows + candidateRows
+        guard !rows.isEmpty else { return [:] }
+
+        var aliases: [UUID: UUID] = [:]
+        for row in rows {
+            let matches = rows.filter { Self.representsSameCloudMember($0, row) }
+            guard let canonical = Self.preferredCloudMemberRow(matches),
+                  canonical.id != row.id else {
+                if let authUserId = row.authUserId,
+                   authUserId != row.id {
+                    aliases[authUserId] = row.id
+                }
+                continue
+            }
+            aliases[row.id] = canonical.id
+            if let authUserId = row.authUserId,
+               authUserId != canonical.id {
+                aliases[authUserId] = canonical.id
+            }
+        }
+
+        let signedInMatches = rows.filter {
+            Self.isSignedInCloudMember($0, userId: userId, userEmail: userEmail)
+        }
+        if let signedInCanonical = Self.preferredCloudMemberRow(signedInMatches),
+           signedInCanonical.id != userId {
+            aliases[userId] = signedInCanonical.id
+        }
+
+        return aliases.filter { $0.key != $0.value }
+    }
+
+    private static func validMemberIds(
+        candidateRows: [CloudBudgetMemberRow],
+        existingRows: [CloudBudgetMemberRow],
+        aliases: [UUID: UUID]
+    ) -> Set<UUID> {
+        var ids = Set((candidateRows + existingRows).map(\.id))
+        ids.formUnion(aliases.values)
+        return ids
+    }
+
+    private static func memberIdsIncludingAliases(_ ids: Set<UUID>, aliases: [UUID: UUID]) -> Set<UUID> {
+        var expanded = ids
+        for id in ids {
+            if let canonicalId = aliases[id] {
+                expanded.insert(canonicalId)
+            }
+        }
+
+        for (sourceId, canonicalId) in aliases where expanded.contains(canonicalId) {
+            expanded.insert(sourceId)
+        }
+
+        return expanded
     }
 
     private func writableMemberRows(
         _ rows: [CloudBudgetMemberRow],
+        existingRows: [CloudBudgetMemberRow],
+        memberAliases: [UUID: UUID],
         userId: UUID,
         budgetId: UUID,
         signedInMemberIds: Set<UUID>
     ) async throws -> [CloudBudgetMemberRow] {
         guard !rows.isEmpty else { return [] }
 
-        let cloudMemberIDRows: [CloudRecordIDRow] = try await client
-            .from("budget_members")
-            .select("id,user_id")
-            .eq("budget_id", value: budgetId)
-            .execute()
-            .value
-        let cloudMemberOwnersByID = Dictionary(cloudMemberIDRows.map { ($0.id, $0.userId) }, uniquingKeysWith: { first, _ in first })
+        let cloudMemberOwnersByID = Dictionary(existingRows.map { ($0.id, $0.userId) }, uniquingKeysWith: { first, _ in first })
         let canCreateMemberRows = try await isActiveBudgetOwner(userId: userId, budgetId: budgetId)
 
         return rows.filter { row in
+            if let canonicalId = memberAliases[row.id],
+               canonicalId != row.id {
+                return false
+            }
+
             if let existingOwnerId = cloudMemberOwnersByID[row.id] {
                 return existingOwnerId == userId || row.authUserId == userId || signedInMemberIds.contains(row.id)
             }
 
             return canCreateMemberRows || row.authUserId == userId || signedInMemberIds.contains(row.id)
         }
+    }
+
+    private static func representsSameCloudMember(_ lhs: CloudBudgetMemberRow, _ rhs: CloudBudgetMemberRow) -> Bool {
+        if lhs.id == rhs.id {
+            return true
+        }
+
+        if let lhsAuthUserId = lhs.authUserId,
+           lhsAuthUserId == rhs.authUserId || lhsAuthUserId == rhs.id {
+            return true
+        }
+
+        if let rhsAuthUserId = rhs.authUserId,
+           rhsAuthUserId == lhs.id {
+            return true
+        }
+
+        guard let lhsEmail = normalizedEmail(lhs.email),
+              let rhsEmail = normalizedEmail(rhs.email) else {
+            return false
+        }
+
+        return lhsEmail == rhsEmail
+    }
+
+    private static func isSignedInCloudMember(_ row: CloudBudgetMemberRow, userId: UUID, userEmail: String?) -> Bool {
+        if row.id == userId || row.authUserId == userId {
+            return true
+        }
+
+        guard let signedInEmail = normalizedEmail(userEmail) else {
+            return false
+        }
+
+        return normalizedEmail(row.email) == signedInEmail
+    }
+
+    private static func preferredCloudMemberRow(_ rows: [CloudBudgetMemberRow]) -> CloudBudgetMemberRow? {
+        rows.max { lhs, rhs in
+            let lhsScore = cloudMemberCanonicalScore(lhs)
+            let rhsScore = cloudMemberCanonicalScore(rhs)
+
+            if lhsScore != rhsScore {
+                return lhsScore < rhsScore
+            }
+
+            let lhsDate = CloudISO8601DateCodec.date(from: lhs.createdDate) ?? .distantFuture
+            let rhsDate = CloudISO8601DateCodec.date(from: rhs.createdDate) ?? .distantFuture
+            return lhsDate > rhsDate
+        }
+    }
+
+    private static func cloudMemberCanonicalScore(_ row: CloudBudgetMemberRow) -> Int {
+        var score = 0
+        if row.inviteStatus == InviteStatus.active.rawValue { score += 100 }
+        if row.authUserId != nil { score += 80 }
+        if row.usesDedicatedMemberId { score += 60 }
+        if row.joinedDate != nil { score += 20 }
+        if normalizedEmail(row.email) != nil { score += 10 }
+        if row.role == BudgetMemberRole.owner.rawValue { score += 5 }
+        return score
     }
 
     private func isActiveBudgetOwner(userId: UUID, budgetId: UUID) async throws -> Bool {
@@ -1222,13 +1485,21 @@ final class SupabaseBudgetSyncService {
         transaction: Transaction,
         userId: UUID,
         signedInMemberIds: Set<UUID>,
-        cloudOwnersByID: [UUID: UUID]
+        cloudOwnersByID: [UUID: UUID],
+        memberAliases: [UUID: UUID],
+        validMemberIds: Set<UUID>
     ) -> Bool {
+        let resolvedCreatedByMemberId = CloudTransactionRow.resolvedCreatedByMemberId(
+            transaction.createdByMemberId,
+            rowUserId: userId,
+            aliases: memberAliases,
+            validMemberIds: validMemberIds
+        )
         if let cloudOwnerId = cloudOwnersByID[transaction.id] {
-            return cloudOwnerId == userId && signedInMemberIds.contains(transaction.createdByMemberId)
+            return cloudOwnerId == userId && signedInMemberIds.contains(resolvedCreatedByMemberId)
         }
 
-        return signedInMemberIds.contains(transaction.createdByMemberId)
+        return signedInMemberIds.contains(resolvedCreatedByMemberId)
     }
 
     private func shouldBulkPush(
@@ -1251,7 +1522,9 @@ final class SupabaseBudgetSyncService {
         _ rows: [CloudTransactionRow],
         into context: ModelContext,
         existing transactions: [Transaction],
-        ownerUserId: String
+        ownerUserId: String,
+        memberAliases: [UUID: UUID] = [:],
+        validMemberIds: Set<UUID> = []
     ) {
         // Keep the first row per id and delete any duplicates, healing stores
         // that accumulated duplicate rows before ids were deduplicated on sync.
@@ -1265,11 +1538,20 @@ final class SupabaseBudgetSyncService {
         }
 
         for row in rows {
-            let transaction = existingById[row.id] ?? row.makeTransaction(ownerUserId: ownerUserId)
+            let transaction = existingById[row.id] ?? row.makeTransaction(
+                ownerUserId: ownerUserId,
+                memberAliases: memberAliases,
+                validMemberIds: validMemberIds
+            )
             if existingById[row.id] == nil {
                 context.insert(transaction)
             } else {
-                row.apply(to: transaction, ownerUserId: ownerUserId)
+                row.apply(
+                    to: transaction,
+                    ownerUserId: ownerUserId,
+                    memberAliases: memberAliases,
+                    validMemberIds: validMemberIds
+                )
             }
 
             for split in Array(transaction.splits) {
@@ -1280,7 +1562,7 @@ final class SupabaseBudgetSyncService {
                 context.insert(
                     TransactionSplit(
                         id: splitRow.id,
-                        memberId: splitRow.memberId,
+                        memberId: CloudTransactionRow.resolvedMemberId(splitRow.memberId, aliases: memberAliases),
                         amount: splitRow.amount,
                         transaction: transaction
                     )
@@ -1316,7 +1598,8 @@ final class SupabaseBudgetSyncService {
         _ rows: [CloudSettlementRow],
         into context: ModelContext,
         existing settlements: [Settlement],
-        ownerUserId: String
+        ownerUserId: String,
+        memberAliases: [UUID: UUID] = [:]
     ) {
         // Keep the first row per id and delete any duplicates (see transaction
         // merge above).
@@ -1331,9 +1614,9 @@ final class SupabaseBudgetSyncService {
 
         for row in rows {
             if let settlement = existingById[row.id] {
-                row.apply(to: settlement, ownerUserId: ownerUserId)
+                row.apply(to: settlement, ownerUserId: ownerUserId, memberAliases: memberAliases)
             } else {
-                context.insert(row.makeSettlement(ownerUserId: ownerUserId))
+                context.insert(row.makeSettlement(ownerUserId: ownerUserId, memberAliases: memberAliases))
             }
         }
     }
