@@ -155,13 +155,14 @@ struct TransactionsView: View {
                     value: signedAmount(summaryTotals.currentBalance)
                 )
             }
-            .padding(.vertical, 18)
-            .background(AppTheme.surfaceAlt.opacity(0.72), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 14)
+            .background(AppTheme.surfaceAlt.opacity(0.72), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
-        .padding(16)
-        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(12)
+        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(AppTheme.surfaceStroke, lineWidth: 1)
         )
         .accessibilityElement(children: .contain)
@@ -171,21 +172,24 @@ struct TransactionsView: View {
         title: String,
         value: String
     ) -> some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 5) {
             Text(value)
-                .font(.roundedBold(18))
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .monospacedDigit()
                 .foregroundStyle(AppTheme.textPrimary)
                 .lineLimit(1)
-                .minimumScaleFactor(0.58)
+                .minimumScaleFactor(0.66)
+                .allowsTightening(true)
 
             Text(title)
-                .font(.caption.weight(.bold))
-                .tracking(2.6)
+                .font(.caption2.weight(.bold))
+                .tracking(2.1)
                 .textCase(.uppercase)
                 .foregroundStyle(AppTheme.textMuted)
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity)
+        .padding(.horizontal, 2)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title), \(value)")
     }
