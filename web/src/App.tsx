@@ -25,7 +25,7 @@ import {
   X
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, FormEvent } from "react";
+import type { CSSProperties, FormEvent, ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { categoryColor, categoryName, expenseCategories, incomeCategories } from "./domain/categories";
 import { currencyOptions, formatMoney } from "./domain/currency";
@@ -700,6 +700,7 @@ function App() {
             settings={settings}
             transactions={displayedTransactions}
             members={budgetMembers}
+            memberId={memberFilter}
             search={transactionSearch}
             onSearch={setTransactionSearch}
             onDelete={deleteTransaction}
@@ -1223,6 +1224,7 @@ function TransactionsView({
   settings,
   transactions,
   members,
+  memberId,
   search,
   onSearch,
   onDelete
@@ -1230,6 +1232,7 @@ function TransactionsView({
   settings: BudgetSettings;
   transactions: BudgetTransaction[];
   members: BudgetMember[];
+  memberId?: string;
   search: string;
   onSearch: (search: string) => void;
   onDelete: (id: string) => void;
@@ -1249,6 +1252,14 @@ function TransactionsView({
     const matchesType = typeFilter === "all" || transaction.type === typeFilter;
     return matchesSearch && matchesCategory && matchesType;
   });
+  const summaryTotals = dashboardTotals(filteredTransactions, monthlyBudget(settings), memberId);
+  const incomeCount = filteredTransactions.filter((transaction) => transaction.type === "income").length;
+  const expenseCount = filteredTransactions.filter((transaction) => transaction.type === "expense").length;
+  const savingsRate =
+    summaryTotals.totalIncome > 0
+      ? Math.max(0, ((summaryTotals.totalIncome - summaryTotals.totalExpenses) / summaryTotals.totalIncome) * 100)
+      : 0;
+  const summaryScope = filteredTransactions.length === transactions.length ? "this month" : "this view";
 
   return (
     <section className="transactions-view">
@@ -1289,6 +1300,14 @@ function TransactionsView({
           {filteredTransactions.length} of {transactions.length}
         </span>
       </div>
+      <TransactionSummaryStrip
+        totals={summaryTotals}
+        currencyCode={settings.currencyCode}
+        savingsRate={savingsRate}
+        incomeCount={incomeCount}
+        expenseCount={expenseCount}
+        scopeLabel={summaryScope}
+      />
       <div className="panel table-panel">
         {filteredTransactions.length === 0 ? (
           <div className="empty-state">No transactions in this view.</div>
@@ -1349,6 +1368,80 @@ function TransactionsView({
         )}
       </div>
     </section>
+  );
+}
+
+function TransactionSummaryStrip({
+  totals,
+  currencyCode,
+  savingsRate,
+  incomeCount,
+  expenseCount,
+  scopeLabel
+}: {
+  totals: ReturnType<typeof dashboardTotals>;
+  currencyCode: string;
+  savingsRate: number;
+  incomeCount: number;
+  expenseCount: number;
+  scopeLabel: string;
+}) {
+  return (
+    <section className="transaction-summary-strip" aria-label={`Transaction summary for ${scopeLabel}`}>
+      <TransactionSummaryMetric
+        label="Net"
+        value={formatMoney(totals.currentBalance, currencyCode)}
+        caption={scopeLabel}
+        tone={totals.currentBalance >= 0 ? "income" : "expense"}
+        icon={<Banknote size={17} aria-hidden="true" />}
+      />
+      <TransactionSummaryMetric
+        label="Income"
+        value={formatMoney(totals.totalIncome, currencyCode)}
+        caption={`${incomeCount} ${incomeCount === 1 ? "income entry" : "income entries"}`}
+        tone="income"
+        icon={<ArrowUpCircle size={17} aria-hidden="true" />}
+      />
+      <TransactionSummaryMetric
+        label="Expenses"
+        value={formatMoney(totals.totalExpenses, currencyCode)}
+        caption={`${expenseCount} ${expenseCount === 1 ? "expense entry" : "expense entries"}`}
+        tone="expense"
+        icon={<ArrowDownCircle size={17} aria-hidden="true" />}
+      />
+      <TransactionSummaryMetric
+        label="Savings"
+        value={`${savingsRate.toFixed(1)}%`}
+        caption="income kept"
+        tone="warning"
+        icon={<BarChart3 size={17} aria-hidden="true" />}
+      />
+    </section>
+  );
+}
+
+function TransactionSummaryMetric({
+  label,
+  value,
+  caption,
+  tone,
+  icon
+}: {
+  label: string;
+  value: string;
+  caption: string;
+  tone: "income" | "expense" | "warning";
+  icon: ReactNode;
+}) {
+  return (
+    <article className={`transaction-summary-metric ${tone}`}>
+      <span>
+        {icon}
+        {label}
+      </span>
+      <strong>{value}</strong>
+      <small>{caption}</small>
+    </article>
   );
 }
 

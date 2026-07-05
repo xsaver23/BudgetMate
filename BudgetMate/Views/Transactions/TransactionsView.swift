@@ -47,6 +47,27 @@ struct TransactionsView: View {
         return monthTransactions.filter { $0.involves(memberId: selectedMemberId) }
     }
 
+    private var summaryTotals: DashboardTotals {
+        DashboardViewModel.totals(
+            transactions: filteredTransactions,
+            monthlyBudget: settingsStore.settings.monthlyBudget,
+            forMember: selectedMemberId
+        )
+    }
+
+    private var filteredIncomeCount: Int {
+        filteredTransactions.filter { $0.type == .income }.count
+    }
+
+    private var filteredExpenseCount: Int {
+        filteredTransactions.filter { $0.type == .expense }.count
+    }
+
+    private var savingsRate: Double {
+        guard summaryTotals.totalIncome > 0 else { return 0 }
+        return max(0, (summaryTotals.totalIncome - summaryTotals.totalExpenses) / summaryTotals.totalIncome * 100)
+    }
+
     private var shouldShowMemberFilter: Bool {
         memberViewModel.members.count > 1
     }
@@ -90,6 +111,8 @@ struct TransactionsView: View {
                             memberFilterCard
                         }
 
+                        summaryCard
+
                         if filteredTransactions.isEmpty {
                             emptyStateCard
                         } else {
@@ -125,6 +148,111 @@ struct TransactionsView: View {
                 }
             }
         }
+    }
+
+    private var summaryCard: some View {
+        let columns = [
+            GridItem(.flexible(), spacing: 10),
+            GridItem(.flexible(), spacing: 10)
+        ]
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Month summary")
+                    .font(.roundedBold(18))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Spacer()
+                Text(selectedMemberId == nil ? "Everyone" : "Filtered")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(AppTheme.textMuted)
+            }
+
+            LazyVGrid(columns: columns, spacing: 10) {
+                summaryMetric(
+                    title: "Net",
+                    value: signedAmount(summaryTotals.currentBalance),
+                    caption: "this month",
+                    tint: summaryTotals.currentBalance >= 0 ? AppTheme.income : AppTheme.danger,
+                    systemImage: "banknote"
+                )
+                summaryMetric(
+                    title: "Income",
+                    value: amount(summaryTotals.totalIncome),
+                    caption: "\(filteredIncomeCount) \(filteredIncomeCount == 1 ? "income entry" : "income entries")",
+                    tint: AppTheme.income,
+                    systemImage: "arrow.up.circle"
+                )
+                summaryMetric(
+                    title: "Expenses",
+                    value: amount(summaryTotals.totalExpenses),
+                    caption: "\(filteredExpenseCount) \(filteredExpenseCount == 1 ? "expense entry" : "expense entries")",
+                    tint: AppTheme.expense,
+                    systemImage: "arrow.down.circle"
+                )
+                summaryMetric(
+                    title: "Savings",
+                    value: savingsRate.formatted(.number.precision(.fractionLength(1))) + "%",
+                    caption: "income kept",
+                    tint: AppTheme.warning,
+                    systemImage: "chart.bar"
+                )
+            }
+        }
+        .padding(16)
+        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(AppTheme.surfaceStroke, lineWidth: 1)
+        )
+        .accessibilityElement(children: .contain)
+    }
+
+    private func summaryMetric(
+        title: String,
+        value: String,
+        caption: String,
+        tint: Color,
+        systemImage: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage)
+                    .font(.caption.weight(.black))
+                    .frame(width: 15, height: 15)
+                Text(title)
+                    .font(.caption.weight(.black))
+                    .textCase(.uppercase)
+            }
+            .foregroundStyle(tint)
+
+            Text(value)
+                .font(.roundedBold(20))
+                .foregroundStyle(AppTheme.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.58)
+
+            Text(caption)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AppTheme.textMuted)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(tint.opacity(0.22), lineWidth: 1)
+        )
+        .accessibilityLabel("\(title), \(value), \(caption)")
+    }
+
+    private func amount(_ value: Double) -> String {
+        CurrencyFormatter.amountString(value, symbol: currencySymbol)
+    }
+
+    private func signedAmount(_ value: Double) -> String {
+        let sign = value >= 0 ? "+" : "-"
+        return "\(sign)\(CurrencyFormatter.amountString(abs(value), symbol: currencySymbol))"
     }
 
     private var memberFilterCard: some View {
