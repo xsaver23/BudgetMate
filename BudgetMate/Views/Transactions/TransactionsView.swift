@@ -63,11 +63,6 @@ struct TransactionsView: View {
         filteredTransactions.filter { $0.type == .expense }.count
     }
 
-    private var savingsRate: Double {
-        guard summaryTotals.totalIncome > 0 else { return 0 }
-        return max(0, (summaryTotals.totalIncome - summaryTotals.totalExpenses) / summaryTotals.totalIncome * 100)
-    }
-
     private var shouldShowMemberFilter: Bool {
         memberViewModel.members.count > 1
     }
@@ -116,7 +111,7 @@ struct TransactionsView: View {
                         if filteredTransactions.isEmpty {
                             emptyStateCard
                         } else {
-                            VStack(spacing: 32) {
+                            VStack(spacing: 40) {
                                 ForEach(groupedByDay, id: \.date) { group in
                                     dayCard(date: group.date, items: group.items)
                                 }
@@ -155,6 +150,7 @@ struct TransactionsView: View {
     private var summaryCard: some View {
         let columns = [
             GridItem(.flexible(), spacing: 10),
+            GridItem(.flexible(), spacing: 10),
             GridItem(.flexible(), spacing: 10)
         ]
 
@@ -171,13 +167,6 @@ struct TransactionsView: View {
 
             LazyVGrid(columns: columns, spacing: 10) {
                 summaryMetric(
-                    title: "Net",
-                    value: signedAmount(summaryTotals.currentBalance),
-                    caption: "this month",
-                    tint: summaryTotals.currentBalance >= 0 ? AppTheme.income : AppTheme.danger,
-                    systemImage: "banknote"
-                )
-                summaryMetric(
                     title: "Income",
                     value: amount(summaryTotals.totalIncome),
                     caption: "\(filteredIncomeCount) \(filteredIncomeCount == 1 ? "income entry" : "income entries")",
@@ -192,11 +181,11 @@ struct TransactionsView: View {
                     systemImage: "arrow.down.circle"
                 )
                 summaryMetric(
-                    title: "Savings",
-                    value: savingsRate.formatted(.number.precision(.fractionLength(1))) + "%",
-                    caption: "income kept",
-                    tint: AppTheme.warning,
-                    systemImage: "chart.bar"
+                    title: "Balance",
+                    value: signedAmount(summaryTotals.currentBalance),
+                    caption: "this month",
+                    tint: summaryTotals.currentBalance >= 0 ? AppTheme.income : AppTheme.danger,
+                    systemImage: "banknote"
                 )
             }
         }

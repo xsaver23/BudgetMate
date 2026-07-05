@@ -1255,10 +1255,6 @@ function TransactionsView({
   const summaryTotals = dashboardTotals(filteredTransactions, monthlyBudget(settings), memberId);
   const incomeCount = filteredTransactions.filter((transaction) => transaction.type === "income").length;
   const expenseCount = filteredTransactions.filter((transaction) => transaction.type === "expense").length;
-  const savingsRate =
-    summaryTotals.totalIncome > 0
-      ? Math.max(0, ((summaryTotals.totalIncome - summaryTotals.totalExpenses) / summaryTotals.totalIncome) * 100)
-      : 0;
   const summaryScope = filteredTransactions.length === transactions.length ? "this month" : "this view";
 
   return (
@@ -1303,7 +1299,6 @@ function TransactionsView({
       <TransactionSummaryStrip
         totals={summaryTotals}
         currencyCode={settings.currencyCode}
-        savingsRate={savingsRate}
         incomeCount={incomeCount}
         expenseCount={expenseCount}
         scopeLabel={summaryScope}
@@ -1374,27 +1369,18 @@ function TransactionsView({
 function TransactionSummaryStrip({
   totals,
   currencyCode,
-  savingsRate,
   incomeCount,
   expenseCount,
   scopeLabel
 }: {
   totals: ReturnType<typeof dashboardTotals>;
   currencyCode: string;
-  savingsRate: number;
   incomeCount: number;
   expenseCount: number;
   scopeLabel: string;
 }) {
   return (
     <section className="transaction-summary-strip" aria-label={`Transaction summary for ${scopeLabel}`}>
-      <TransactionSummaryMetric
-        label="Net"
-        value={formatMoney(totals.currentBalance, currencyCode)}
-        caption={scopeLabel}
-        tone={totals.currentBalance >= 0 ? "income" : "expense"}
-        icon={<Banknote size={17} aria-hidden="true" />}
-      />
       <TransactionSummaryMetric
         label="Income"
         value={formatMoney(totals.totalIncome, currencyCode)}
@@ -1410,11 +1396,11 @@ function TransactionSummaryStrip({
         icon={<ArrowDownCircle size={17} aria-hidden="true" />}
       />
       <TransactionSummaryMetric
-        label="Savings"
-        value={`${savingsRate.toFixed(1)}%`}
-        caption="income kept"
-        tone="warning"
-        icon={<BarChart3 size={17} aria-hidden="true" />}
+        label="Balance"
+        value={formatMoney(totals.currentBalance, currencyCode)}
+        caption={scopeLabel}
+        tone={totals.currentBalance >= 0 ? "income" : "expense"}
+        icon={<Banknote size={17} aria-hidden="true" />}
       />
     </section>
   );
