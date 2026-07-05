@@ -116,8 +116,10 @@ struct TransactionsView: View {
                         if filteredTransactions.isEmpty {
                             emptyStateCard
                         } else {
-                            ForEach(groupedByDay, id: \.date) { group in
-                                dayCard(date: group.date, items: group.items)
+                            VStack(spacing: 32) {
+                                ForEach(groupedByDay, id: \.date) { group in
+                                    dayCard(date: group.date, items: group.items)
+                                }
                             }
                         }
                     }
