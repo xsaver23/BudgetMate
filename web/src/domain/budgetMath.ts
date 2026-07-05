@@ -17,6 +17,57 @@ function monthKey(value: string | Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
+const monthBudgetPrefix = "__monthBudget__:";
+
+export function monthBudgetKey(selectedMonth: string, category: string): string {
+  return `${monthBudgetPrefix}${selectedMonth}:${category}`;
+}
+
+export function isMonthBudgetKey(key: string): boolean {
+  return key.startsWith(monthBudgetPrefix);
+}
+
+export function isInternalBudgetKey(key: string): boolean {
+  return isMonthBudgetKey(key) || key.startsWith("__hiddenCategory__");
+}
+
+function monthAndCategory(key: string): { month: string; category: string } | undefined {
+  if (!isMonthBudgetKey(key)) {
+    return undefined;
+  }
+  const value = key.slice(monthBudgetPrefix.length);
+  const separatorIndex = value.indexOf(":");
+  if (separatorIndex < 0) {
+    return undefined;
+  }
+  const month = value.slice(0, separatorIndex);
+  const category = value.slice(separatorIndex + 1);
+  return month && category ? { month, category } : undefined;
+}
+
+export function selectedCategoryBudgets(settings: BudgetSettings, selectedMonth: string): Record<string, number> {
+  const legacy = Object.fromEntries(
+    Object.entries(settings.categoryBudgets).filter(([key]) => !isMonthBudgetKey(key))
+  );
+  const scopedEntries = Object.entries(settings.categoryBudgets)
+    .map(([key, value]) => ({ scoped: monthAndCategory(key), value }))
+    .filter((entry): entry is { scoped: { month: string; category: string }; value: number } => !!entry.scoped);
+  const prior = scopedEntries
+    .filter((entry) => entry.scoped.month < selectedMonth)
+    .sort((left, right) => left.scoped.month.localeCompare(right.scoped.month))
+    .reduce<Record<string, number>>((result, entry) => {
+      result[entry.scoped.category] = Math.max(0, entry.value);
+      return result;
+    }, { ...legacy });
+  const exact = Object.fromEntries(
+    scopedEntries
+      .filter((entry) => entry.scoped.month === selectedMonth)
+      .map((entry) => [entry.scoped.category, Math.max(0, entry.value)])
+  );
+
+  return { ...prior, ...exact };
+}
+
 function timestamp(value: string | Date | undefined): number {
   if (!value) {
     return 0;
@@ -50,9 +101,10 @@ export function transactionsForMonth(transactions: BudgetTransaction[], selected
     .sort(newestTransactionFirst);
 }
 
-export function monthlyBudget(settings: BudgetSettings): number {
-  return Object.entries(settings.categoryBudgets).reduce((total, [category, value]) => {
-    if (category.startsWith("__hiddenCategory__")) {
+export function monthlyBudget(settings: BudgetSettings, selectedMonth?: string): number {
+  const categoryBudgets = selectedMonth ? selectedCategoryBudgets(settings, selectedMonth) : settings.categoryBudgets;
+  return Object.entries(categoryBudgets).reduce((total, [category, value]) => {
+    if (isInternalBudgetKey(category)) {
       return total;
     }
     return total + Math.max(0, value);

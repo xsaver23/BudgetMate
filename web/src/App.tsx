@@ -28,15 +28,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, FormEvent } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { categoryColor, categoryName, expenseCategories, incomeCategories } from "./domain/categories";
-import { currencyOptions, formatMoney } from "./domain/currency";
+import { currencyOptions, formatAmountNumber, formatMoney } from "./domain/currency";
 import {
   categoryBreakdown,
   currentMonthKey,
   dashboardTotals,
   involvesMember,
   memberExpenseTotals,
+  monthBudgetKey,
   monthlyBudget,
   normalizeAmount,
+  selectedCategoryBudgets,
   settlementSuggestions,
   transactionsForMonth
 } from "./domain/budgetMath";
@@ -230,7 +232,7 @@ function App() {
   const displayedTransactions = monthTransactions.filter((transaction) =>
     memberFilter ? involvesMember(transaction, memberFilter) : true
   );
-  const totals = dashboardTotals(monthTransactions, monthlyBudget(settings), memberFilter);
+  const totals = dashboardTotals(monthTransactions, monthlyBudget(settings, selectedMonth), memberFilter);
   const categoryTotals = categoryBreakdown(monthTransactions, memberFilter);
   const settlements = settlementSuggestions(budgetTransactions, budgetSettlements, budgetMembers);
   const activeTabTitle: Record<Tab, string> = {
@@ -701,6 +703,7 @@ function App() {
             transactions={displayedTransactions}
             members={budgetMembers}
             memberId={memberFilter}
+            selectedMonth={selectedMonth}
             search={transactionSearch}
             onSearch={setTransactionSearch}
             onDelete={deleteTransaction}
@@ -714,6 +717,7 @@ function App() {
             transactions={monthTransactions}
             members={budgetMembers}
             memberId={memberFilter}
+            selectedMonth={selectedMonth}
             onSettingsChange={updateSettings}
           />
         )}
@@ -980,7 +984,7 @@ function DashboardView({
   selectedMonth: string;
   members: BudgetMember[];
 }) {
-  const budgetLimit = monthlyBudget(settings);
+  const budgetLimit = monthlyBudget(settings, selectedMonth);
   const spentRatio = budgetLimit > 0 ? Math.min(1, Math.max(0, totals.totalExpenses / budgetLimit)) : 0;
   const savingsRate = totals.totalIncome > 0
     ? Math.max(0, ((totals.totalIncome - totals.totalExpenses) / totals.totalIncome) * 100)
@@ -1225,6 +1229,7 @@ function TransactionsView({
   transactions,
   members,
   memberId,
+  selectedMonth,
   search,
   onSearch,
   onDelete
@@ -1233,6 +1238,7 @@ function TransactionsView({
   transactions: BudgetTransaction[];
   members: BudgetMember[];
   memberId?: string;
+  selectedMonth: string;
   search: string;
   onSearch: (search: string) => void;
   onDelete: (id: string) => void;
@@ -1252,7 +1258,7 @@ function TransactionsView({
     const matchesType = typeFilter === "all" || transaction.type === typeFilter;
     return matchesSearch && matchesCategory && matchesType;
   });
-  const summaryTotals = dashboardTotals(filteredTransactions, monthlyBudget(settings), memberId);
+  const summaryTotals = dashboardTotals(filteredTransactions, monthlyBudget(settings, selectedMonth), memberId);
   const summaryScope = filteredTransactions.length === transactions.length ? "this month" : "this view";
 
   return (
@@ -1337,7 +1343,7 @@ function TransactionsView({
                   <div className={`transaction-amount ${transaction.type}`}>
                     <strong>
                       {transaction.type === "expense" ? "-" : "+"}
-                      {formatMoney(transaction.amount, settings.currencyCode)}
+                      {formatAmountNumber(transaction.amount, settings.currencyCode)}
                     </strong>
                   </div>
                   <time className="transaction-date" dateTime={transaction.date}>
@@ -1410,6 +1416,7 @@ function BudgetView({
   transactions,
   members,
   memberId,
+  selectedMonth,
   onSettingsChange
 }: {
   settings: BudgetSettings;
@@ -1417,15 +1424,17 @@ function BudgetView({
   transactions: BudgetTransaction[];
   members: BudgetMember[];
   memberId?: string;
+  selectedMonth: string;
   onSettingsChange: (settings: BudgetSettings) => void;
 }) {
   const [showUnbudgeted, setShowUnbudgeted] = useState(false);
   const spending = categoryBreakdown(transactions, memberId);
   const spendingByCategory = new Map(spending.map((item) => [item.category, item.amount]));
   const memberSpending = memberExpenseTotals(transactions, members);
-  const budgetLimit = monthlyBudget(settings);
+  const activeCategoryBudgets = selectedCategoryBudgets(settings, selectedMonth);
+  const budgetLimit = monthlyBudget(settings, selectedMonth);
   const visibleCategoryRows = expenseCategories.map((category) => {
-    const budget = settings.categoryBudgets[category.id] ?? 0;
+    const budget = activeCategoryBudgets[category.id] ?? 0;
     const spent = spendingByCategory.get(category.id) ?? 0;
     return { category, budget, spent };
   });
@@ -1439,7 +1448,7 @@ function BudgetView({
       ...settings,
       categoryBudgets: {
         ...settings.categoryBudgets,
-        [category]: normalizeAmount(Number(value))
+        [monthBudgetKey(selectedMonth, category)]: normalizeAmount(Number(value))
       }
     });
   }
@@ -1475,7 +1484,7 @@ function BudgetView({
                   type="number"
                   min="0"
                   step="10"
-                  value={settings.categoryBudgets[category.id] ?? 0}
+                  value={activeCategoryBudgets[category.id] ?? 0}
                   onChange={(event) => updateCategoryBudget(category.id, event.target.value)}
                   aria-label={`${category.name} budget`}
                 />
@@ -2150,7 +2159,7 @@ function TransactionList({
               </div>
               <b className={transaction.type}>
                 {transaction.type === "expense" ? "-" : "+"}
-                {formatMoney(transaction.amount, settings.currencyCode)}
+                {formatAmountNumber(transaction.amount, settings.currencyCode)}
                 <small>{formatShortDate(transaction.date)}</small>
               </b>
             </div>

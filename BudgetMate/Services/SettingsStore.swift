@@ -53,6 +53,19 @@ final class SettingsStore: ObservableObject {
         settings.categoryBudgets[category.rawValue] ?? 0
     }
 
+    func budgetAmount(for category: TransactionCategory, in monthDate: Date) -> Double {
+        let monthKey = BudgetSettings.monthKey(for: monthDate)
+        return settings.categoryBudgets(forMonthKey: monthKey)[category.rawValue] ?? 0
+    }
+
+    func categoryBudgets(in monthDate: Date) -> [String: Double] {
+        settings.categoryBudgets(forMonthKey: BudgetSettings.monthKey(for: monthDate))
+    }
+
+    func monthlyBudget(in monthDate: Date) -> Double {
+        settings.monthlyBudget(forMonthKey: BudgetSettings.monthKey(for: monthDate))
+    }
+
     func categoryEmoji(for category: TransactionCategory) -> String? {
         settings.emoji(for: category)
     }
@@ -71,10 +84,26 @@ final class SettingsStore: ObservableObject {
         persist()
     }
 
+    func updateCategoryBudget(_ amount: Double, for category: TransactionCategory, in monthDate: Date) {
+        let monthKey = BudgetSettings.monthKey(for: monthDate)
+        settings.categoryBudgets[BudgetSettings.monthBudgetKey(monthKey: monthKey, categoryRawValue: category.rawValue)] = max(0, amount)
+        persist()
+    }
+
     func updateCategoryBudgets(_ values: [TransactionCategory: Double]) {
         var mapped: [String: Double] = settings.categoryBudgets
         for (category, amount) in values {
             mapped[category.rawValue] = max(0, amount)
+        }
+        settings.categoryBudgets = mapped
+        persist()
+    }
+
+    func updateCategoryBudgets(_ values: [TransactionCategory: Double], in monthDate: Date) {
+        let monthKey = BudgetSettings.monthKey(for: monthDate)
+        var mapped = settings.categoryBudgets
+        for (category, amount) in values {
+            mapped[BudgetSettings.monthBudgetKey(monthKey: monthKey, categoryRawValue: category.rawValue)] = max(0, amount)
         }
         settings.categoryBudgets = mapped
         persist()
@@ -92,6 +121,14 @@ final class SettingsStore: ObservableObject {
         let currentBudget = settings.categoryBudgets[oldCategory.rawValue] ?? 0
         let currentEmoji = emoji ?? settings.categoryEmojis[oldCategory.rawValue]
         settings.categoryBudgets[newCategory.rawValue] = currentBudget
+        for (key, amount) in settings.categoryBudgets {
+            guard let scopedKey = BudgetSettings.monthAndCategory(from: key),
+                  scopedKey.categoryRawValue == oldCategory.rawValue else {
+                continue
+            }
+            settings.categoryBudgets[BudgetSettings.monthBudgetKey(monthKey: scopedKey.monthKey, categoryRawValue: newCategory.rawValue)] = amount
+            settings.categoryBudgets.removeValue(forKey: key)
+        }
         updateCategoryEmojiInMemory(currentEmoji, for: newCategory)
 
         if oldCategory.isBuiltInExpenseCategory {
@@ -131,6 +168,11 @@ final class SettingsStore: ObservableObject {
             settings.categoryBudgets.removeValue(forKey: category.rawValue)
             settings.categoryEmojis.removeValue(forKey: category.rawValue)
         }
+        settings.categoryBudgets.keys
+            .filter { key in
+                BudgetSettings.monthAndCategory(from: key)?.categoryRawValue == category.rawValue
+            }
+            .forEach { settings.categoryBudgets.removeValue(forKey: $0) }
 
         persist()
     }

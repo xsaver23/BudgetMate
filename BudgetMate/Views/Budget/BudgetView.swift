@@ -41,12 +41,16 @@ struct BudgetView: View {
     private var totalExpenses: Double { tabMetrics.totalExpenses }
 
     private var remainingBudget: Double {
-        settingsStore.settings.monthlyBudget - totalExpenses
+        monthlyBudget - totalExpenses
     }
 
     private var budgetProgress: Double {
-        guard settingsStore.settings.monthlyBudget > 0 else { return 0 }
-        return min(max(totalExpenses / settingsStore.settings.monthlyBudget, 0), 1)
+        guard monthlyBudget > 0 else { return 0 }
+        return min(max(totalExpenses / monthlyBudget, 0), 1)
+    }
+
+    private var monthlyBudget: Double {
+        settingsStore.monthlyBudget(in: monthSelectionStore.selectedMonthDate)
     }
 
     private var metricsRefreshToken: String {
@@ -61,10 +65,12 @@ struct BudgetView: View {
         let hiddenRawValues = settingsStore.hiddenExpenseCategoryRawValues()
         let builtInCategories = TransactionCategory.expenseCategories
             .filter { !hiddenRawValues.contains($0.rawValue) }
-        let customCategories = settingsStore.settings.categoryBudgets.keys
+        let monthBudgets = settingsStore.categoryBudgets(in: monthSelectionStore.selectedMonthDate)
+        let customBudgetKeys = Set(settingsStore.settings.legacyCategoryBudgets.keys).union(monthBudgets.keys)
+        let customCategories = customBudgetKeys
             .filter { key in
                 !TransactionCategory.builtInRawValues.contains(key) &&
-                !TransactionCategory.isHiddenMarkerKey(key)
+                !BudgetSettings.isInternalBudgetKey(key)
             }
             .map(TransactionCategory.init(rawValue:))
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
@@ -143,7 +149,7 @@ struct BudgetView: View {
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.6))
 
-                    Text(formattedAmount(settingsStore.settings.monthlyBudget))
+                    Text(formattedAmount(monthlyBudget))
                         .font(.largeTitle.weight(.black))
                         .foregroundStyle(BudgetBeaverPalette.ink)
                         .lineLimit(1)
@@ -472,7 +478,7 @@ struct BudgetView: View {
     private func loadCategoryBudgetInputs() {
         var values: [String: String] = [:]
         for category in categories {
-            let budget = settingsStore.budgetAmount(for: category)
+            let budget = configuredBudget(for: category)
             values[category.rawValue] = budget > 0 ? String(format: "%.2f", budget) : ""
         }
         categoryBudgetInputs = values
@@ -489,7 +495,7 @@ struct BudgetView: View {
             }
         }
 
-        settingsStore.updateCategoryBudgets(updates)
+        settingsStore.updateCategoryBudgets(updates, in: monthSelectionStore.selectedMonthDate)
         loadCategoryBudgetInputs()
         cloudSyncStore.saveSettings(
             settingsStore.settings,
@@ -615,7 +621,7 @@ struct BudgetView: View {
     }
 
     private func configuredBudget(for category: TransactionCategory) -> Double {
-        settingsStore.budgetAmount(for: category)
+        settingsStore.budgetAmount(for: category, in: monthSelectionStore.selectedMonthDate)
     }
 
     private func remainingAmount(for category: TransactionCategory) -> Double {

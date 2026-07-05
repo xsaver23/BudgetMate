@@ -188,10 +188,10 @@ final class AddTransactionViewModel: ObservableObject {
                 return String(key.dropFirst(TransactionCategory.hiddenCategoryPrefix.count))
             }
         )
-        customExpenseCategories = settings.categoryBudgets.keys
+        customExpenseCategories = settings.legacyCategoryBudgets.keys
             .filter { key in
                 !TransactionCategory.builtInRawValues.contains(key) &&
-                !TransactionCategory.isHiddenMarkerKey(key)
+                !BudgetSettings.isInternalBudgetKey(key)
             }
             .map(TransactionCategory.init(rawValue:))
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }

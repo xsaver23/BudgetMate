@@ -12,7 +12,7 @@ struct TransactionRowView: View {
 
     private var signedAmount: String {
         let sign = transaction.type == .income ? "+" : "-"
-        return "\(sign)\(CurrencyFormatter.amountString(transaction.amount, symbol: currencySymbol))"
+        return "\(sign)\(CurrencyFormatter.numberString(transaction.amount))"
     }
 
     private var createdByMember: BudgetMember? {
@@ -87,7 +87,7 @@ struct CompactTransactionRow: View {
 
     private var signedAmount: String {
         let sign = transaction.type == .income ? "+" : "-"
-        return "\(sign)\(CurrencyFormatter.amountString(transaction.amount, symbol: currencySymbol))"
+        return "\(sign)\(CurrencyFormatter.numberString(transaction.amount))"
     }
 
     private var categoryLine: String {
@@ -112,28 +112,12 @@ struct CompactTransactionRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            if transaction.isSplit && !participantMembers.isEmpty {
-                MemberAvatarCluster(members: participantMembers, size: 34)
-                    .frame(minWidth: 78, alignment: .leading)
-            } else {
-                ZStack(alignment: .bottomTrailing) {
-                    CategoryIconView(
-                        category: transaction.category,
-                        emoji: settingsStore.categoryEmoji(for: transaction.category),
-                        size: 38
-                    )
-                    if let createdByMember {
-                        MemberInitialsBadge(
-                            initials: createdByMember.displayInitials,
-                            colorHex: createdByMember.colorHex,
-                            size: 18,
-                            accessibilityLabel: "Added by \(createdByMember.displayName)"
-                        )
-                        .offset(x: 4, y: 4)
-                    }
-                }
-                .frame(width: 44, height: 44)
-            }
+            TransactionIdentityIcon(
+                transaction: transaction,
+                createdByMember: createdByMember,
+                participantMembers: participantMembers,
+                emoji: settingsStore.categoryEmoji(for: transaction.category)
+            )
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(transaction.title)
@@ -155,6 +139,59 @@ struct CompactTransactionRow: View {
                 .minimumScaleFactor(0.7)
         }
         .contentShape(Rectangle())
+    }
+}
+
+private struct TransactionIdentityIcon: View {
+    let transaction: Transaction
+    let createdByMember: BudgetMember?
+    let participantMembers: [BudgetMember]
+    let emoji: String?
+
+    private var uniqueParticipantMembers: [BudgetMember] {
+        participantMembers.reduce(into: [BudgetMember]()) { result, member in
+            if !result.contains(where: { $0.id == member.id }) {
+                result.append(member)
+            }
+        }
+    }
+
+    private var splitMembers: [BudgetMember] {
+        Array(uniqueParticipantMembers.prefix(2))
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            CategoryIconView(
+                category: transaction.category,
+                emoji: emoji,
+                size: 38
+            )
+
+            if transaction.isSplit && !splitMembers.isEmpty {
+                HStack(spacing: -4) {
+                    ForEach(splitMembers) { member in
+                        MemberInitialsBadge(
+                            initials: member.displayInitials,
+                            colorHex: member.colorHex,
+                            size: 17,
+                            accessibilityLabel: "Split with \(member.displayName)"
+                        )
+                    }
+                }
+                .offset(x: 7, y: 7)
+            } else if let createdByMember {
+                MemberInitialsBadge(
+                    initials: createdByMember.displayInitials,
+                    colorHex: createdByMember.colorHex,
+                    size: 18,
+                    accessibilityLabel: "Added by \(createdByMember.displayName)"
+                )
+                .offset(x: 4, y: 4)
+            }
+        }
+        .frame(width: 46, height: 46)
+        .accessibilityElement(children: .combine)
     }
 }
 

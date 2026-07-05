@@ -26,3 +26,11 @@ export function formatMoney(amount: number, currencyCode: string): string {
     maximumFractionDigits: normalizedCurrencyCode(currencyCode) === "JPY" ? 0 : 2
   }).format(amount);
 }
+
+export function formatAmountNumber(amount: number, currencyCode: string): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "decimal",
+    minimumFractionDigits: normalizedCurrencyCode(currencyCode) === "JPY" ? 0 : 2,
+    maximumFractionDigits: normalizedCurrencyCode(currencyCode) === "JPY" ? 0 : 2
+  }).format(amount);
+}

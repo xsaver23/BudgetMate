@@ -50,7 +50,7 @@ struct TransactionsView: View {
     private var summaryTotals: DashboardTotals {
         DashboardViewModel.totals(
             transactions: filteredTransactions,
-            monthlyBudget: settingsStore.settings.monthlyBudget,
+            monthlyBudget: settingsStore.monthlyBudget(in: monthSelectionStore.selectedMonthDate),
             forMember: selectedMemberId
         )
     }

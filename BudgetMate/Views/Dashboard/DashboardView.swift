@@ -40,7 +40,7 @@ struct DashboardView: View {
     private var scopedSettlementRecords: [Settlement] { settlementRecords }
 
     private var monthlyBudget: Double {
-        settingsStore.settings.monthlyBudget
+        settingsStore.monthlyBudget(in: monthSelectionStore.selectedMonthDate)
     }
 
     private var budgetProgress: Double {
