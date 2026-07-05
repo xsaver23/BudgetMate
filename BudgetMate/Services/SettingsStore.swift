@@ -45,6 +45,7 @@ final class SettingsStore: ObservableObject {
     }
 
     func replaceSettings(_ settings: BudgetSettings) {
+        guard self.settings != settings else { return }
         self.settings = settings
         persist()
     }

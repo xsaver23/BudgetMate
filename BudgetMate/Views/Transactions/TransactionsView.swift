@@ -103,7 +103,7 @@ struct TransactionsView: View {
                         if filteredTransactions.isEmpty {
                             emptyStateCard
                         } else {
-                            VStack(spacing: 40) {
+                            LazyVStack(spacing: 40) {
                                 ForEach(groupedByDay, id: \.date) { group in
                                     dayCard(date: group.date, items: group.items)
                                 }

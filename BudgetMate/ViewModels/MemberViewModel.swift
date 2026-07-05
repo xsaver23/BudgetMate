@@ -99,7 +99,9 @@ final class MemberViewModel: ObservableObject {
             }
             return lhs.createdDate < rhs.createdDate
         }
-        members = sortedMembers
+        if sortedMembers != members {
+            members = sortedMembers
+        }
         if let signedInMember = signedInMember(in: sortedMembers) {
             activeMemberId = signedInMember.id
         }

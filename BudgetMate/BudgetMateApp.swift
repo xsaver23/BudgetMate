@@ -16,8 +16,8 @@ struct BudgetMateApp: App {
     @State private var lastAutoSyncedAtByScope: [String: Date] = [:]
     @State private var checkedCloudProfileUserScopeId: String?
     @State private var isCheckingCloudProfile = false
-    private let activeSyncInterval: Duration = .seconds(8)
-    private let minimumPassiveSyncInterval: TimeInterval = 8
+    private let activeSyncInterval: Duration = .seconds(20)
+    private let minimumPassiveSyncInterval: TimeInterval = 20
     private let persistenceController = PersistenceController.shared
 
     init() {
