@@ -55,14 +55,6 @@ struct TransactionsView: View {
         )
     }
 
-    private var filteredIncomeCount: Int {
-        filteredTransactions.filter { $0.type == .income }.count
-    }
-
-    private var filteredExpenseCount: Int {
-        filteredTransactions.filter { $0.type == .expense }.count
-    }
-
     private var shouldShowMemberFilter: Bool {
         memberViewModel.members.count > 1
     }
@@ -148,46 +140,23 @@ struct TransactionsView: View {
     }
 
     private var summaryCard: some View {
-        let columns = [
-            GridItem(.flexible(), spacing: 10),
-            GridItem(.flexible(), spacing: 10),
-            GridItem(.flexible(), spacing: 10)
-        ]
-
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Month summary")
-                    .font(.roundedBold(18))
-                    .foregroundStyle(AppTheme.textPrimary)
-                Spacer()
-                Text(selectedMemberId == nil ? "Everyone" : "Filtered")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(AppTheme.textMuted)
-            }
-
-            LazyVGrid(columns: columns, spacing: 10) {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
                 summaryMetric(
                     title: "Income",
-                    value: amount(summaryTotals.totalIncome),
-                    caption: "\(filteredIncomeCount) \(filteredIncomeCount == 1 ? "income entry" : "income entries")",
-                    tint: AppTheme.income,
-                    systemImage: "arrow.up.circle"
+                    value: amount(summaryTotals.totalIncome)
                 )
                 summaryMetric(
                     title: "Expenses",
-                    value: amount(summaryTotals.totalExpenses),
-                    caption: "\(filteredExpenseCount) \(filteredExpenseCount == 1 ? "expense entry" : "expense entries")",
-                    tint: AppTheme.expense,
-                    systemImage: "arrow.down.circle"
+                    value: amount(summaryTotals.totalExpenses)
                 )
                 summaryMetric(
                     title: "Balance",
-                    value: signedAmount(summaryTotals.currentBalance),
-                    caption: "this month",
-                    tint: summaryTotals.currentBalance >= 0 ? AppTheme.income : AppTheme.danger,
-                    systemImage: "banknote"
+                    value: signedAmount(summaryTotals.currentBalance)
                 )
             }
+            .padding(.vertical, 18)
+            .background(AppTheme.surfaceAlt.opacity(0.72), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .padding(16)
         .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -200,41 +169,25 @@ struct TransactionsView: View {
 
     private func summaryMetric(
         title: String,
-        value: String,
-        caption: String,
-        tint: Color,
-        systemImage: String
+        value: String
     ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .font(.caption.weight(.black))
-                    .frame(width: 15, height: 15)
-                Text(title)
-                    .font(.caption.weight(.black))
-                    .textCase(.uppercase)
-            }
-            .foregroundStyle(tint)
-
+        VStack(spacing: 6) {
             Text(value)
-                .font(.roundedBold(20))
+                .font(.roundedBold(18))
                 .foregroundStyle(AppTheme.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.58)
 
-            Text(caption)
-                .font(.caption.weight(.semibold))
+            Text(title)
+                .font(.caption.weight(.bold))
+                .tracking(2.6)
+                .textCase(.uppercase)
                 .foregroundStyle(AppTheme.textMuted)
                 .lineLimit(1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(tint.opacity(0.22), lineWidth: 1)
-        )
-        .accessibilityLabel("\(title), \(value), \(caption)")
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title), \(value)")
     }
 
     private func amount(_ value: Double) -> String {

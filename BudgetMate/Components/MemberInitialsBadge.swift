@@ -32,8 +32,13 @@ struct MemberAvatarCluster: View {
     var maxVisible: Int = 3
 
     var body: some View {
-        let visible = Array(members.prefix(maxVisible))
-        let overflow = members.count - visible.count
+        let uniqueMembers = members.reduce(into: [BudgetMember]()) { result, member in
+            if !result.contains(where: { $0.id == member.id }) {
+                result.append(member)
+            }
+        }
+        let visible = Array(uniqueMembers.prefix(maxVisible))
+        let overflow = uniqueMembers.count - visible.count
 
         HStack(spacing: -size * 0.38) {
             ForEach(visible) { member in
@@ -58,7 +63,7 @@ struct MemberAvatarCluster: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Split with \(members.count) members")
+        .accessibilityLabel("Split with \(uniqueMembers.count) members")
     }
 }
 

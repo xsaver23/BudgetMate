@@ -92,7 +92,13 @@ extension Transaction {
 
     /// Members the cost applies to: split participants, or just the payer.
     var participantIds: [UUID] {
-        isSplit ? splits.map(\.memberId) : [createdByMemberId]
+        guard isSplit else { return [createdByMemberId] }
+
+        var ids: [UUID] = []
+        for split in splits where !ids.contains(split.memberId) {
+            ids.append(split.memberId)
+        }
+        return ids
     }
 
     /// Amount a given member is responsible for (expenses only).

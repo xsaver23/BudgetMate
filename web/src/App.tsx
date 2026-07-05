@@ -25,7 +25,7 @@ import {
   X
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, FormEvent, ReactNode } from "react";
+import type { CSSProperties, FormEvent } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { categoryColor, categoryName, expenseCategories, incomeCategories } from "./domain/categories";
 import { currencyOptions, formatMoney } from "./domain/currency";
@@ -1253,8 +1253,6 @@ function TransactionsView({
     return matchesSearch && matchesCategory && matchesType;
   });
   const summaryTotals = dashboardTotals(filteredTransactions, monthlyBudget(settings), memberId);
-  const incomeCount = filteredTransactions.filter((transaction) => transaction.type === "income").length;
-  const expenseCount = filteredTransactions.filter((transaction) => transaction.type === "expense").length;
   const summaryScope = filteredTransactions.length === transactions.length ? "this month" : "this view";
 
   return (
@@ -1299,8 +1297,6 @@ function TransactionsView({
       <TransactionSummaryStrip
         totals={summaryTotals}
         currencyCode={settings.currencyCode}
-        incomeCount={incomeCount}
-        expenseCount={expenseCount}
         scopeLabel={summaryScope}
       />
       <div className="panel table-panel">
@@ -1369,14 +1365,10 @@ function TransactionsView({
 function TransactionSummaryStrip({
   totals,
   currencyCode,
-  incomeCount,
-  expenseCount,
   scopeLabel
 }: {
   totals: ReturnType<typeof dashboardTotals>;
   currencyCode: string;
-  incomeCount: number;
-  expenseCount: number;
   scopeLabel: string;
 }) {
   return (
@@ -1384,23 +1376,14 @@ function TransactionSummaryStrip({
       <TransactionSummaryMetric
         label="Income"
         value={formatMoney(totals.totalIncome, currencyCode)}
-        caption={`${incomeCount} ${incomeCount === 1 ? "income entry" : "income entries"}`}
-        tone="income"
-        icon={<ArrowUpCircle size={17} aria-hidden="true" />}
       />
       <TransactionSummaryMetric
         label="Expenses"
         value={formatMoney(totals.totalExpenses, currencyCode)}
-        caption={`${expenseCount} ${expenseCount === 1 ? "expense entry" : "expense entries"}`}
-        tone="expense"
-        icon={<ArrowDownCircle size={17} aria-hidden="true" />}
       />
       <TransactionSummaryMetric
         label="Balance"
         value={formatMoney(totals.currentBalance, currencyCode)}
-        caption={scopeLabel}
-        tone={totals.currentBalance >= 0 ? "income" : "expense"}
-        icon={<Banknote size={17} aria-hidden="true" />}
       />
     </section>
   );
@@ -1408,25 +1391,15 @@ function TransactionSummaryStrip({
 
 function TransactionSummaryMetric({
   label,
-  value,
-  caption,
-  tone,
-  icon
+  value
 }: {
   label: string;
   value: string;
-  caption: string;
-  tone: "income" | "expense" | "warning";
-  icon: ReactNode;
 }) {
   return (
-    <article className={`transaction-summary-metric ${tone}`}>
-      <span>
-        {icon}
-        {label}
-      </span>
+    <article className="transaction-summary-metric">
       <strong>{value}</strong>
-      <small>{caption}</small>
+      <span>{label}</span>
     </article>
   );
 }
