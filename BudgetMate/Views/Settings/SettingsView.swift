@@ -556,22 +556,30 @@ struct SettingsView: View {
                 if showFeedback {
                     clearFeedbackMessage = summary.message
                 }
+
+                // The sync already observed cloud settings and members;
+                // reuse them instead of two extra fetches.
+                if let cloudSettings = summary.settings {
+                    settingsStore.replaceSettings(cloudSettings)
+                    syncFieldsFromStore()
+                }
+                memberViewModel.replaceMembers(with: summary.members)
             } else {
                 await appRefreshStore.refreshCurrentBudget(forceSync: false)
-            }
 
-            if let cloudSettings = try await cloudSyncStore.fetchSettings(
-                userScopeId: authStore.currentUserScopeId,
-                budgetScopeId: authStore.currentBudgetScopeId
-            ) {
-                settingsStore.replaceSettings(cloudSettings)
-                syncFieldsFromStore()
+                if let cloudSettings = try await cloudSyncStore.fetchSettings(
+                    userScopeId: authStore.currentUserScopeId,
+                    budgetScopeId: authStore.currentBudgetScopeId
+                ) {
+                    settingsStore.replaceSettings(cloudSettings)
+                    syncFieldsFromStore()
+                }
+                let cloudMembers = try await cloudSyncStore.fetchMembers(
+                    userScopeId: authStore.currentUserScopeId,
+                    budgetScopeId: authStore.currentBudgetScopeId
+                )
+                memberViewModel.replaceMembers(with: cloudMembers)
             }
-            let cloudMembers = try await cloudSyncStore.fetchMembers(
-                userScopeId: authStore.currentUserScopeId,
-                budgetScopeId: authStore.currentBudgetScopeId
-            )
-            memberViewModel.replaceMembers(with: cloudMembers)
             await refreshSharedBudgetSection()
         } catch {
             if showFeedback {

@@ -170,6 +170,73 @@ struct DashboardDerivedMetrics {
     }
 }
 
+/// Cached values for the Transactions tab so recurring resolution, member
+/// filtering, day grouping, and summary totals run once per data change
+/// instead of several times per SwiftUI body evaluation.
+struct TransactionsTabMetrics {
+    var filteredTransactions: [Transaction] = []
+    var groupedByDay: [(date: Date, items: [Transaction])] = []
+    var summaryTotals: DashboardTotals = DashboardTotals(
+        currentBalance: 0,
+        totalIncome: 0,
+        totalExpenses: 0,
+        remainingBudget: 0
+    )
+
+    static func compute(
+        transactions: [Transaction],
+        monthInterval: DateInterval?,
+        selectedMemberId: UUID?,
+        monthlyBudget: Double
+    ) -> TransactionsTabMetrics {
+        let monthTransactions: [Transaction]
+        if let monthInterval {
+            monthTransactions = RecurringTransactionResolver.transactions(
+                in: monthInterval,
+                from: transactions.deduplicatedByID()
+            )
+        } else {
+            monthTransactions = []
+        }
+
+        let filteredTransactions: [Transaction]
+        if let selectedMemberId {
+            filteredTransactions = monthTransactions.filter { $0.involves(memberId: selectedMemberId) }
+        } else {
+            filteredTransactions = monthTransactions
+        }
+
+        let calendar = Calendar.current
+        let groupedByDay = Dictionary(grouping: filteredTransactions) { calendar.startOfDay(for: $0.date) }
+            .map { (date: $0.key, items: sortedNewestFirst($0.value)) }
+            .sorted { $0.date > $1.date }
+
+        let summaryTotals = DashboardViewModel.totals(
+            transactions: filteredTransactions,
+            monthlyBudget: monthlyBudget,
+            forMember: selectedMemberId
+        )
+
+        return TransactionsTabMetrics(
+            filteredTransactions: filteredTransactions,
+            groupedByDay: groupedByDay,
+            summaryTotals: summaryTotals
+        )
+    }
+
+    private static func sortedNewestFirst(_ transactions: [Transaction]) -> [Transaction] {
+        transactions.sorted { lhs, rhs in
+            if lhs.date != rhs.date {
+                return lhs.date > rhs.date
+            }
+            if lhs.createdAt != rhs.createdAt {
+                return lhs.createdAt > rhs.createdAt
+            }
+            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+        }
+    }
+}
+
 /// Cached values for the Budget tab (member spending + category rows).
 struct BudgetTabMetrics {
     var netBalances: [UUID: Int] = [:]

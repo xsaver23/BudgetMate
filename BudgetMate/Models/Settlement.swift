@@ -12,6 +12,9 @@ final class Settlement {
     var amount: Double
     var date: Date
     var ownerUserId: String
+    /// True while a locally created row has not been confirmed in the cloud.
+    /// Protects offline work from the sync prune pass.
+    var needsSync: Bool = false
 
     init(
         id: UUID = UUID(),

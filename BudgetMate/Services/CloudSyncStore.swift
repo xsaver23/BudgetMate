@@ -29,8 +29,8 @@ final class CloudSyncStore: ObservableObject {
     private let logger = Logger(subsystem: "BudgetMate", category: "CloudSync")
     private let maxRetryAttempts = 3
 
-    init(service: SupabaseBudgetSyncService = SupabaseBudgetSyncService()) {
-        self.service = service
+    init(service: SupabaseBudgetSyncService? = nil) {
+        self.service = service ?? SupabaseBudgetSyncService()
     }
 
     var hasSyncIssue: Bool {
@@ -76,10 +76,14 @@ final class CloudSyncStore: ObservableObject {
             return "Synced just now"
         }
 
+        return "Synced " + Self.relativeDateFormatter.localizedString(for: lastSyncedAt, relativeTo: referenceDate)
+    }
+
+    private static let relativeDateFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
-        return "Synced " + formatter.localizedString(for: lastSyncedAt, relativeTo: referenceDate)
-    }
+        return formatter
+    }()
 
     func userFacingMessage(for error: Error) -> String {
         friendlyMessage(for: error.localizedDescription)
@@ -152,7 +156,7 @@ final class CloudSyncStore: ObservableObject {
         userScopeId: String,
         userEmail: String? = nil,
         budgetScopeId: String? = nil
-    ) async -> Bool {
+    ) async -> CloudBudgetSyncSummary? {
         let request = FullSyncRequest(
             settings: settings,
             members: members,
@@ -166,11 +170,10 @@ final class CloudSyncStore: ObservableObject {
 
         await waitForFullSyncToFinish()
         do {
-            _ = try await performFullSync(request)
-            return true
+            return try await performFullSync(request)
         } catch {
             markFailed(error, context: "Background sync")
-            return false
+            return nil
         }
     }
 

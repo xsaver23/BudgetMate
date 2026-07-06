@@ -221,24 +221,40 @@ function App() {
       updatedAt: new Date().toISOString()
     };
   const settings = state.settingsByBudgetId[currentBudget.id] ?? defaultBudgetSettings(currentBudget.id);
-  const budgetMembers = state.members.filter((member) => member.budgetId === currentBudget.id);
+  const budgetMembers = useMemo(
+    () => state.members.filter((member) => member.budgetId === currentBudget.id),
+    [state.members, currentBudget.id]
+  );
   const currentBudgetMember = signedInBudgetMember(budgetMembers, session?.user);
   const budgetTransactions = useMemo(
     () => uniqueTransactions(state.transactions.filter((transaction) => transaction.budgetId === currentBudget.id)),
     [state.transactions, currentBudget.id]
   );
-  const budgetSettlements = state.settlements.filter((settlement) => settlement.budgetId === currentBudget.id);
+  const budgetSettlements = useMemo(
+    () => state.settlements.filter((settlement) => settlement.budgetId === currentBudget.id),
+    [state.settlements, currentBudget.id]
+  );
   const monthTransactions = useMemo(
     () => transactionsForMonth(budgetTransactions, selectedMonth),
     [budgetTransactions, selectedMonth]
   );
   const memberFilter = selectedMemberId === "all" ? undefined : selectedMemberId;
-  const displayedTransactions = monthTransactions.filter((transaction) =>
-    memberFilter ? involvesMember(transaction, memberFilter) : true
+  const displayedTransactions = useMemo(
+    () => monthTransactions.filter((transaction) => (memberFilter ? involvesMember(transaction, memberFilter) : true)),
+    [monthTransactions, memberFilter]
   );
-  const totals = dashboardTotals(monthTransactions, monthlyBudget(settings, selectedMonth), memberFilter);
-  const categoryTotals = categoryBreakdown(monthTransactions, memberFilter);
-  const settlements = settlementSuggestions(budgetTransactions, budgetSettlements, budgetMembers);
+  const totals = useMemo(
+    () => dashboardTotals(monthTransactions, monthlyBudget(settings, selectedMonth), memberFilter),
+    [monthTransactions, settings, selectedMonth, memberFilter]
+  );
+  const categoryTotals = useMemo(
+    () => categoryBreakdown(monthTransactions, memberFilter),
+    [monthTransactions, memberFilter]
+  );
+  const settlements = useMemo(
+    () => settlementSuggestions(budgetTransactions, budgetSettlements, budgetMembers),
+    [budgetTransactions, budgetSettlements, budgetMembers]
+  );
   const activeTabTitle: Record<Tab, string> = {
     dashboard: "Dashboard",
     transactions: "Transactions",

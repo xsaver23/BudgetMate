@@ -10,6 +10,10 @@ struct CloudBudgetSyncSummary {
     let pulledTransactions: Int
     let pushedSettlements: Int
     let pulledSettlements: Int
+    /// Cloud state observed during this sync, so callers can refresh app
+    /// state without issuing extra fetches afterwards.
+    var settings: BudgetSettings?
+    var members: [BudgetMember] = []
 
     var message: String {
         let settingsText = syncedSettings ? "settings, " : ""
@@ -461,6 +465,49 @@ struct CloudTransactionRow: Codable {
         transaction.ownerUserId = ownerUserId
     }
 
+    /// Whether applying this row to `transaction` would be a no-op. Used to
+    /// skip SwiftData writes during merge so unchanged rows never dirty the
+    /// store or invalidate the UI. Splits are compared separately.
+    func matches(
+        _ transaction: Transaction,
+        ownerUserId: String,
+        memberAliases: [UUID: UUID],
+        validMemberIds: Set<UUID>
+    ) -> Bool {
+        transaction.title == title &&
+        transaction.amount == amount &&
+        transaction.type == (TransactionType(rawValue: type) ?? .expense) &&
+        transaction.category == TransactionCategory(rawValue: category) &&
+        transaction.paymentMethod == paymentMethod.flatMap(PaymentMethod.init(rawValue:)) &&
+        transaction.createdByMemberId == Self.resolvedCreatedByMemberId(
+            createdByMemberId,
+            rowUserId: userId,
+            aliases: memberAliases,
+            validMemberIds: validMemberIds
+        ) &&
+        transaction.date == CloudISO8601DateCodec.dateOrNow(from: date) &&
+        transaction.createdAt == CloudISO8601DateCodec.dateOrNow(from: createdAt) &&
+        transaction.recurrenceRule == recurrenceRule &&
+        transaction.ownerUserId == ownerUserId
+    }
+
+    /// Whether the local splits already equal this row's splits (after alias
+    /// resolution), so the merge can leave the relationship untouched.
+    func splitsMatch(_ transaction: Transaction, memberAliases: [UUID: UUID]) -> Bool {
+        let desired = splits.filter { $0.amount > 0 }
+        let existing = transaction.splits
+        guard desired.count == existing.count else { return false }
+
+        let existingById = Dictionary(existing.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        guard existingById.count == existing.count else { return false }
+
+        return desired.allSatisfy { row in
+            guard let split = existingById[row.id] else { return false }
+            return split.memberId == Self.resolvedMemberId(row.memberId, aliases: memberAliases)
+                && split.amount == row.amount
+        }
+    }
+
     func makeTransaction(
         ownerUserId: String,
         memberAliases: [UUID: UUID] = [:],
@@ -558,6 +605,16 @@ struct CloudSettlementRow: Codable {
         settlement.ownerUserId = ownerUserId
     }
 
+    /// Whether applying this row to `settlement` would be a no-op (see
+    /// `CloudTransactionRow.matches`).
+    func matches(_ settlement: Settlement, ownerUserId: String, memberAliases: [UUID: UUID]) -> Bool {
+        settlement.fromMemberId == CloudTransactionRow.resolvedMemberId(fromMemberId, aliases: memberAliases) &&
+        settlement.toMemberId == CloudTransactionRow.resolvedMemberId(toMemberId, aliases: memberAliases) &&
+        settlement.amount == amount &&
+        settlement.date == CloudISO8601DateCodec.dateOrNow(from: date) &&
+        settlement.ownerUserId == ownerUserId
+    }
+
     func makeSettlement(ownerUserId: String, memberAliases: [UUID: UUID] = [:]) -> Settlement {
         Settlement(
             id: id,
@@ -576,8 +633,15 @@ struct CloudSettlementRow: Codable {
     }
 }
 
+// Main-actor isolated: the service reads and mutates SwiftData models from
+// the app's main ModelContext, which is not thread-safe.
+@MainActor
 final class SupabaseBudgetSyncService {
     private let client: SupabaseClient
+    /// Users whose personal budget row was already ensured this launch.
+    private var ensuredPersonalBudgetUserIds: Set<UUID> = []
+    /// Scope keys whose member profile repair already ran this launch.
+    private var repairedProfileScopeKeys: Set<String> = []
 
     init(client: SupabaseClient = SupabaseClientProvider.shared) {
         self.client = client
@@ -692,7 +756,8 @@ final class SupabaseBudgetSyncService {
         )
         let pushedSettlementIDs = Set(settlementRows.map(\.id))
 
-        if existingSettings == nil || settings != .default {
+        let didPushSettings = existingSettings == nil || settings != .default
+        if didPushSettings {
             try await client
                 .from("budget_settings")
                 .upsert(settingsRow, onConflict: "budget_id")
@@ -763,7 +828,9 @@ final class SupabaseBudgetSyncService {
             pushedTransactions: transactionRows.count,
             pulledTransactions: pulledTransactions.count,
             pushedSettlements: settlementRows.count,
-            pulledSettlements: pulledSettlements.count
+            pulledSettlements: pulledSettlements.count,
+            settings: didPushSettings ? settings : existingSettings,
+            members: pulledMembers
         )
     }
 
@@ -962,6 +1029,8 @@ final class SupabaseBudgetSyncService {
         }
 
         let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
+        let scopeKey = "\(userId.uuidString)|\(budgetId.uuidString)|\(normalizedEmail)"
+        guard !repairedProfileScopeKeys.contains(scopeKey) else { return }
 
         try await client
             .from("budget_members")
@@ -969,6 +1038,8 @@ final class SupabaseBudgetSyncService {
             .eq("budget_id", value: budgetId)
             .eq("email", value: normalizedEmail)
             .execute()
+
+        repairedProfileScopeKeys.insert(scopeKey)
     }
 
     func acceptInvite(_ invite: BudgetInvite, userScopeId: String) async throws {
@@ -1145,6 +1216,8 @@ final class SupabaseBudgetSyncService {
     }
 
     private func ensurePersonalBudget(userId: UUID) async throws {
+        guard !ensuredPersonalBudgetUserIds.contains(userId) else { return }
+
         let budget = CloudBudgetRow(
             id: userId,
             ownerUserId: userId,
@@ -1166,6 +1239,8 @@ final class SupabaseBudgetSyncService {
             .from("budget_memberships")
             .upsert(membership, onConflict: "budget_id,user_id")
             .execute()
+
+        ensuredPersonalBudgetUserIds.insert(userId)
     }
 
     private func ensureSharedBudget(ownerUserId: UUID, name: String) async throws -> BudgetSummary {
@@ -1499,7 +1574,10 @@ final class SupabaseBudgetSyncService {
             return cloudOwnerId == userId && signedInMemberIds.contains(resolvedCreatedByMemberId)
         }
 
-        return signedInMemberIds.contains(resolvedCreatedByMemberId)
+        // Rows not in the cloud yet: push anything created on this device,
+        // even when attributed to another member ("Paid By" a partner while
+        // offline), so the prune pass never discards it.
+        return signedInMemberIds.contains(resolvedCreatedByMemberId) || transaction.needsSync
     }
 
     private func shouldBulkPush(
@@ -1515,7 +1593,8 @@ final class SupabaseBudgetSyncService {
             return cloudOwnerId == userId && includesSignedInMember
         }
 
-        return includesSignedInMember
+        // See the transaction variant: locally created rows always push.
+        return includesSignedInMember || settlement.needsSync
     }
 
     private func merge(
@@ -1538,36 +1617,66 @@ final class SupabaseBudgetSyncService {
         }
 
         for row in rows {
-            let transaction = existingById[row.id] ?? row.makeTransaction(
-                ownerUserId: ownerUserId,
-                memberAliases: memberAliases,
-                validMemberIds: validMemberIds
-            )
-            if existingById[row.id] == nil {
-                context.insert(transaction)
-            } else {
-                row.apply(
-                    to: transaction,
+            // Only touch the store when the cloud row actually differs from
+            // the local one. Unconditional writes here used to dirty every
+            // transaction (and delete/reinsert every split) on each sync
+            // cycle, forcing a full UI re-render every 20 seconds.
+            if let transaction = existingById[row.id] {
+                let fieldsMatch = row.matches(
+                    transaction,
                     ownerUserId: ownerUserId,
                     memberAliases: memberAliases,
                     validMemberIds: validMemberIds
                 )
-            }
+                let splitsMatch = row.splitsMatch(transaction, memberAliases: memberAliases)
 
-            for split in Array(transaction.splits) {
-                context.delete(split)
-            }
-
-            for splitRow in row.splits where splitRow.amount > 0 {
-                context.insert(
-                    TransactionSplit(
-                        id: splitRow.id,
-                        memberId: CloudTransactionRow.resolvedMemberId(splitRow.memberId, aliases: memberAliases),
-                        amount: splitRow.amount,
-                        transaction: transaction
+                if !fieldsMatch {
+                    row.apply(
+                        to: transaction,
+                        ownerUserId: ownerUserId,
+                        memberAliases: memberAliases,
+                        validMemberIds: validMemberIds
                     )
+                }
+
+                if !splitsMatch {
+                    rebuildSplits(for: transaction, from: row, memberAliases: memberAliases, in: context)
+                }
+
+                if transaction.needsSync {
+                    transaction.needsSync = false
+                }
+            } else {
+                let transaction = row.makeTransaction(
+                    ownerUserId: ownerUserId,
+                    memberAliases: memberAliases,
+                    validMemberIds: validMemberIds
                 )
+                context.insert(transaction)
+                rebuildSplits(for: transaction, from: row, memberAliases: memberAliases, in: context)
             }
+        }
+    }
+
+    private func rebuildSplits(
+        for transaction: Transaction,
+        from row: CloudTransactionRow,
+        memberAliases: [UUID: UUID],
+        in context: ModelContext
+    ) {
+        for split in Array(transaction.splits) {
+            context.delete(split)
+        }
+
+        for splitRow in row.splits where splitRow.amount > 0 {
+            context.insert(
+                TransactionSplit(
+                    id: splitRow.id,
+                    memberId: CloudTransactionRow.resolvedMemberId(splitRow.memberId, aliases: memberAliases),
+                    amount: splitRow.amount,
+                    transaction: transaction
+                )
+            )
         }
     }
 
@@ -1583,13 +1692,20 @@ final class SupabaseBudgetSyncService {
         let pulledTransactionIDs = Set(pulledTransactions.map(\.id))
         let pulledSettlementIDs = Set(pulledSettlements.map(\.id))
 
+        // Rows flagged needsSync were created or edited locally and have not
+        // been confirmed in the cloud yet (e.g. offline work) - never treat
+        // their absence from the cloud as a remote delete.
         for transaction in localTransactions
-        where !pulledTransactionIDs.contains(transaction.id) && !pushedTransactionIDs.contains(transaction.id) {
+        where !pulledTransactionIDs.contains(transaction.id)
+            && !pushedTransactionIDs.contains(transaction.id)
+            && !transaction.needsSync {
             context.delete(transaction)
         }
 
         for settlement in localSettlements
-        where !pulledSettlementIDs.contains(settlement.id) && !pushedSettlementIDs.contains(settlement.id) {
+        where !pulledSettlementIDs.contains(settlement.id)
+            && !pushedSettlementIDs.contains(settlement.id)
+            && !settlement.needsSync {
             context.delete(settlement)
         }
     }
@@ -1614,7 +1730,12 @@ final class SupabaseBudgetSyncService {
 
         for row in rows {
             if let settlement = existingById[row.id] {
-                row.apply(to: settlement, ownerUserId: ownerUserId, memberAliases: memberAliases)
+                if !row.matches(settlement, ownerUserId: ownerUserId, memberAliases: memberAliases) {
+                    row.apply(to: settlement, ownerUserId: ownerUserId, memberAliases: memberAliases)
+                }
+                if settlement.needsSync {
+                    settlement.needsSync = false
+                }
             } else {
                 context.insert(row.makeSettlement(ownerUserId: ownerUserId, memberAliases: memberAliases))
             }

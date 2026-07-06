@@ -157,7 +157,7 @@ final class AddTransactionViewModel: ObservableObject {
     func buildTransaction(addedBy member: BudgetMember, date: Date? = nil) -> Transaction? {
         guard let amount = parsedAmount else { return nil }
 
-        return Transaction(
+        let transaction = Transaction(
             title: title.trimmingCharacters(in: .whitespacesAndNewlines),
             amount: amount,
             type: type,
@@ -167,6 +167,8 @@ final class AddTransactionViewModel: ObservableObject {
             date: date ?? self.date,
             recurrenceRule: recurrenceRule
         )
+        transaction.needsSync = true
+        return transaction
     }
 
     func applyChanges(to transaction: Transaction, paidBy member: BudgetMember) {
@@ -179,6 +181,7 @@ final class AddTransactionViewModel: ObservableObject {
         transaction.createdByMemberId = member.id
         transaction.date = date
         transaction.recurrenceRule = recurrenceRule
+        transaction.needsSync = true
     }
 
     func updateAvailableExpenseCategories(from settings: BudgetSettings) {

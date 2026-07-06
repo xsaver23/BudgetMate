@@ -207,7 +207,7 @@ struct BudgetMateApp: App {
             return
         }
 
-        let didRunSync = await cloudSyncStore.syncIfPossible(
+        guard let summary = await cloudSyncStore.syncIfPossible(
             settings: settingsStore.settings,
             members: memberViewModel.members,
             transactions: transactions,
@@ -216,25 +216,16 @@ struct BudgetMateApp: App {
             userScopeId: userScopeId,
             userEmail: authStore.userEmail,
             budgetScopeId: budgetScopeId
-        )
-        guard didRunSync else { return }
+        ) else { return }
         lastAutoSyncedAtByScope[syncKey] = .now
 
-        do {
-            if let cloudSettings = try await cloudSyncStore.fetchSettings(userScopeId: userScopeId, budgetScopeId: budgetScopeId) {
-                settingsStore.replaceSettings(cloudSettings)
-            }
-        } catch {
-            cloudSyncStore.recordSyncIssue(error, context: "Refreshing cloud settings")
+        // The sync already observed cloud settings and members; reuse them
+        // instead of issuing two more fetches per cycle.
+        if let cloudSettings = summary.settings {
+            settingsStore.replaceSettings(cloudSettings)
         }
-
-        do {
-            let cloudMembers = try await cloudSyncStore.fetchMembers(userScopeId: userScopeId, budgetScopeId: budgetScopeId)
-            if !cloudMembers.isEmpty {
-                memberViewModel.replaceMembers(with: cloudMembers)
-            }
-        } catch {
-            cloudSyncStore.recordSyncIssue(error, context: "Refreshing cloud members")
+        if !summary.members.isEmpty {
+            memberViewModel.replaceMembers(with: summary.members)
         }
     }
 

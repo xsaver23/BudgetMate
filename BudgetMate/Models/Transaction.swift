@@ -14,6 +14,9 @@ final class Transaction {
     var createdAt: Date
     var recurrenceRule: String?
     var ownerUserId: String
+    /// True while a locally created or edited row has not been confirmed in
+    /// the cloud. Protects offline work from the sync prune pass.
+    var needsSync: Bool = false
     @Transient var recurringSourceId: UUID?
 
     /// Per-member shares for a split expense. Empty for non-split transactions.

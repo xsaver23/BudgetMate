@@ -159,6 +159,7 @@ struct DashboardView: View {
             amount: settlement.amount,
             ownerUserId: authStore.currentBudgetScopeId
         )
+        record.needsSync = true
         modelContext.insert(record)
         do {
             try modelContext.save()

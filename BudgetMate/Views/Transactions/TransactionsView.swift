@@ -14,6 +14,7 @@ struct TransactionsView: View {
     let budgetScopeId: String
     @State private var selectedMemberId: UUID? = nil
     @State private var selectedTransaction: Transaction?
+    @State private var derivedMetrics = TransactionsTabMetrics()
 
     init(budgetScopeId: String, onOpenSettings: @escaping () -> Void = {}) {
         self.budgetScopeId = budgetScopeId
@@ -34,58 +35,32 @@ struct TransactionsView: View {
 
     @Query private var transactions: [Transaction]
 
-    // Query is already scoped to the active budget in init.
-    private var scopedTransactions: [Transaction] {
-        var seenIds = Set<UUID>()
-        return transactions.filter { transaction in
-            seenIds.insert(transaction.id).inserted
-        }
-    }
-
-    private var monthTransactions: [Transaction] {
-        guard let monthInterval = monthSelectionStore.monthInterval() else { return [] }
-        return RecurringTransactionResolver.transactions(in: monthInterval, from: scopedTransactions)
-    }
-
-    private var filteredTransactions: [Transaction] {
-        guard let selectedMemberId else { return monthTransactions }
-        return monthTransactions.filter { $0.involves(memberId: selectedMemberId) }
-    }
-
-    private var summaryTotals: DashboardTotals {
-        DashboardViewModel.totals(
-            transactions: filteredTransactions,
-            monthlyBudget: settingsStore.monthlyBudget(in: monthSelectionStore.selectedMonthDate),
-            forMember: selectedMemberId
-        )
+    private var monthlyBudget: Double {
+        settingsStore.monthlyBudget(in: monthSelectionStore.selectedMonthDate)
     }
 
     private var shouldShowMemberFilter: Bool {
         memberViewModel.members.count > 1
     }
 
-    private var groupedByDay: [(date: Date, items: [Transaction])] {
-        let calendar = Calendar.current
-        let groups = Dictionary(grouping: filteredTransactions) { calendar.startOfDay(for: $0.date) }
-        return groups
-            .map { (date: $0.key, items: sortedTransactions($0.value)) }
-            .sorted { $0.date > $1.date }
-    }
-
     private var currencySymbol: String {
         settingsStore.settings.currencySymbol
     }
 
-    private func sortedTransactions(_ transactions: [Transaction]) -> [Transaction] {
-        transactions.sorted { lhs, rhs in
-            if lhs.date != rhs.date {
-                return lhs.date > rhs.date
-            }
-            if lhs.createdAt != rhs.createdAt {
-                return lhs.createdAt > rhs.createdAt
-            }
-            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-        }
+    // Recompute the derived list/summary only when the underlying data or
+    // filters change, not on every body evaluation (see DashboardView).
+    private var metricsRefreshToken: String {
+        let dataHash = FinancialDataFingerprint.hash(transactions: transactions, settlements: [])
+        return "\(dataHash)-\(monthSelectionStore.selectedMonthIndex)-\(selectedMemberId?.uuidString ?? "all")-\(monthlyBudget)-\(authStore.currentBudgetScopeId)"
+    }
+
+    private func refreshDerivedMetrics() {
+        derivedMetrics = TransactionsTabMetrics.compute(
+            transactions: transactions,
+            monthInterval: monthSelectionStore.monthInterval(),
+            selectedMemberId: selectedMemberId,
+            monthlyBudget: monthlyBudget
+        )
     }
 
     var body: some View {
@@ -105,11 +80,11 @@ struct TransactionsView: View {
 
                         summaryCard
 
-                        if filteredTransactions.isEmpty {
+                        if derivedMetrics.filteredTransactions.isEmpty {
                             emptyStateCard
                         } else {
                             LazyVStack(spacing: 40) {
-                                ForEach(groupedByDay, id: \.date) { group in
+                                ForEach(derivedMetrics.groupedByDay, id: \.date) { group in
                                     dayCard(date: group.date, items: group.items)
                                 }
                             }
@@ -136,6 +111,9 @@ struct TransactionsView: View {
             .sheet(isPresented: isShowingAddTransaction) {
                 AddTransactionView()
             }
+            .task(id: metricsRefreshToken) {
+                refreshDerivedMetrics()
+            }
             .onChange(of: memberViewModel.members.count) { _, count in
                 if count <= 1 {
                     selectedMemberId = nil
@@ -149,15 +127,15 @@ struct TransactionsView: View {
             HStack(spacing: 0) {
                 summaryMetric(
                     title: "Income",
-                    value: amount(summaryTotals.totalIncome)
+                    value: amount(derivedMetrics.summaryTotals.totalIncome)
                 )
                 summaryMetric(
                     title: "Expenses",
-                    value: amount(summaryTotals.totalExpenses)
+                    value: amount(derivedMetrics.summaryTotals.totalExpenses)
                 )
                 summaryMetric(
                     title: "Balance",
-                    value: signedAmount(summaryTotals.currentBalance)
+                    value: signedAmount(derivedMetrics.summaryTotals.currentBalance)
                 )
             }
             .padding(.horizontal, 10)
