@@ -91,12 +91,25 @@ export function newestTransactionFirst(left: BudgetTransaction, right: BudgetTra
   return left.title.localeCompare(right.title, undefined, { sensitivity: "base" });
 }
 
+export function uniqueTransactions(transactions: BudgetTransaction[]): BudgetTransaction[] {
+  const transactionsById = new Map<string, BudgetTransaction>();
+
+  for (const transaction of transactions) {
+    const existing = transactionsById.get(transaction.id);
+    if (!existing || newestTransactionFirst(transaction, existing) < 0) {
+      transactionsById.set(transaction.id, transaction);
+    }
+  }
+
+  return Array.from(transactionsById.values()).sort(newestTransactionFirst);
+}
+
 export function currentMonthKey(): string {
   return monthKey(new Date());
 }
 
 export function transactionsForMonth(transactions: BudgetTransaction[], selectedMonth: string) {
-  return transactions
+  return uniqueTransactions(transactions)
     .filter((transaction) => monthKey(transaction.date) === selectedMonth)
     .sort(newestTransactionFirst);
 }

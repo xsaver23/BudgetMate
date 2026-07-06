@@ -1,4 +1,5 @@
 import { createSeedState } from "./seedData";
+import { uniqueTransactions } from "../domain/budgetMath";
 import type { AppState } from "../domain/types";
 
 const baseStorageKey = "budgetmate-web-state-v1";
@@ -33,14 +34,14 @@ export function loadState(storageKey = localStateStorageKey): AppState {
 
   try {
     const parsed = JSON.parse(rawState) as unknown;
-    return isAppState(parsed) ? parsed : createSeedState();
+    return isAppState(parsed) ? sanitizeState(parsed) : createSeedState();
   } catch {
     return createSeedState();
   }
 }
 
 export function saveState(state: AppState, storageKey = localStateStorageKey): void {
-  window.localStorage.setItem(storageKey, JSON.stringify(state));
+  window.localStorage.setItem(storageKey, JSON.stringify(sanitizeState(state)));
 }
 
 export function clearState(storageKey: string): void {
@@ -54,7 +55,7 @@ export function resetState(storageKey = localStateStorageKey): AppState {
 }
 
 export function exportState(state: AppState): string {
-  return JSON.stringify(state, null, 2);
+  return JSON.stringify(sanitizeState(state), null, 2);
 }
 
 export function importState(rawState: string): AppState | null {
@@ -63,8 +64,15 @@ export function importState(rawState: string): AppState | null {
     if (!isAppState(parsed)) {
       return null;
     }
-    return parsed;
+    return sanitizeState(parsed);
   } catch {
     return null;
   }
+}
+
+function sanitizeState(state: AppState): AppState {
+  return {
+    ...state,
+    transactions: uniqueTransactions(state.transactions)
+  };
 }

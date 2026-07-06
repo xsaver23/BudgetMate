@@ -1,7 +1,7 @@
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "./supabaseClient";
 import { defaultBudgetSettings } from "../domain/defaults";
-import { monthlyBudget } from "../domain/budgetMath";
+import { monthlyBudget, uniqueTransactions } from "../domain/budgetMath";
 import type {
   AppState,
   Budget,
@@ -608,14 +608,18 @@ export async function fetchCloudState(user: User, preferredBudgetId?: string): P
   const memberAliases = memberAliasMap(membersWithRoles, normalizedMembers, user.id, user.email);
   const validMemberIds = knownMemberIds(membersWithRoles, memberAliases);
 
+  const transactions = uniqueTransactions(
+    ((transactionsResult.data ?? []) as TransactionRow[])
+      .map(mapTransaction)
+      .map((transaction) => remapTransactionMembers(transaction, memberAliases, validMemberIds))
+  );
+
   return {
     budgets,
     currentBudgetId,
     currentUserId: user.id,
     members: normalizedMembers,
-    transactions: ((transactionsResult.data ?? []) as TransactionRow[]).map(mapTransaction).map((transaction) =>
-      remapTransactionMembers(transaction, memberAliases, validMemberIds)
-    ),
+    transactions,
     settlements: ((settlementsResult.data ?? []) as SettlementRow[]).map(mapSettlement).map((settlement) =>
       remapSettlementMembers(settlement, memberAliases)
     ),

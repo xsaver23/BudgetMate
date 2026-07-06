@@ -40,7 +40,8 @@ import {
   normalizeAmount,
   selectedCategoryBudgets,
   settlementSuggestions,
-  transactionsForMonth
+  transactionsForMonth,
+  uniqueTransactions
 } from "./domain/budgetMath";
 import { defaultBudgetSettings } from "./domain/defaults";
 import type { AppState, BudgetInvite, BudgetMember, BudgetSettings, BudgetTransaction, TransactionType } from "./domain/types";
@@ -222,7 +223,10 @@ function App() {
   const settings = state.settingsByBudgetId[currentBudget.id] ?? defaultBudgetSettings(currentBudget.id);
   const budgetMembers = state.members.filter((member) => member.budgetId === currentBudget.id);
   const currentBudgetMember = signedInBudgetMember(budgetMembers, session?.user);
-  const budgetTransactions = state.transactions.filter((transaction) => transaction.budgetId === currentBudget.id);
+  const budgetTransactions = useMemo(
+    () => uniqueTransactions(state.transactions.filter((transaction) => transaction.budgetId === currentBudget.id)),
+    [state.transactions, currentBudget.id]
+  );
   const budgetSettlements = state.settlements.filter((settlement) => settlement.budgetId === currentBudget.id);
   const monthTransactions = useMemo(
     () => transactionsForMonth(budgetTransactions, selectedMonth),
