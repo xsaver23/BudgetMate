@@ -196,10 +196,12 @@ struct BudgetMateApp: App {
         let settlements: [Settlement]
 
         do {
-            transactions = try context.fetch(FetchDescriptor<Transaction>())
+            let fetchedTransactions = try context.fetch(FetchDescriptor<Transaction>())
                 .filter { $0.ownerUserId == budgetScopeId }
-            settlements = try context.fetch(FetchDescriptor<Settlement>())
+            let fetchedSettlements = try context.fetch(FetchDescriptor<Settlement>())
                 .filter { $0.ownerUserId == budgetScopeId }
+            transactions = pruneDuplicateTransactions(fetchedTransactions, in: context)
+            settlements = pruneDuplicateSettlements(fetchedSettlements, in: context)
         } catch {
             cloudSyncStore.recordSyncIssue(error, context: "Loading local data for sync")
             return
@@ -240,6 +242,46 @@ struct BudgetMateApp: App {
         guard !force else { return true }
         guard let lastSyncedAt = lastAutoSyncedAtByScope[syncKey] else { return true }
         return Date().timeIntervalSince(lastSyncedAt) > minimumPassiveSyncInterval
+    }
+
+    @MainActor
+    private func pruneDuplicateTransactions(_ transactions: [Transaction], in context: ModelContext) -> [Transaction] {
+        var keptTransactions: [UUID: Transaction] = [:]
+
+        for transaction in transactions.sorted(by: newestTransactionFirst) {
+            if keptTransactions[transaction.id] == nil {
+                keptTransactions[transaction.id] = transaction
+            } else {
+                context.delete(transaction)
+            }
+        }
+
+        return keptTransactions.values.sorted(by: newestTransactionFirst)
+    }
+
+    private func newestTransactionFirst(_ lhs: Transaction, _ rhs: Transaction) -> Bool {
+        if lhs.date != rhs.date {
+            return lhs.date > rhs.date
+        }
+        if lhs.createdAt != rhs.createdAt {
+            return lhs.createdAt > rhs.createdAt
+        }
+        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+    }
+
+    @MainActor
+    private func pruneDuplicateSettlements(_ settlements: [Settlement], in context: ModelContext) -> [Settlement] {
+        var keptSettlements: [UUID: Settlement] = [:]
+
+        for settlement in settlements.sorted(by: { $0.date > $1.date }) {
+            if keptSettlements[settlement.id] == nil {
+                keptSettlements[settlement.id] = settlement
+            } else {
+                context.delete(settlement)
+            }
+        }
+
+        return keptSettlements.values.sorted { $0.date > $1.date }
     }
 
     @MainActor

@@ -35,7 +35,12 @@ struct TransactionsView: View {
     @Query private var transactions: [Transaction]
 
     // Query is already scoped to the active budget in init.
-    private var scopedTransactions: [Transaction] { transactions }
+    private var scopedTransactions: [Transaction] {
+        var seenIds = Set<UUID>()
+        return transactions.filter { transaction in
+            seenIds.insert(transaction.id).inserted
+        }
+    }
 
     private var monthTransactions: [Transaction] {
         guard let monthInterval = monthSelectionStore.monthInterval() else { return [] }

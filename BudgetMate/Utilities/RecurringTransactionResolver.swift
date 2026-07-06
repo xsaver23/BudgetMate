@@ -2,10 +2,27 @@ import Foundation
 
 enum RecurringTransactionResolver {
     static func transactions(in interval: DateInterval, from transactions: [Transaction], calendar: Calendar = .current) -> [Transaction] {
-        transactions.flatMap { transaction in
+        uniqueTransactions(from: transactions).flatMap { transaction in
             occurrences(of: transaction, in: interval, calendar: calendar)
         }
         .sorted(by: newestFirst)
+    }
+
+    private static func uniqueTransactions(from transactions: [Transaction]) -> [Transaction] {
+        var transactionsById: [UUID: Transaction] = [:]
+
+        for transaction in transactions {
+            guard let existing = transactionsById[transaction.id] else {
+                transactionsById[transaction.id] = transaction
+                continue
+            }
+
+            if newestFirst(transaction, existing) {
+                transactionsById[transaction.id] = transaction
+            }
+        }
+
+        return transactionsById.values.sorted(by: newestFirst)
     }
 
     private static func newestFirst(_ lhs: Transaction, _ rhs: Transaction) -> Bool {
