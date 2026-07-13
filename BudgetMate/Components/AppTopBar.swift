@@ -44,6 +44,8 @@ struct AppTopBar: View {
 
             Spacer(minLength: 12)
 
+            SyncStatusButton(action: onProfileTap)
+
             Button(action: onProfileTap) {
                 MemberInitialsBadge(
                     initials: member.displayInitials,
@@ -62,10 +64,37 @@ struct AppTopBar: View {
     }
 }
 
+private struct SyncStatusButton: View {
+    @EnvironmentObject private var cloudSyncStore: CloudSyncStore
+    let action: () -> Void
+
+    var body: some View {
+        if cloudSyncStore.isSyncing || cloudSyncStore.hasSyncIssue {
+            Button(action: action) {
+                Label(
+                    cloudSyncStore.hasSyncIssue ? "Needs attention" : "Syncing",
+                    systemImage: cloudSyncStore.hasSyncIssue ? "exclamationmark.triangle.fill" : "arrow.triangle.2.circlepath"
+                )
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(cloudSyncStore.hasSyncIssue ? AppTheme.expenseText : AppTheme.warningText)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 7)
+                .background(
+                    (cloudSyncStore.hasSyncIssue ? AppTheme.expenseTint : AppTheme.warningTint),
+                    in: Capsule()
+                )
+            }
+            .buttonStyle(PressableButtonStyle(scale: 0.96))
+            .accessibilityLabel(cloudSyncStore.hasSyncIssue ? "Sync needs attention. Open settings." : "Syncing. Open settings.")
+        }
+    }
+}
+
 #Preview {
     VStack(spacing: 0) {
         AppTopBar(member: MemberSampleData.members[0])
         Spacer()
     }
     .background(Color(.systemGroupedBackground))
+    .environmentObject(CloudSyncStore())
 }

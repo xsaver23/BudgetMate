@@ -7,16 +7,21 @@ export interface CurrencyOption {
 export const currencyOptions: CurrencyOption[] = [
   { code: "USD", name: "US Dollar", symbol: "$" },
   { code: "CAD", name: "Canadian Dollar", symbol: "CA$" },
-  { code: "EUR", name: "Euro", symbol: "EUR" },
-  { code: "GBP", name: "British Pound", symbol: "GBP" },
+  { code: "EUR", name: "Euro", symbol: "€" },
+  { code: "GBP", name: "British Pound", symbol: "£" },
   { code: "AUD", name: "Australian Dollar", symbol: "A$" },
-  { code: "PHP", name: "Philippine Peso", symbol: "PHP" },
-  { code: "JPY", name: "Japanese Yen", symbol: "JPY" }
+  { code: "PHP", name: "Philippine Peso", symbol: "₱" },
+  { code: "JPY", name: "Japanese Yen", symbol: "¥" }
 ];
 
 export function normalizedCurrencyCode(code: string): string {
   const normalized = code.trim().toUpperCase();
   return currencyOptions.some((option) => option.code === normalized) ? normalized : "USD";
+}
+
+export function currencySymbol(code: string): string {
+  const normalized = normalizedCurrencyCode(code);
+  return currencyOptions.find((option) => option.code === normalized)?.symbol ?? "$";
 }
 
 export function formatMoney(amount: number, currencyCode: string): string {

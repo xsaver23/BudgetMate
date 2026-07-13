@@ -1,5 +1,8 @@
 import SwiftData
 import SwiftUI
+import OSLog
+
+private let dashboardMetricsLog = OSLog(subsystem: "BudgetMate", category: "DashboardMetrics")
 
 struct DashboardView: View {
     @EnvironmentObject private var settingsStore: SettingsStore
@@ -9,6 +12,7 @@ struct DashboardView: View {
     @EnvironmentObject private var cloudSyncStore: CloudSyncStore
     @EnvironmentObject private var appRefreshStore: AppRefreshStore
     var onOpenSettings: () -> Void = {}
+    var onOpenBudget: () -> Void = {}
     let budgetScopeId: String
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -22,9 +26,14 @@ struct DashboardView: View {
     @Query private var transactions: [Transaction]
     @Query private var settlementRecords: [Settlement]
 
-    init(budgetScopeId: String, onOpenSettings: @escaping () -> Void = {}) {
+    init(
+        budgetScopeId: String,
+        onOpenSettings: @escaping () -> Void = {},
+        onOpenBudget: @escaping () -> Void = {}
+    ) {
         self.budgetScopeId = budgetScopeId
         self.onOpenSettings = onOpenSettings
+        self.onOpenBudget = onOpenBudget
         _transactions = Query(
             filter: #Predicate<Transaction> { $0.ownerUserId == budgetScopeId },
             sort: \Transaction.date,
@@ -56,12 +65,21 @@ struct DashboardView: View {
         memberViewModel.members.count > 1
     }
 
-    private var metricsRefreshToken: String {
-        let dataHash = FinancialDataFingerprint.hash(
+    private var metricsRevision: UInt64 {
+        let needsSharedBalanceWork = memberViewModel.members.count > 1
+        let dataRevision = FinancialDataFingerprint.shallowDashboardRevision(
             transactions: scopedTransactions,
-            settlements: scopedSettlementRecords
+            settlements: needsSharedBalanceWork ? scopedSettlementRecords : [],
+            members: memberViewModel.members
         )
-        return "\(dataHash)-\(monthSelectionStore.selectedMonthIndex)-\(selectedMemberId?.uuidString ?? "all")-\(monthlyBudget)-\(authStore.currentBudgetScopeId)"
+
+        var hasher = Hasher()
+        hasher.combine(dataRevision)
+        hasher.combine(monthSelectionStore.selectedMonthIndex)
+        hasher.combine(selectedMemberId)
+        hasher.combine(monthlyBudget)
+        hasher.combine(authStore.currentBudgetScopeId)
+        return UInt64(bitPattern: Int64(hasher.finalize()))
     }
 
     var body: some View {
@@ -94,8 +112,10 @@ struct DashboardView: View {
             .statusBarScrim()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
-            .task(id: metricsRefreshToken) {
-                refreshDerivedMetrics()
+            .background {
+                DashboardMetricsLoader(revision: metricsRevision) {
+                    await refreshDerivedMetrics()
+                }
             }
             .onChange(of: memberViewModel.members.count) { _, count in
                 if count <= 1 {
@@ -141,15 +161,31 @@ struct DashboardView: View {
         }
     }
 
-    private func refreshDerivedMetrics() {
-        derivedMetrics = DashboardDerivedMetrics.compute(
-            transactions: scopedTransactions,
-            settlements: scopedSettlementRecords,
-            members: memberViewModel.members,
-            monthInterval: monthSelectionStore.monthInterval(),
-            selectedMemberId: selectedMemberId,
-            monthlyBudget: monthlyBudget
-        )
+    @MainActor
+    private func refreshDerivedMetrics() async {
+        let signpostID = OSSignpostID(log: dashboardMetricsLog)
+        os_signpost(.begin, log: dashboardMetricsLog, name: "Refresh Metrics", signpostID: signpostID)
+        defer {
+            os_signpost(.end, log: dashboardMetricsLog, name: "Refresh Metrics", signpostID: signpostID)
+        }
+
+        do {
+            let metrics = try await DashboardDerivedMetrics.compute(
+                transactions: scopedTransactions,
+                settlements: scopedSettlementRecords,
+                members: memberViewModel.members,
+                monthInterval: monthSelectionStore.monthInterval(),
+                selectedMemberId: selectedMemberId,
+                monthlyBudget: monthlyBudget,
+                computeSettlements: memberViewModel.members.count > 1
+            )
+            try Task.checkCancellation()
+            derivedMetrics = metrics
+        } catch is CancellationError {
+            return
+        } catch {
+            assertionFailure("Dashboard metrics failed: \(error)")
+        }
     }
 
     private func settle(_ settlement: SettlementSuggestion) {
@@ -198,16 +234,18 @@ struct DashboardView: View {
 
     private var memberFilterCard: some View {
         HStack(spacing: 12) {
-            memberFilterButton(
-                title: "All",
-                color: AppTheme.brand,
-                selection: nil,
+                memberFilterButton(
+                    title: "All",
+                    color: AppTheme.brand,
+                    textColor: Color.accessibleForeground(forHex: "#1E3A2B"),
+                    selection: nil,
                 accessibilityLabel: "Show all members"
             )
             ForEach(memberViewModel.members) { member in
                 memberFilterButton(
                     title: member.displayInitials,
                     color: Color(hex: member.colorHex),
+                    textColor: Color.accessibleForeground(forHex: member.colorHex),
                     selection: member.id,
                     accessibilityLabel: "Filter dashboard to \(member.displayName)"
                 )
@@ -220,12 +258,14 @@ struct DashboardView: View {
     private func memberFilterButton(
         title: String,
         color: Color,
+        textColor: Color,
         selection: UUID?,
         accessibilityLabel: String
     ) -> some View {
         MemberFilterButton(
             title: title,
             color: color,
+            textColor: textColor,
             isSelected: selectedMemberId == selection,
             accessibilityLabel: accessibilityLabel
         ) {
@@ -238,7 +278,7 @@ struct DashboardView: View {
     private var balanceHeroCard: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Total balance")
+                Text(netScopeLabel)
                     .font(.headline.weight(.bold))
                     .foregroundStyle(BudgetBeaverPalette.wood)
 
@@ -302,11 +342,17 @@ struct DashboardView: View {
             if monthlyBudget > 0 {
                 damBarSummary
             } else {
-                Text("Set a monthly budget in Settings to track your pacing.")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(BudgetBeaverPalette.wood)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(20)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Set up category budgets to track your pacing.")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(BudgetBeaverPalette.wood)
+
+                    Button("Set up budgets", action: onOpenBudget)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(AppTheme.warningText)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(20)
             }
         }
         .background(AppTheme.warningTint, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -314,6 +360,13 @@ struct DashboardView: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(AppTheme.secondaryAction.opacity(0.28), lineWidth: 1)
         )
+    }
+
+    private var netScopeLabel: String {
+        let calendar = Calendar.current
+        return calendar.isDate(monthSelectionStore.selectedMonthDate, equalTo: .now, toGranularity: .month)
+            ? "Net this month"
+            : "Net for \(monthSelectionStore.selectedMonthDate.formatted(.dateTime.month(.wide).year()))"
     }
 
     private var damBarSummary: some View {
@@ -884,6 +937,57 @@ struct DashboardView: View {
     }
 }
 
+/// Keeps transaction-editor and cloud-sync publications below DashboardView so
+/// they can cancel/restart metrics work without invalidating the whole screen.
+private struct DashboardMetricsLoader: View {
+    @EnvironmentObject private var transactionFlow: TransactionFlowCoordinator
+    @EnvironmentObject private var cloudSyncStore: CloudSyncStore
+
+    let revision: UInt64
+    let load: () async -> Void
+
+    private var isTransactionEditorActive: Bool {
+        transactionFlow.shouldPresentAddTransaction || transactionFlow.isTransactionEditorActive
+    }
+
+    private var loadKey: DashboardMetricsLoadKey {
+        DashboardMetricsLoadKey(
+            revision: revision,
+            cloudLastSyncedAt: cloudSyncStore.lastSyncedAt,
+            isTransactionEditorActive: isTransactionEditorActive
+        )
+    }
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .task(id: loadKey) {
+                guard !isTransactionEditorActive else { return }
+
+                do {
+                    // Let the first frame and a newly requested keyboard win
+                    // before walking the dashboard's relationship-backed data.
+                    try await Task.sleep(for: .milliseconds(180))
+                    try Task.checkCancellation()
+                    await Task.yield()
+                    try Task.checkCancellation()
+                    await load()
+                } catch is CancellationError {
+                    return
+                } catch {
+                    assertionFailure("Dashboard metrics loader failed: \(error)")
+                }
+            }
+    }
+}
+
+private struct DashboardMetricsLoadKey: Hashable {
+    let revision: UInt64
+    let cloudLastSyncedAt: Date?
+    let isTransactionEditorActive: Bool
+}
+
 #Preview {
     DashboardView(budgetScopeId: "local")
         .environmentObject(SettingsStore())
@@ -892,5 +996,6 @@ struct DashboardView: View {
         .environmentObject(AuthSessionStore())
         .environmentObject(CloudSyncStore())
         .environmentObject(AppRefreshStore())
+        .environmentObject(TransactionFlowCoordinator())
         .modelContainer(PreviewContainer.seeded)
 }

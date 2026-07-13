@@ -2,11 +2,11 @@
 name: BudgetMate
 description: Bright, trustworthy budgeting for personal and shared household money.
 colors:
-  forest-primary: "#173404"
-  cream-background: "#FAEEDA"
-  cream-surface: "#FFFDF7"
-  warm-surface: "#F5E6C9"
-  amber-secondary: "#FFCF70"
+  forest-primary: "#1E3A2B"
+  cream-background: "#F8F4EC"
+  cream-surface: "#FFFDF8"
+  warm-surface: "#F2EBDD"
+  amber-secondary: "#E7B84B"
   income-block: "#9CC957"
   expense-block: "#F49379"
   danger-ink: "#7D2B17"
@@ -96,17 +96,24 @@ The current palette uses forest green as the main product accent, a cream/warm c
 - **Forest Primary** (#173404): Primary actions, selected navigation, onboarding mark, headings, and major positive control states.
 
 ### Secondary
-- **Cream Canvas** (#FAEEDA): Light-mode app background.
+- **Cream Canvas** (#F8F4EC): Light-mode app background.
 - **Amber Secondary** (#FFCF70): Secondary CTAs, avatar rings, pacing blocks, and selected-member rings.
 
 ### Tertiary
 - **Member Spectrum**: Blue, coral, teal, and purple badges identify household members across dashboard, transactions, settlement, budget members, and split rows.
 
 ### Neutral
-- **Cream Surface** (#FFFDF7): Cards, form rows, modal content, and list surfaces.
+- **Cream Surface** (#FFFDF8): Cards, form rows, modal content, and list surfaces.
 - **Adaptive Ink:** Forest in light mode, cream in dark mode.
-- **Adaptive Muted:** Brown in light mode, amber in dark mode.
-- **Warm Surface:** Secondary card fills and quiet groups.
+- **Adaptive Muted:** Accessible olive-gray in light mode, warm gray in dark mode.
+- **Warm Surface** (#F2EBDD): Secondary card fills and quiet groups.
+
+### Readability Rules
+
+Small text uses role-specific foreground colors rather than chart colors.
+Category and member hues belong on dots, icons, borders, and fills; pill text
+stays primary or uses a computed high-contrast foreground. Status labels always
+pair color with an icon and plain-language text.
 
 ### Named Rules
 

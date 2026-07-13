@@ -19,6 +19,11 @@ struct MemberRemovalResult {
     let didReassignActiveMember: Bool
 }
 
+struct MemberCloudSyncToken: Equatable {
+    let budgetScopeId: String
+    let revision: Int
+}
+
 @MainActor
 final class MemberViewModel: ObservableObject {
     @Published private(set) var currentBudget: Budget
@@ -27,6 +32,9 @@ final class MemberViewModel: ObservableObject {
         didSet {
             persistMembers()
             ensureActiveMemberIsValid()
+            if !isApplyingScopedMembers {
+                markMembersDirty()
+            }
         }
     }
 
@@ -39,7 +47,11 @@ final class MemberViewModel: ObservableObject {
     private var repository: BudgetRepository
     private let userDefaults: UserDefaults
     private var currentUserScopeId: String
+    private var currentBudgetScopeId: String
     private var currentUserEmail: String?
+    private var isApplyingScopedMembers = false
+    private let membersCloudDirtyKey = "budgetmate.membersCloudDirty"
+    private let membersCloudRevisionKey = "budgetmate.membersCloudRevision"
     private let memberPalette = ["#3B82F6", "#F97316", "#10B981", "#8B5CF6", "#EF4444", "#06B6D4"]
 
     init(
@@ -55,6 +67,7 @@ final class MemberViewModel: ObservableObject {
         self.members = resolvedMembers
         self.userDefaults = userDefaults
         self.currentUserScopeId = userScopeId
+        self.currentBudgetScopeId = userScopeId
         self.currentUserEmail = nil
         self.isProfileComplete = userDefaults.bool(
             forKey: Self.profileCompletedKey(baseKey: profileCompletedKey, userScopeId: userScopeId)
@@ -71,6 +84,16 @@ final class MemberViewModel: ObservableObject {
 
     var budgetName: String { currentBudget.name }
     var syncMode: BudgetSyncMode { repository.syncMode }
+
+    var pendingCloudSyncToken: MemberCloudSyncToken? {
+        guard userDefaults.bool(forKey: membersDirtyKey(for: currentBudgetScopeId)) else {
+            return nil
+        }
+        return MemberCloudSyncToken(
+            budgetScopeId: currentBudgetScopeId,
+            revision: userDefaults.integer(forKey: membersRevisionKey(for: currentBudgetScopeId))
+        )
+    }
 
     var activeMember: BudgetMember {
         members.first(where: { $0.id == activeMemberId }) ?? members.first ?? BudgetMember(
@@ -92,47 +115,59 @@ final class MemberViewModel: ObservableObject {
 
     func replaceMembers(with cloudMembers: [BudgetMember]) {
         guard !cloudMembers.isEmpty else { return }
-        let normalizedMembers = BudgetMember.deduplicatedForBudget(cloudMembers)
-        let sortedMembers = normalizedMembers.sorted { lhs, rhs in
-            if lhs.role != rhs.role {
-                return lhs.role == .owner
-            }
-            return lhs.createdDate < rhs.createdDate
-        }
+        let sortedMembers = Self.sortedMembers(cloudMembers)
         if sortedMembers != members {
-            members = sortedMembers
+            applyScopedMembers(sortedMembers)
         }
+        markMembersClean(for: currentBudgetScopeId)
         if let signedInMember = signedInMember(in: sortedMembers) {
             activeMemberId = signedInMember.id
         }
     }
 
-    func switchUser(to userScopeId: String, email: String?) {
+    func replaceMembersWithLocalChanges(_ localMembers: [BudgetMember]) {
+        let sortedMembers = Self.sortedMembers(localMembers)
+        guard !sortedMembers.isEmpty, sortedMembers != members else { return }
+        members = sortedMembers
+    }
+
+    func switchUser(to userScopeId: String, budgetScopeId: String? = nil, email: String?) {
+        let resolvedBudgetScopeId = budgetScopeId ?? userScopeId
         currentUserEmail = email
-        guard currentUserScopeId != userScopeId else {
+        guard currentUserScopeId != userScopeId || currentBudgetScopeId != resolvedBudgetScopeId else {
             if let signedInMember = signedInMember(in: members) {
                 activeMemberId = signedInMember.id
             }
             return
         }
         currentUserScopeId = userScopeId
+        currentBudgetScopeId = resolvedBudgetScopeId
         repository = LocalBudgetRepository(
             userDefaults: userDefaults,
-            userScopeId: userScopeId,
-            fallbackBudget: Self.defaultBudget(userScopeId: userScopeId, email: email)
+            userScopeId: resolvedBudgetScopeId,
+            fallbackBudget: Self.defaultBudget(
+                userScopeId: userScopeId,
+                budgetScopeId: resolvedBudgetScopeId,
+                email: email
+            )
         )
 
         var loadedBudget = repository.loadCurrentBudget()
-        let fallbackBudget = Self.defaultBudget(userScopeId: userScopeId, email: email)
-        if Self.shouldReplaceSampleBudget(loadedBudget, forUserScopeId: userScopeId) {
+        let fallbackBudget = Self.defaultBudget(
+            userScopeId: userScopeId,
+            budgetScopeId: resolvedBudgetScopeId,
+            email: email
+        )
+        if Self.shouldReplaceSampleBudget(loadedBudget, forUserScopeId: userScopeId) ||
+            loadedBudget.id.uuidString != resolvedBudgetScopeId {
             loadedBudget = fallbackBudget
             repository.saveCurrentBudget(loadedBudget)
         }
         currentBudget = loadedBudget
-        members = loadedBudget.members
+        applyScopedMembers(loadedBudget.members)
         isProfileComplete = userDefaults.bool(forKey: profileCompletedKey(for: userScopeId))
 
-        if let storedId = userDefaults.string(forKey: activeMemberKey(for: userScopeId)),
+        if let storedId = userDefaults.string(forKey: activeMemberKey(for: resolvedBudgetScopeId)),
            let uuid = UUID(uuidString: storedId),
            members.contains(where: { $0.id == uuid }) {
             activeMemberId = uuid
@@ -304,7 +339,7 @@ final class MemberViewModel: ObservableObject {
     }
 
     private func persistActiveMemberId() {
-        userDefaults.set(activeMemberId.uuidString, forKey: activeMemberKey(for: currentUserScopeId))
+        userDefaults.set(activeMemberId.uuidString, forKey: activeMemberKey(for: currentBudgetScopeId))
     }
 
     private func persistProfileCompleted() {
@@ -314,6 +349,38 @@ final class MemberViewModel: ObservableObject {
     private func persistMembers() {
         currentBudget.members = members
         repository.saveCurrentBudget(currentBudget)
+    }
+
+    func markCloudSyncSucceeded(_ token: MemberCloudSyncToken) {
+        let revisionKey = membersRevisionKey(for: token.budgetScopeId)
+        guard userDefaults.integer(forKey: revisionKey) == token.revision else {
+            return
+        }
+        markMembersClean(for: token.budgetScopeId)
+    }
+
+    private func applyScopedMembers(_ scopedMembers: [BudgetMember]) {
+        isApplyingScopedMembers = true
+        members = scopedMembers
+        isApplyingScopedMembers = false
+    }
+
+    private func markMembersDirty() {
+        let revisionKey = membersRevisionKey(for: currentBudgetScopeId)
+        userDefaults.set(userDefaults.integer(forKey: revisionKey) + 1, forKey: revisionKey)
+        userDefaults.set(true, forKey: membersDirtyKey(for: currentBudgetScopeId))
+    }
+
+    private func markMembersClean(for budgetScopeId: String) {
+        userDefaults.set(false, forKey: membersDirtyKey(for: budgetScopeId))
+    }
+
+    private func membersDirtyKey(for budgetScopeId: String) -> String {
+        "\(membersCloudDirtyKey).\(budgetScopeId)"
+    }
+
+    private func membersRevisionKey(for budgetScopeId: String) -> String {
+        "\(membersCloudRevisionKey).\(budgetScopeId)"
     }
 
     private func nextColor() -> String {
@@ -353,6 +420,15 @@ final class MemberViewModel: ObservableObject {
         return normalized
     }
 
+    private static func sortedMembers(_ members: [BudgetMember]) -> [BudgetMember] {
+        BudgetMember.deduplicatedForBudget(members).sorted { lhs, rhs in
+            if lhs.role != rhs.role {
+                return lhs.role == .owner
+            }
+            return lhs.createdDate < rhs.createdDate
+        }
+    }
+
     private func activeMemberKey(for userScopeId: String) -> String {
         Self.activeMemberKey(baseKey: activeMemberKey, userScopeId: userScopeId)
     }
@@ -369,8 +445,9 @@ final class MemberViewModel: ObservableObject {
         "\(baseKey).\(userScopeId)"
     }
 
-    private static func defaultBudget(userScopeId: String, email: String?) -> Budget {
+    private static func defaultBudget(userScopeId: String, budgetScopeId: String, email: String?) -> Budget {
         let memberId = UUID(uuidString: userScopeId) ?? UUID()
+        let budgetId = UUID(uuidString: budgetScopeId) ?? memberId
         let displayName = defaultDisplayName(from: email)
         let member = BudgetMember(
             id: memberId,
@@ -379,14 +456,14 @@ final class MemberViewModel: ObservableObject {
             initials: BudgetMember.initials(from: displayName),
             color: "#3B82F6",
             authUserId: memberId,
-            role: .owner,
+            role: budgetScopeId == userScopeId ? .owner : .member,
             inviteStatus: .active,
             joinedDate: .now
         )
 
         return Budget(
-            id: memberId,
-            name: "My Budget",
+            id: budgetId,
+            name: budgetScopeId == userScopeId ? "My Budget" : "Shared Budget",
             createdByUserId: memberId,
             members: [member]
         )

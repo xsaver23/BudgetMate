@@ -56,7 +56,7 @@ struct TransactionDetailView: View {
     }
 
     private var amountTint: Color {
-        transaction.type == .income ? AppTheme.income : AppTheme.expense
+        transaction.type == .income ? AppTheme.incomeTint : AppTheme.expenseTint
     }
 
     private var signedAmount: String {
@@ -95,7 +95,7 @@ struct TransactionDetailView: View {
                     }
                 }
             }
-            .sheet(isPresented: $isEditing) {
+            .fullScreenCover(isPresented: $isEditing) {
                 AddTransactionView(transactionToEdit: sourceTransaction)
             }
             .confirmationDialog("Recurring Transaction", isPresented: $isShowingDeleteOptions) {
@@ -125,7 +125,7 @@ struct TransactionDetailView: View {
                     .foregroundStyle(AppTheme.textSecondary)
                 Text(signedBalanceAmount(context.signedAmount))
                     .font(.roundedBold(22))
-                    .foregroundStyle(context.signedAmount >= 0 ? AppTheme.expense : AppTheme.income)
+                    .foregroundStyle(context.signedAmount >= 0 ? AppTheme.expenseText : AppTheme.incomeText)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -146,13 +146,13 @@ struct TransactionDetailView: View {
 
                 Text(signedAmount)
                     .font(.roundedBold(40))
-                    .foregroundStyle(transaction.type == .income ? AppTheme.brand : AppTheme.danger)
+                    .foregroundStyle(transaction.type == .income ? AppTheme.incomeText : AppTheme.expenseText)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
 
                 Text(transaction.type == .expense ? "Expense" : "Income")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(transaction.type == .income ? AppTheme.brand : AppTheme.danger)
+                    .foregroundStyle(transaction.type == .income ? AppTheme.incomeText : AppTheme.expenseText)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 5)
                     .background(Capsule().fill(amountTint))
@@ -327,6 +327,7 @@ struct TransactionDetailView: View {
         let source = sourceTransaction
         let stopDate = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: transaction.date)) ?? .now
         source.recurrenceRule = Transaction.monthlyRecurrenceRule(until: stopDate)
+        source.needsSync = true
         do {
             try modelContext.save()
         } catch {

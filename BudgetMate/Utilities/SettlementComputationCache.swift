@@ -17,25 +17,50 @@ struct SettlementComputationCache {
         settlementById: [:]
     )
 
+    @MainActor
     static func build(
         transactions: [Transaction],
         settlements: [Settlement],
         members: [BudgetMember]
-    ) -> SettlementComputationCache {
-        // Guard against a local store that ended up with duplicate rows for the
-        // same id (e.g. from older multi-device syncs): deduplicate before
-        // building keyed dictionaries so we never trap on a duplicate key and
-        // never double-count split expenses.
-        let transactions = transactions.deduplicatedByID()
-        let settlements = settlements.deduplicatedByID()
-        let splitExpenses = transactions.filter { $0.type == .expense && !$0.splits.isEmpty }
-        let transactionById = Dictionary(transactions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let settlementById = Dictionary(settlements.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    ) async throws -> SettlementComputationCache {
+        // DashboardDerivedMetrics normalizes these arrays once before calling
+        // us. Build the relationship-backed portion cooperatively so presenting
+        // the transaction editor can cancel between small batches.
+        var splitExpenses: [Transaction] = []
+        var transactionById: [UUID: Transaction] = [:]
+        splitExpenses.reserveCapacity(transactions.count)
+        transactionById.reserveCapacity(transactions.count)
+
+        for (index, transaction) in transactions.enumerated() {
+            if index.isMultiple(of: 64) {
+                try Task.checkCancellation()
+                await Task.yield()
+            }
+
+            transactionById[transaction.id] = transaction
+            if transaction.type == .expense, !transaction.splits.isEmpty {
+                splitExpenses.append(transaction)
+            }
+        }
+
+        var settlementById: [UUID: Settlement] = [:]
+        settlementById.reserveCapacity(settlements.count)
+        for (index, settlement) in settlements.enumerated() {
+            if index.isMultiple(of: 128) {
+                try Task.checkCancellation()
+                await Task.yield()
+            }
+            settlementById[settlement.id] = settlement
+        }
+
+        try Task.checkCancellation()
+        await Task.yield()
         let suggestions = DashboardViewModel.settlements(
             splitExpenses: splitExpenses,
             settlementRecords: settlements,
             members: members
         )
+        try Task.checkCancellation()
 
         return SettlementComputationCache(
             suggestions: suggestions,
@@ -86,7 +111,11 @@ struct BreakdownPresentation: Identifiable {
 }
 
 enum FinancialDataFingerprint {
-    static func hash(transactions: [Transaction], settlements: [Settlement]) -> UInt64 {
+    static func hash(
+        transactions: [Transaction],
+        settlements: [Settlement],
+        includeSplitCounts: Bool = true
+    ) -> UInt64 {
         var hasher = Hasher()
         hasher.combine(transactions.count)
         hasher.combine(settlements.count)
@@ -95,7 +124,9 @@ enum FinancialDataFingerprint {
             hasher.combine(transaction.amount)
             hasher.combine(transaction.date)
             hasher.combine(transaction.recurrenceRule)
-            hasher.combine(transaction.splits.count)
+            if includeSplitCounts {
+                hasher.combine(transaction.splits.count)
+            }
         }
         for settlement in settlements {
             hasher.combine(settlement.id)
@@ -104,9 +135,65 @@ enum FinancialDataFingerprint {
         }
         return UInt64(bitPattern: Int64(hasher.finalize()))
     }
+
+    /// A dashboard revision that deliberately reads only scalar model fields.
+    /// Split relationships can fault from SwiftData one transaction at a time,
+    /// so they are inspected later by the cancellable metrics loader instead of
+    /// during every SwiftUI body evaluation. `needsSync` catches local split
+    /// edits; CloudSyncStore.lastSyncedAt is added by the loader for remote ones.
+    static func shallowDashboardRevision(
+        transactions: [Transaction],
+        settlements: [Settlement],
+        members: [BudgetMember]
+    ) -> UInt64 {
+        var hasher = Hasher()
+        hasher.combine(transactions.count)
+        hasher.combine(settlements.count)
+        hasher.combine(members.count)
+
+        for transaction in transactions {
+            hasher.combine(transaction.id)
+            hasher.combine(transaction.title)
+            hasher.combine(transaction.amount)
+            hasher.combine(transaction.type.rawValue)
+            hasher.combine(transaction.category.rawValue)
+            hasher.combine(transaction.paymentMethod?.rawValue)
+            hasher.combine(transaction.createdByMemberId)
+            hasher.combine(transaction.date)
+            hasher.combine(transaction.createdAt)
+            hasher.combine(transaction.recurrenceRule)
+            hasher.combine(transaction.ownerUserId)
+            hasher.combine(transaction.needsSync)
+        }
+
+        for settlement in settlements {
+            hasher.combine(settlement.id)
+            hasher.combine(settlement.fromMemberId)
+            hasher.combine(settlement.toMemberId)
+            hasher.combine(settlement.amount)
+            hasher.combine(settlement.date)
+            hasher.combine(settlement.ownerUserId)
+            hasher.combine(settlement.needsSync)
+        }
+
+        for member in members {
+            hasher.combine(member.id)
+            hasher.combine(member.displayName)
+            hasher.combine(member.email)
+            hasher.combine(member.displayInitials)
+            hasher.combine(member.colorHex)
+            hasher.combine(member.authUserId)
+            hasher.combine(member.role.rawValue)
+            hasher.combine(member.inviteStatus.rawValue)
+            hasher.combine(member.joinedDate)
+            hasher.combine(member.createdDate)
+        }
+
+        return UInt64(bitPattern: Int64(hasher.finalize()))
+    }
 }
 
-/// Month-scoped dashboard values derived off the main thread of SwiftUI body.
+/// Month-scoped dashboard values cached outside repeated SwiftUI body reads.
 struct DashboardDerivedMetrics {
     var settlementCache: SettlementComputationCache = .empty
     var monthTransactions: [Transaction] = []
@@ -119,28 +206,50 @@ struct DashboardDerivedMetrics {
     )
     var expenseBreakdown: [ExpenseCategoryBreakdown] = []
 
+    @MainActor
     static func compute(
         transactions: [Transaction],
         settlements: [Settlement],
         members: [BudgetMember],
         monthInterval: DateInterval?,
         selectedMemberId: UUID?,
-        monthlyBudget: Double
-    ) -> DashboardDerivedMetrics {
+        monthlyBudget: Double,
+        computeSettlements: Bool = true
+    ) async throws -> DashboardDerivedMetrics {
+        try Task.checkCancellation()
         let transactions = transactions.deduplicatedByID()
-        let settlements = settlements.deduplicatedByID()
-        let settlementCache = SettlementComputationCache.build(
-            transactions: transactions,
-            settlements: settlements,
-            members: members
-        )
+        let settlements = computeSettlements ? settlements.deduplicatedByID() : []
+
+        await Task.yield()
+        try Task.checkCancellation()
+
+        let settlementCache: SettlementComputationCache
+        if computeSettlements {
+            settlementCache = try await SettlementComputationCache.build(
+                transactions: transactions,
+                settlements: settlements,
+                members: members
+            )
+        } else {
+            settlementCache = .empty
+        }
+
+        await Task.yield()
+        try Task.checkCancellation()
 
         let monthTransactions: [Transaction]
         if let monthInterval {
-            monthTransactions = RecurringTransactionResolver.transactions(in: monthInterval, from: transactions)
+            monthTransactions = RecurringTransactionResolver.transactions(
+                in: monthInterval,
+                from: transactions,
+                alreadyDeduplicated: true
+            )
         } else {
             monthTransactions = []
         }
+
+        await Task.yield()
+        try Task.checkCancellation()
 
         let displayedTransactions: [Transaction]
         if let selectedMemberId {
@@ -159,6 +268,8 @@ struct DashboardDerivedMetrics {
             transactions: monthTransactions,
             forMember: selectedMemberId
         )
+
+        try Task.checkCancellation()
 
         return DashboardDerivedMetrics(
             settlementCache: settlementCache,
@@ -193,7 +304,8 @@ struct TransactionsTabMetrics {
         if let monthInterval {
             monthTransactions = RecurringTransactionResolver.transactions(
                 in: monthInterval,
-                from: transactions.deduplicatedByID()
+                from: transactions.deduplicatedByID(),
+                alreadyDeduplicated: true
             )
         } else {
             monthTransactions = []
@@ -265,7 +377,7 @@ struct BudgetTabMetrics {
         let monthlyExpenseTransactions: [Transaction]
         if let monthInterval {
             monthlyExpenseTransactions = RecurringTransactionResolver
-                .transactions(in: monthInterval, from: transactions)
+                .transactions(in: monthInterval, from: transactions, alreadyDeduplicated: true)
                 .filter { $0.type == .expense }
         } else {
             monthlyExpenseTransactions = []

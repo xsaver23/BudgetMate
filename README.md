@@ -105,11 +105,13 @@ docs/shared-budgets-architecture.md
 4. Add the Supabase values:
 
 ```xcconfig
-BUDGETMATE_SUPABASE_URL = https://your-project.supabase.co
-BUDGETMATE_SUPABASE_PUBLISHABLE_KEY = your-publishable-key
+// Host only: do not include https:// because xcconfig treats // as a comment.
+SUPABASE_PROJECT_URL = your-project.supabase.co
+SUPABASE_PUBLISHABLE_KEY = your-publishable-key
 ```
 
-The local config file should not be committed.
+The app adds the `https://` scheme at runtime. The local config file should not
+be committed.
 
 Build check:
 

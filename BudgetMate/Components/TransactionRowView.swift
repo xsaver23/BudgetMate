@@ -7,7 +7,7 @@ struct TransactionRowView: View {
     let members: [BudgetMember]
 
     private var amountColor: Color {
-        transaction.type == .income ? AppTheme.income : AppTheme.expense
+        transaction.type == .income ? AppTheme.incomeText : AppTheme.expenseText
     }
 
     private var signedAmount: String {
@@ -82,7 +82,7 @@ struct CompactTransactionRow: View {
     }
 
     private var amountColor: Color {
-        transaction.type == .income ? AppTheme.income : AppTheme.expense
+        transaction.type == .income ? AppTheme.incomeText : AppTheme.expenseText
     }
 
     private var signedAmount: String {

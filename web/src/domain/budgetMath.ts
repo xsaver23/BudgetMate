@@ -7,14 +7,15 @@ import type {
   Settlement,
   SettlementSuggestion
 } from "./types";
+import { localDateKey, localMonthKey } from "./dates";
 
 function cents(amount: number): number {
   return Math.round(amount * 100);
 }
 
-function monthKey(value: string | Date): string {
+export function monthKey(value: string | Date): string {
   const date = typeof value === "string" ? new Date(value) : value;
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+  return localMonthKey(date);
 }
 
 const monthBudgetPrefix = "__monthBudget__:";
@@ -105,13 +106,66 @@ export function uniqueTransactions(transactions: BudgetTransaction[]): BudgetTra
 }
 
 export function currentMonthKey(): string {
-  return monthKey(new Date());
+  return localMonthKey();
 }
 
 export function transactionsForMonth(transactions: BudgetTransaction[], selectedMonth: string) {
   return uniqueTransactions(transactions)
-    .filter((transaction) => monthKey(transaction.date) === selectedMonth)
+    .map((transaction) => occurrenceForMonth(transaction, selectedMonth))
+    .filter((transaction): transaction is BudgetTransaction => !!transaction)
     .sort(newestTransactionFirst);
+}
+
+function occurrenceForMonth(
+  transaction: BudgetTransaction,
+  selectedMonth: string
+): BudgetTransaction | undefined {
+  if (monthKey(transaction.date) === selectedMonth) {
+    return transaction;
+  }
+
+  if (!transaction.recurrenceRule?.startsWith("monthly")) {
+    return undefined;
+  }
+
+  const monthMatch = /^(\d{4})-(\d{2})$/.exec(selectedMonth);
+  const sourceDate = new Date(transaction.date);
+  if (!monthMatch || Number.isNaN(sourceDate.getTime())) {
+    return undefined;
+  }
+
+  const year = Number(monthMatch[1]);
+  const monthIndex = Number(monthMatch[2]) - 1;
+  if (monthIndex < 0 || monthIndex > 11) {
+    return undefined;
+  }
+
+  const daysInTargetMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const occurrenceDate = new Date(
+    year,
+    monthIndex,
+    Math.min(sourceDate.getDate(), daysInTargetMonth),
+    sourceDate.getHours(),
+    sourceDate.getMinutes(),
+    sourceDate.getSeconds(),
+    sourceDate.getMilliseconds()
+  );
+
+  if (occurrenceDate < sourceDate) {
+    return undefined;
+  }
+
+  const recurrenceEndDate = /(?:^|\|)until=(\d{4}-\d{2}-\d{2})(?:\||$)/.exec(
+    transaction.recurrenceRule
+  )?.[1];
+  if (recurrenceEndDate && localDateKey(occurrenceDate) > recurrenceEndDate) {
+    return undefined;
+  }
+
+  return {
+    ...transaction,
+    date: occurrenceDate.toISOString()
+  };
 }
 
 export function monthlyBudget(settings: BudgetSettings, selectedMonth?: string): number {

@@ -1,12 +1,25 @@
 import Foundation
+import OSLog
 import SwiftData
 
 final class PersistenceController {
     static let shared = PersistenceController()
+    private static let launchLogger = Logger(subsystem: "BudgetMate", category: "Launch")
+    private static let launchSignposter = OSSignposter(subsystem: "BudgetMate", category: "Launch")
 
     let container: ModelContainer
 
     init(inMemory: Bool = false) {
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        let signpostState = Self.launchSignposter.beginInterval("ModelContainer Open")
+        defer {
+            Self.launchSignposter.endInterval("ModelContainer Open", signpostState)
+            let duration = ProcessInfo.processInfo.systemUptime - startedAt
+            Self.launchLogger.notice(
+                "ModelContainer opened after \(duration, privacy: .public) seconds"
+            )
+        }
+
         let schema = Schema([
             Transaction.self,
             TransactionSplit.self,
@@ -14,18 +27,11 @@ final class PersistenceController {
         ])
         do {
             container = try Self.makeContainer(schema: schema, inMemory: inMemory)
-        } catch let initialError {
-            guard !inMemory else {
-                fatalError("Could not create in-memory ModelContainer: \(initialError)")
-            }
-
-            // For local/offline v1, recover from schema changes by rebuilding local store.
-            do {
-                try Self.deleteDefaultStoreFiles()
-                container = try Self.makeContainer(schema: schema, inMemory: false)
-            } catch let recoveryError {
-                fatalError("Could not create ModelContainer. Initial error: \(initialError), recovery error: \(recoveryError)")
-            }
+        } catch {
+            // Never delete a financial-data store automatically. A migration,
+            // disk, or transient open failure needs diagnosis; rebuilding here
+            // silently erased offline transactions before they could sync.
+            fatalError("Could not open the BudgetMate data store. Local data was left untouched. Error: \(error)")
         }
     }
 
@@ -35,27 +41,5 @@ final class PersistenceController {
             isStoredInMemoryOnly: inMemory
         )
         return try ModelContainer(for: schema, configurations: [configuration])
-    }
-
-    private static func deleteDefaultStoreFiles() throws {
-        let appSupportURL = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first
-
-        guard let appSupportURL else { return }
-
-        let filenames = [
-            "default.store",
-            "default.store-wal",
-            "default.store-shm"
-        ]
-
-        for filename in filenames {
-            let fileURL = appSupportURL.appendingPathComponent(filename)
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                try FileManager.default.removeItem(at: fileURL)
-            }
-        }
     }
 }

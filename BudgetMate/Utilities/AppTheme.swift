@@ -11,11 +11,11 @@ enum AppTheme {
     static let secondaryActionText = Color(hex: "#1F2419")
 
     // Surfaces
-    static let background = Color(light: "#FBF1DC", dark: "#121710")
-    static let surface = Color(light: "#FFF7E8", dark: "#1D241A")
-    static let surfaceAlt = Color(light: "#F5E9D2", dark: "#252B21")
-    static let colorBlockYellow = Color(hex: "#FBF1DC")
-    static let surfaceStroke = Color(light: "#EADFCA", dark: "#3A4334")
+    static let background = Color(light: "#F8F4EC", dark: "#121710")
+    static let surface = Color(light: "#FFFDF8", dark: "#1D241A")
+    static let surfaceAlt = Color(light: "#F2EBDD", dark: "#252B21")
+    static let colorBlockYellow = Color(light: "#F8F4EC", dark: "#252B21")
+    static let surfaceStroke = Color(light: "#E4DAC8", dark: "#3A4334")
     static let track = Color(light: "#EEE6D7", dark: "#32382F")
 
     // Semantic
@@ -31,7 +31,13 @@ enum AppTheme {
     // Text
     static let textPrimary = Color(light: "#1F2419", dark: "#F7F2E7")
     static let textSecondary = Color(light: "#5E5D50", dark: "#C8C1B1")
-    static let textMuted = Color(light: "#9A9788", dark: "#9E988A")
+    static let textMuted = Color(light: "#6F6D61", dark: "#9E988A")
+
+    // Semantic foregrounds stay readable when the brighter chart colors are
+    // used as fills, dots, or progress accents.
+    static let incomeText = Color(light: "#2E7545", dark: "#79C992")
+    static let expenseText = Color(light: "#A84734", dark: "#F19981")
+    static let warningText = Color(light: "#7A5A14", dark: "#E7C36C")
 
     // Card metrics
     static let cardRadius: CGFloat = 18
@@ -168,6 +174,30 @@ extension Color {
             let selected = traits.userInterfaceStyle == .dark ? dark : light
             return UIColor(hex: selected)
         })
+    }
+
+    /// Picks a stable foreground for a stored member/category color. The
+    /// identity color remains intact while initials stay readable in both
+    /// light and dark appearances.
+    static func accessibleForeground(forHex hex: String) -> Color {
+        let background = UIColor(hex: hex)
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        guard background.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+            return .white
+        }
+
+        func channel(_ value: CGFloat) -> CGFloat {
+            value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+
+        let luminance = 0.2126 * channel(red) + 0.7152 * channel(green) + 0.0722 * channel(blue)
+        let lightContrast = (1.0 + 0.05) / (luminance + 0.05)
+        let darkLuminance = 0.2126 * channel(0.0667) + 0.7152 * channel(0.0824) + 0.0722 * channel(0.0588)
+        let darkContrast = (max(luminance, darkLuminance) + 0.05) / (min(luminance, darkLuminance) + 0.05)
+        return lightContrast >= darkContrast ? Color(hex: "#FFFDF8") : Color(hex: "#11150F")
     }
 }
 
