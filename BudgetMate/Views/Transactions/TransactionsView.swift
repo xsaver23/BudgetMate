@@ -4,11 +4,11 @@ import SwiftUI
 struct TransactionsView: View {
     @EnvironmentObject private var settingsStore: SettingsStore
     @EnvironmentObject private var memberViewModel: MemberViewModel
-    @EnvironmentObject private var transactionFlow: TransactionFlowCoordinator
     @EnvironmentObject private var monthSelectionStore: MonthSelectionStore
     @EnvironmentObject private var authStore: AuthSessionStore
     @EnvironmentObject private var cloudSyncStore: CloudSyncStore
     @EnvironmentObject private var appRefreshStore: AppRefreshStore
+    @EnvironmentObject private var transactionFlow: TransactionFlowCoordinator
     @Environment(\.modelContext) private var modelContext
     var onOpenSettings: () -> Void = {}
     let budgetScopeId: String
@@ -23,13 +23,6 @@ struct TransactionsView: View {
             filter: #Predicate<Transaction> { $0.ownerUserId == budgetScopeId },
             sort: \Transaction.date,
             order: .reverse
-        )
-    }
-
-    private var isShowingAddTransaction: Binding<Bool> {
-        Binding(
-            get: { transactionFlow.shouldPresentAddTransaction },
-            set: { transactionFlow.shouldPresentAddTransaction = $0 }
         )
     }
 
@@ -83,7 +76,7 @@ struct TransactionsView: View {
                         if derivedMetrics.filteredTransactions.isEmpty {
                             emptyStateCard
                         } else {
-                            LazyVStack(spacing: 40) {
+                    LazyVStack(spacing: 24) {
                                 ForEach(derivedMetrics.groupedByDay, id: \.date) { group in
                                     dayCard(date: group.date, items: group.items)
                                 }
@@ -108,9 +101,6 @@ struct TransactionsView: View {
             .statusBarScrim()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
-            .sheet(isPresented: isShowingAddTransaction) {
-                AddTransactionView()
-            }
             .task(id: metricsRefreshToken) {
                 refreshDerivedMetrics()
             }
@@ -134,7 +124,7 @@ struct TransactionsView: View {
                     value: amount(derivedMetrics.summaryTotals.totalExpenses)
                 )
                 summaryMetric(
-                    title: "Balance",
+                    title: "Net",
                     value: signedAmount(derivedMetrics.summaryTotals.currentBalance)
                 )
             }
@@ -191,14 +181,16 @@ struct TransactionsView: View {
             memberFilterButton(
                 title: "All",
                 color: AppTheme.brand,
+                textColor: Color.accessibleForeground(forHex: "#1E3A2B"),
                 selection: nil,
                 accessibilityLabel: "Show all members"
             )
             ForEach(memberViewModel.members) { member in
                 memberFilterButton(
-                    title: member.displayInitials,
-                    color: Color(hex: member.colorHex),
-                    selection: member.id,
+                title: member.displayInitials,
+                color: Color(hex: member.colorHex),
+                textColor: Color.accessibleForeground(forHex: member.colorHex),
+                selection: member.id,
                     accessibilityLabel: "Filter transactions to \(member.displayName)"
                 )
             }
@@ -209,12 +201,14 @@ struct TransactionsView: View {
     private func memberFilterButton(
         title: String,
         color: Color,
+        textColor: Color,
         selection: UUID?,
         accessibilityLabel: String
     ) -> some View {
         MemberFilterButton(
             title: title,
             color: color,
+            textColor: textColor,
             isSelected: selectedMemberId == selection,
             accessibilityLabel: accessibilityLabel
         ) {
@@ -240,7 +234,7 @@ struct TransactionsView: View {
                     currencySymbol: currencySymbol,
                     members: memberViewModel.members
                 )
-                .padding(14)
+                    .padding(12)
                 .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .onTapGesture {
                     selectedTransaction = transaction
@@ -274,6 +268,16 @@ struct TransactionsView: View {
                     .font(.subheadline)
                     .foregroundStyle(AppTheme.textSecondary)
                     .multilineTextAlignment(.center)
+
+                Button(selectedMemberId == nil ? "Add transaction" : "Show everyone") {
+                    if selectedMemberId == nil {
+                        transactionFlow.openAddTransaction()
+                    } else {
+                        selectedMemberId = nil
+                    }
+                }
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(AppTheme.brand)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 24)
@@ -288,6 +292,11 @@ struct TransactionsView: View {
             budgetScopeId: authStore.currentBudgetScopeId
         )
         modelContext.delete(transaction)
+        do {
+            try modelContext.save()
+        } catch {
+            cloudSyncStore.recordSyncIssue(error, context: "Deleting transaction locally")
+        }
     }
 
     private var emptyStateMessage: String {

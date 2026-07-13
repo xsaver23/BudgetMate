@@ -1,5 +1,10 @@
 import Foundation
 
+struct SettingsCloudSyncToken: Equatable {
+    let budgetScopeId: String
+    let revision: Int
+}
+
 @MainActor
 final class SettingsStore: ObservableObject {
     @Published private(set) var settings: BudgetSettings
@@ -9,6 +14,8 @@ final class SettingsStore: ObservableObject {
     private let decoder = JSONDecoder()
     private let userDefaults: UserDefaults
     private var currentUserScopeId = "local"
+    private let cloudDirtyKey = "budgetmate.settingsCloudDirty"
+    private let cloudRevisionKey = "budgetmate.settingsCloudRevision"
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
@@ -45,9 +52,30 @@ final class SettingsStore: ObservableObject {
     }
 
     func replaceSettings(_ settings: BudgetSettings) {
-        guard self.settings != settings else { return }
-        self.settings = settings
-        persist()
+        if self.settings != settings {
+            self.settings = settings
+            persist(markCloudDirty: false)
+        } else {
+            markCurrentScopeCloudClean()
+        }
+    }
+
+    var pendingCloudSyncToken: SettingsCloudSyncToken? {
+        guard userDefaults.bool(forKey: scopedCloudDirtyKey(for: currentUserScopeId)) else {
+            return nil
+        }
+        return SettingsCloudSyncToken(
+            budgetScopeId: currentUserScopeId,
+            revision: userDefaults.integer(forKey: scopedCloudRevisionKey(for: currentUserScopeId))
+        )
+    }
+
+    func markCloudSyncSucceeded(_ token: SettingsCloudSyncToken) {
+        let revisionKey = scopedCloudRevisionKey(for: token.budgetScopeId)
+        guard userDefaults.integer(forKey: revisionKey) == token.revision else {
+            return
+        }
+        userDefaults.set(false, forKey: scopedCloudDirtyKey(for: token.budgetScopeId))
     }
 
     func budgetAmount(for category: TransactionCategory) -> Double {
@@ -183,9 +211,28 @@ final class SettingsStore: ObservableObject {
         persist()
     }
 
-    private func persist() {
+    private func persist(markCloudDirty: Bool = true) {
         guard let data = try? encoder.encode(settings) else { return }
         userDefaults.set(data, forKey: Self.settingsKey(baseKey: baseSettingsKey, userScopeId: currentUserScopeId))
+        if markCloudDirty {
+            let revisionKey = scopedCloudRevisionKey(for: currentUserScopeId)
+            userDefaults.set(userDefaults.integer(forKey: revisionKey) + 1, forKey: revisionKey)
+            userDefaults.set(true, forKey: scopedCloudDirtyKey(for: currentUserScopeId))
+        } else {
+            markCurrentScopeCloudClean()
+        }
+    }
+
+    private func markCurrentScopeCloudClean() {
+        userDefaults.set(false, forKey: scopedCloudDirtyKey(for: currentUserScopeId))
+    }
+
+    private func scopedCloudDirtyKey(for scopeId: String) -> String {
+        "\(cloudDirtyKey).\(scopeId)"
+    }
+
+    private func scopedCloudRevisionKey(for scopeId: String) -> String {
+        "\(cloudRevisionKey).\(scopeId)"
     }
 
     private static func settingsKey(baseKey: String, userScopeId: String) -> String {

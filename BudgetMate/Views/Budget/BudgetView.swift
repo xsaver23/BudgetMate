@@ -497,11 +497,7 @@ struct BudgetView: View {
 
         settingsStore.updateCategoryBudgets(updates, in: monthSelectionStore.selectedMonthDate)
         loadCategoryBudgetInputs()
-        cloudSyncStore.saveSettings(
-            settingsStore.settings,
-            userScopeId: authStore.currentUserScopeId,
-            budgetScopeId: authStore.currentBudgetScopeId
-        )
+        saveSettingsToCloud()
         if showMessage {
             saveMessage = "Category budgets updated."
         }
@@ -561,12 +557,12 @@ struct BudgetView: View {
         let changedTransactions = scopedTransactions.filter { $0.category == oldCategory }
         changedTransactions.forEach { transaction in
             transaction.category = newCategory
-            cloudSyncStore.saveTransaction(
-                transaction,
-                userScopeId: authStore.currentUserScopeId,
-                budgetScopeId: authStore.currentBudgetScopeId
-            )
         }
+        cloudSyncStore.saveTransactions(
+            changedTransactions,
+            userScopeId: authStore.currentUserScopeId,
+            budgetScopeId: authStore.currentBudgetScopeId
+        )
         do {
             try modelContext.save()
         } catch {
@@ -576,10 +572,20 @@ struct BudgetView: View {
     }
 
     private func syncSettingsAndChangedTransactions() {
+        saveSettingsToCloud()
+    }
+
+    private func saveSettingsToCloud() {
+        let syncToken = settingsStore.pendingCloudSyncToken
         cloudSyncStore.saveSettings(
             settingsStore.settings,
             userScopeId: authStore.currentUserScopeId,
-            budgetScopeId: authStore.currentBudgetScopeId
+            budgetScopeId: authStore.currentBudgetScopeId,
+            onSuccess: {
+                if let syncToken {
+                    settingsStore.markCloudSyncSucceeded(syncToken)
+                }
+            }
         )
     }
 

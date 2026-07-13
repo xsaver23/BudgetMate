@@ -105,6 +105,11 @@ struct BudgetMembersView: View {
                existingMember.inviteStatus == .active {
                 authStore.switchBudgetScope(to: targetBudget.id.uuidString)
                 settingsStore.switchUser(to: targetBudget.id.uuidString)
+                memberViewModel.switchUser(
+                    to: authStore.currentUserScopeId,
+                    budgetScopeId: targetBudget.id.uuidString,
+                    email: authStore.userEmail
+                )
                 memberViewModel.replaceMembers(with: existingTargetMembers)
                 feedbackMessage = "\(existingMember.displayName) already uses \(email) in \(targetBudget.name)."
                 return
@@ -121,15 +126,25 @@ struct BudgetMembersView: View {
                 targetBudgetId: targetBudget.id,
                 invitedMember: invitedMember
             )
+            authStore.switchBudgetScope(to: targetBudget.id.uuidString)
+            settingsStore.switchUser(to: targetBudget.id.uuidString)
+            memberViewModel.switchUser(
+                to: authStore.currentUserScopeId,
+                budgetScopeId: targetBudget.id.uuidString,
+                email: authStore.userEmail
+            )
+            memberViewModel.replaceMembersWithLocalChanges(targetMembers)
+            let syncToken = memberViewModel.pendingCloudSyncToken
             cloudSyncStore.saveMembers(
                 targetMembers,
                 userScopeId: authStore.currentUserScopeId,
-                budgetScopeId: targetBudget.id.uuidString
+                budgetScopeId: targetBudget.id.uuidString,
+                onSuccess: {
+                    if let syncToken {
+                        memberViewModel.markCloudSyncSucceeded(syncToken)
+                    }
+                }
             )
-
-            authStore.switchBudgetScope(to: targetBudget.id.uuidString)
-            settingsStore.switchUser(to: targetBudget.id.uuidString)
-            memberViewModel.replaceMembers(with: targetMembers)
             await loadOwnedBudgets()
             feedbackMessage = "Invite saved for \(name) in \(targetBudget.name). Email delivery is coming next."
         } catch {
@@ -303,10 +318,16 @@ struct BudgetMembersView: View {
                     )
                 }
             }
+            let syncToken = memberViewModel.pendingCloudSyncToken
             cloudSyncStore.saveMembers(
                 memberViewModel.members,
                 userScopeId: authStore.currentUserScopeId,
-                budgetScopeId: authStore.currentBudgetScopeId
+                budgetScopeId: authStore.currentBudgetScopeId,
+                onSuccess: {
+                    if let syncToken {
+                        memberViewModel.markCloudSyncSucceeded(syncToken)
+                    }
+                }
             )
 
             if result.didReassignActiveMember {
@@ -325,8 +346,23 @@ struct BudgetMembersView: View {
     }
 
     private func deleteTransactions(forMemberIds ids: Set<UUID>) -> Int {
-        let toDelete = transactions.filter { ids.contains($0.createdByMemberId) }
-        toDelete.forEach { modelContext.delete($0) }
+        let budgetScopeId = authStore.currentBudgetScopeId
+        let toDelete = transactions.filter {
+            $0.ownerUserId == budgetScopeId && ids.contains($0.createdByMemberId)
+        }
+        toDelete.forEach { transaction in
+            cloudSyncStore.deleteTransaction(
+                transaction,
+                userScopeId: authStore.currentUserScopeId,
+                budgetScopeId: authStore.currentBudgetScopeId
+            )
+            modelContext.delete(transaction)
+        }
+        do {
+            try modelContext.save()
+        } catch {
+            cloudSyncStore.recordSyncIssue(error, context: "Deleting member transactions locally")
+        }
         return toDelete.count
     }
 }

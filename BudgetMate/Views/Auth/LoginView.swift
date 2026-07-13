@@ -17,7 +17,9 @@ struct LoginView: View {
     }
 
     private var canSubmit: Bool {
-        guard Self.isValidEmail(email), !authStore.isLoading else { return false }
+        guard authStore.configurationIssue == nil,
+              Self.isValidEmail(email),
+              !authStore.isLoading else { return false }
         if isCreatingAccount {
             return Self.isValidNewPassword(password) && password == confirmPassword
         }
@@ -118,7 +120,7 @@ struct LoginView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                if let message = authStore.errorMessage {
+                if let message = authStore.configurationIssue ?? authStore.errorMessage {
                     Text(message)
                         .font(.caption)
                         .foregroundStyle(message.localizedCaseInsensitiveContains("check your email") ? AppTheme.income : AppTheme.expense)

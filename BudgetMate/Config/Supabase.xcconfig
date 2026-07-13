@@ -1,0 +1,7 @@
+// Safe committed defaults keep clean checkouts buildable. Add real values to
+// the ignored Supabase.local.xcconfig file; the optional include overrides
+// these blanks without placing credentials in source control.
+SUPABASE_PROJECT_URL =
+SUPABASE_PUBLISHABLE_KEY =
+
+#include? "Supabase.local.xcconfig"

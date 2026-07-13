@@ -3,6 +3,7 @@ import SwiftUI
 struct MemberFilterButton: View {
     let title: String
     let color: Color
+    let textColor: Color
     let isSelected: Bool
     let accessibilityLabel: String
     let action: () -> Void
@@ -11,7 +12,7 @@ struct MemberFilterButton: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 17, weight: .black, design: .rounded))
-                .foregroundStyle(.white)
+                .foregroundStyle(textColor)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
                 .frame(width: 44, height: 44)

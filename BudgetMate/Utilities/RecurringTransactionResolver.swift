@@ -1,8 +1,14 @@
 import Foundation
 
 enum RecurringTransactionResolver {
-    static func transactions(in interval: DateInterval, from transactions: [Transaction], calendar: Calendar = .current) -> [Transaction] {
-        uniqueTransactions(from: transactions).flatMap { transaction in
+    static func transactions(
+        in interval: DateInterval,
+        from transactions: [Transaction],
+        calendar: Calendar = .current,
+        alreadyDeduplicated: Bool = false
+    ) -> [Transaction] {
+        let source = alreadyDeduplicated ? transactions : uniqueTransactions(from: transactions)
+        return source.flatMap { transaction in
             occurrences(of: transaction, in: interval, calendar: calendar)
         }
         .sorted(by: newestFirst)

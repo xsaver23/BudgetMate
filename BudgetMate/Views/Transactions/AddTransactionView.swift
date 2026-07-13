@@ -1,26 +1,51 @@
+import Combine
+import OSLog
 import SwiftData
 import SwiftUI
+import UIKit
 
 struct AddTransactionView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var memberViewModel: MemberViewModel
     @EnvironmentObject private var settingsStore: SettingsStore
     @EnvironmentObject private var authStore: AuthSessionStore
-    @EnvironmentObject private var cloudSyncStore: CloudSyncStore
+    @EnvironmentObject private var transactionFlow: TransactionFlowCoordinator
     @StateObject private var viewModel: AddTransactionViewModel
     private let transactionToEdit: Transaction?
+    private let hasInitialSettings: Bool
     @State private var selectedMemberId: UUID?
+    @State private var saveErrorMessage: String?
+    @State private var editorAppearedAtUptime: TimeInterval?
+    @State private var hasLoggedFirstKeyboard = false
     @FocusState private var focusedInput: FocusedInput?
+    private static let interactionLogger = Logger(subsystem: "BudgetMate", category: "Interaction")
+    private static let interactionSignposter = OSSignposter(subsystem: "BudgetMate", category: "Interaction")
 
     private enum FocusedInput: Hashable {
         case amount
+        case title
         case customSplit(UUID)
     }
 
-    init(transactionToEdit: Transaction? = nil) {
+    init(
+        transactionToEdit: Transaction? = nil,
+        initialSettings: BudgetSettings? = nil,
+        initialSelectedMemberId: UUID? = nil
+    ) {
         self.transactionToEdit = transactionToEdit
-        _viewModel = StateObject(wrappedValue: AddTransactionViewModel(transaction: transactionToEdit))
+        hasInitialSettings = initialSettings != nil
+        _selectedMemberId = State(initialValue: initialSelectedMemberId)
+
+        let model = AddTransactionViewModel(transaction: transactionToEdit)
+        if let initialSettings {
+            // Configure categories before SwiftUI subscribes to the model. On
+            // the global add path this removes several on-appear publications
+            // that previously landed just as the first keyboard was requested.
+            model.updateAvailableExpenseCategories(from: initialSettings)
+        }
+        _viewModel = StateObject(wrappedValue: model)
     }
 
     private var payerId: UUID {
@@ -38,34 +63,6 @@ struct AddTransactionView: View {
         settingsStore.settings.currencySymbol
     }
 
-    private var amountDisplayText: String {
-        viewModel.amountText.isEmpty ? "0" : viewModel.amountText
-    }
-
-    private var amountFieldWidth: CGFloat {
-        let characterCount = max(amountDisplayText.count, 1)
-        return min(max(CGFloat(characterCount) * amountCharacterWidth, 54), UIScreen.main.bounds.width - 118)
-    }
-
-    private var amountFontSize: CGFloat {
-        switch amountDisplayText.count {
-        case 0...6:
-            return 60
-        case 7...8:
-            return 54
-        case 9...10:
-            return 48
-        case 11...12:
-            return 42
-        default:
-            return 36
-        }
-    }
-
-    private var amountCharacterWidth: CGFloat {
-        amountFontSize * 0.58
-    }
-
     private var amountBinding: Binding<String> {
         Binding(
             get: { viewModel.amountText },
@@ -78,9 +75,23 @@ struct AddTransactionView: View {
             VStack(spacing: 0) {
                 amountHero
 
+                if let saveErrorMessage {
+                    Label(saveErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(AppTheme.expenseText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .background(AppTheme.expenseTint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .padding(.horizontal, 16)
+                }
+
                 Form {
                     Section("Details") {
                         TextField("Title", text: $viewModel.title)
+                            .focused($focusedInput, equals: .title)
+                            .submitLabel(.done)
+                            .onSubmit { focusedInput = nil }
 
                         Picker("Category", selection: $viewModel.category) {
                             ForEach(viewModel.availableCategories) { category in
@@ -119,7 +130,11 @@ struct AddTransactionView: View {
                     recurringSection
                 }
                 .scrollContentBackground(.hidden)
-                .scrollDismissesKeyboard(.interactively)
+                // Avoid continuously resizing the text editor and its host
+                // while a drag tracks the keyboard. Immediate dismissal is a
+                // single layout transition and the toolbar still provides
+                // deterministic Next/Done controls.
+                .scrollDismissesKeyboard(.immediately)
                 .background(AppTheme.background)
                 .tint(AppTheme.brand)
             }
@@ -127,8 +142,15 @@ struct AddTransactionView: View {
             .navigationTitle(transactionToEdit == nil ? "Add Transaction" : "Edit Transaction")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
-                viewModel.updateAvailableExpenseCategories(from: settingsStore.settings)
+                editorAppearedAtUptime = ProcessInfo.processInfo.systemUptime
+                Self.interactionSignposter.emitEvent("Transaction Editor Appeared")
+                if !hasInitialSettings {
+                    viewModel.updateAvailableExpenseCategories(from: settingsStore.settings)
+                }
                 ensureSelectedMemberIsValid()
+            }
+            .onDisappear {
+                focusedInput = nil
             }
             .onChange(of: settingsStore.settings) { _, settings in
                 viewModel.updateAvailableExpenseCategories(from: settings)
@@ -144,31 +166,68 @@ struct AddTransactionView: View {
                     viewModel.participants = Set(memberViewModel.members.map(\.id))
                 }
             }
+            .onChange(of: scenePhase) { _, newPhase in
+                // A suspended scene can otherwise restore with UIKit and
+                // SwiftUI disagreeing about which text field owns focus.
+                // Keep the draft, but always release the keyboard/responder.
+                if newPhase != .active {
+                    focusedInput = nil
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                guard !hasLoggedFirstKeyboard else { return }
+                hasLoggedFirstKeyboard = true
+                Self.interactionSignposter.emitEvent("First Keyboard Will Show")
+                if let editorAppearedAtUptime {
+                    let duration = ProcessInfo.processInfo.systemUptime - editorAppearedAtUptime
+                    Self.interactionLogger.notice(
+                        "First keyboard requested \(duration, privacy: .public) seconds after editor appeared"
+                    )
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
+                        focusedInput = nil
                         dismiss()
                     }
                     .foregroundStyle(BudgetBeaverPalette.wood)
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(transactionToEdit == nil ? "Save" : "Update") {
-                        saveTransaction()
+                    TransactionSaveToolbarButton(
+                        title: transactionToEdit == nil ? "Save" : "Update",
+                        isEnabled: viewModel.canSave
+                    ) { cloudSyncStore in
+                        saveTransaction(using: cloudSyncStore)
                     }
-                    .fontWeight(.bold)
-                    .foregroundStyle(AppTheme.brand)
-                    .disabled(!viewModel.canSave)
                 }
 
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
-                    Button("Done") {
-                        focusedInput = nil
+                    Button(focusedInput == .amount ? "Next" : "Done") {
+                        if focusedInput == .amount {
+                            focusedInput = .title
+                        } else {
+                            focusedInput = nil
+                        }
                     }
                     .fontWeight(.bold)
                     .foregroundStyle(AppTheme.brand)
                 }
+            }
+            .background(TransactionEditorActivityReporter())
+            .task {
+                // New transactions start with the amount. Requesting focus
+                // after the sheet has mounted lets iOS prepare the keyboard
+                // before a user's first tap, while never stealing focus from
+                // a field they have already selected.
+                guard transactionToEdit == nil else { return }
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled,
+                      scenePhase == .active,
+                      focusedInput == nil else { return }
+                focusedInput = .amount
             }
         }
     }
@@ -195,19 +254,28 @@ struct AddTransactionView: View {
                 TextField("0", text: amountBinding)
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.leading)
-                    .font(.roundedBold(amountFontSize))
+                    // UITextField autosizing was present in repeated physical
+                    // iPhone watchdog reports. Keep both font and geometry
+                    // fixed while editing; UIKit will scroll a long amount to
+                    // keep its caret visible without relaying out the Form.
+                    .font(.system(size: 54, weight: .bold, design: .rounded))
+                    .monospacedDigit()
                     .foregroundStyle(BudgetBeaverPalette.ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-                    .frame(width: amountFieldWidth, alignment: .leading)
+                    // Keep the editor's geometry stable while typing. Tying
+                    // its width to its own text forces the whole Form to lay
+                    // itself out again on every digit and can interrupt a
+                    // simultaneous focus transfer on physical devices.
+                    .frame(width: 230, alignment: .leading)
                     .focused($focusedInput, equals: .amount)
                     .accessibilityLabel("Amount")
             }
             .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture { focusedInput = .amount }
 
             Text(viewModel.type == .expense ? "Expense" : "Income")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(viewModel.type == .expense ? AppTheme.danger : AppTheme.brand)
+                .foregroundStyle(viewModel.type == .expense ? AppTheme.expenseText : AppTheme.incomeText)
                 .padding(.horizontal, 20)
                 .padding(.vertical, 8)
                 .background(viewModel.type == .expense ? AppTheme.expenseTint : AppTheme.incomeTint, in: Capsule())
@@ -216,8 +284,6 @@ struct AddTransactionView: View {
         .padding(.top, 18)
         .padding(.bottom, 24)
         .background(AppTheme.background)
-        .contentShape(Rectangle())
-        .onTapGesture { focusedInput = .amount }
     }
 
     private var recurringSection: some View {
@@ -353,7 +419,9 @@ struct AddTransactionView: View {
         )
     }
 
-    private func saveTransaction() {
+    private func saveTransaction(using cloudSyncStore: CloudSyncStore) {
+        focusedInput = nil
+        saveErrorMessage = nil
         let member = memberViewModel.members.first(where: { $0.id == selectedMemberId }) ?? defaultTransactionMember
         if let transactionToEdit {
             viewModel.applyChanges(to: transactionToEdit, paidBy: member)
@@ -363,12 +431,15 @@ struct AddTransactionView: View {
                 try modelContext.save()
             } catch {
                 cloudSyncStore.recordSyncIssue(error, context: "Saving edited transaction")
+                saveErrorMessage = "Couldn't save this transaction. Check your data and try again."
+                return
             }
             cloudSyncStore.saveTransaction(
                 transactionToEdit,
                 userScopeId: authStore.currentUserScopeId,
                 budgetScopeId: authStore.currentBudgetScopeId
             )
+            transactionFlow.recordLocalSave()
             dismiss()
             return
         }
@@ -382,12 +453,16 @@ struct AddTransactionView: View {
             try modelContext.save()
         } catch {
             cloudSyncStore.recordSyncIssue(error, context: "Saving new transaction")
+            modelContext.delete(transaction)
+            saveErrorMessage = "Couldn't save this transaction. Check your data and try again."
+            return
         }
         cloudSyncStore.saveTransaction(
             transaction,
             userScopeId: authStore.currentUserScopeId,
             budgetScopeId: authStore.currentBudgetScopeId
         )
+        transactionFlow.recordLocalSave()
         dismiss()
     }
 
@@ -419,11 +494,46 @@ struct AddTransactionView: View {
     }
 }
 
+/// Isolates CloudSyncStore's frequently changing status publications from the
+/// transaction editor. A sync no longer invalidates the entire Form while the
+/// user is in the middle of a keystroke; only this small toolbar button updates.
+private struct TransactionSaveToolbarButton: View {
+    @EnvironmentObject private var cloudSyncStore: CloudSyncStore
+
+    let title: String
+    let isEnabled: Bool
+    let action: (CloudSyncStore) -> Void
+
+    var body: some View {
+        Button(title) {
+            action(cloudSyncStore)
+        }
+        .fontWeight(.bold)
+        .foregroundStyle(AppTheme.brand)
+        .disabled(!isEnabled)
+    }
+}
+
+/// Keeps the editor's high-frequency body independent from coordinator status
+/// publications while still allowing passive sync to pause for the full edit.
+private struct TransactionEditorActivityReporter: View {
+    @EnvironmentObject private var transactionFlow: TransactionFlowCoordinator
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .onAppear { transactionFlow.setTransactionEditorActive(true) }
+            .onDisappear { transactionFlow.setTransactionEditorActive(false) }
+    }
+}
+
 #Preview {
     AddTransactionView()
         .environmentObject(MemberViewModel())
         .environmentObject(SettingsStore())
         .environmentObject(AuthSessionStore())
         .environmentObject(CloudSyncStore())
+        .environmentObject(TransactionFlowCoordinator())
         .modelContainer(PreviewContainer.seeded)
 }

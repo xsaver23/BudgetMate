@@ -130,7 +130,17 @@ struct ProfileSetupView: View {
         isNameFocused = false
         validationMessage = nil
         memberViewModel.completeProfile(displayName: trimmedName)
-        cloudSyncStore.saveMembers(memberViewModel.members, userScopeId: authStore.currentUserScopeId)
+        let syncToken = memberViewModel.pendingCloudSyncToken
+        cloudSyncStore.saveMembers(
+            memberViewModel.members,
+            userScopeId: authStore.currentUserScopeId,
+            budgetScopeId: authStore.currentBudgetScopeId,
+            onSuccess: {
+                if let syncToken {
+                    memberViewModel.markCloudSyncSucceeded(syncToken)
+                }
+            }
+        )
     }
 }
 

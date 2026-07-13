@@ -101,6 +101,7 @@
 		3F9829DAD0F41D0906FA607C /* SupabaseConfig.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SupabaseConfig.swift; path = Utilities/SupabaseConfig.swift; sourceTree = "<group>"; };
 		40041050C9D04ECBA2FAE109 /* Supabase.example.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = Supabase.example.xcconfig; path = Config/Supabase.example.xcconfig; sourceTree = "<group>"; };
 		4004105105D64AA49E98327E /* Supabase.local.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = Supabase.local.xcconfig; path = Config/Supabase.local.xcconfig; sourceTree = "<group>"; };
+		40041053A7BD41D69D6408F2 /* Supabase.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = Supabase.xcconfig; path = Config/Supabase.xcconfig; sourceTree = "<group>"; };
 		40D1E2872BC5A28B35336522 /* ProfileSetupView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ProfileSetupView.swift; path = Views/Auth/ProfileSetupView.swift; sourceTree = "<group>"; };
 		4207ABF4F544031A2B1590B7 /* TransactionDetailView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TransactionDetailView.swift; path = Views/Transactions/TransactionDetailView.swift; sourceTree = "<group>"; };
 		420FE2DEB2DDECA27D23CB3A /* TransactionCategory.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TransactionCategory.swift; path = Models/TransactionCategory.swift; sourceTree = "<group>"; };
@@ -260,6 +261,7 @@
 		40041052F8CB4F15BCE23DA0 /* Config */ = {
 			isa = PBXGroup;
 			children = (
+				40041053A7BD41D69D6408F2 /* Supabase.xcconfig */,
 				40041050C9D04ECBA2FAE109 /* Supabase.example.xcconfig */,
 				4004105105D64AA49E98327E /* Supabase.local.xcconfig */,
 			);
@@ -558,7 +560,7 @@
 		};
 		AA0470E62E2D560159ED1572 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 4004105105D64AA49E98327E /* Supabase.local.xcconfig */;
+			baseConfigurationReference = 40041053A7BD41D69D6408F2 /* Supabase.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -645,7 +647,7 @@
 		};
 		E6A342908B48670DA00B9BE9 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 4004105105D64AA49E98327E /* Supabase.local.xcconfig */;
+			baseConfigurationReference = 40041053A7BD41D69D6408F2 /* Supabase.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;

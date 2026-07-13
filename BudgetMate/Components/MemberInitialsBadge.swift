@@ -14,7 +14,7 @@ struct MemberInitialsBadge: View {
             .overlay(
                 Text(initials)
                     .font(.system(size: size * 0.45, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.accessibleForeground(forHex: colorHex))
             )
             .overlay(
                 Circle().stroke(AppTheme.background, lineWidth: max(2, size * 0.07))

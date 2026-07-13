@@ -1,4 +1,5 @@
 import { createSeedState } from "./seedData";
+import { defaultBudgetSettings } from "../domain/defaults";
 import { uniqueTransactions } from "../domain/budgetMath";
 import type { AppState } from "../domain/types";
 
@@ -7,6 +8,24 @@ export const localStateStorageKey = `${baseStorageKey}:local`;
 
 export function cloudStateStorageKey(userId: string): string {
   return `${baseStorageKey}:cloud:${userId}`;
+}
+
+export function loadCloudState(userId: string): AppState {
+  const cached = loadState(cloudStateStorageKey(userId));
+  if (cached.currentUserId === userId) {
+    return cached;
+  }
+
+  const now = new Date().toISOString();
+  return {
+    budgets: [{ id: userId, ownerUserId: userId, name: "My Budget", createdAt: now, updatedAt: now }],
+    currentBudgetId: userId,
+    currentUserId: userId,
+    members: [],
+    transactions: [],
+    settlements: [],
+    settingsByBudgetId: { [userId]: defaultBudgetSettings(userId) }
+  };
 }
 
 function isAppState(value: unknown): value is AppState {
@@ -68,6 +87,10 @@ export function importState(rawState: string): AppState | null {
   } catch {
     return null;
   }
+}
+
+export function appStatesEqual(left: AppState, right: AppState): boolean {
+  return JSON.stringify(sanitizeState(left)) === JSON.stringify(sanitizeState(right));
 }
 
 function sanitizeState(state: AppState): AppState {

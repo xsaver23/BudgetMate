@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import Supabase
 
 @MainActor
@@ -11,10 +12,23 @@ final class AuthSessionStore: ObservableObject {
     @Published var errorMessage: String?
 
     private let client: SupabaseClient
+    let configurationIssue: String?
     private let activeBudgetScopeKey = "budgetmate.activeBudgetScopeId"
+    private static let launchLogger = Logger(subsystem: "BudgetMate", category: "Launch")
+    private static let launchSignposter = OSSignposter(subsystem: "BudgetMate", category: "Launch")
 
-    init(client: SupabaseClient = SupabaseClientProvider.shared) {
+    init(
+        client: SupabaseClient = SupabaseClientProvider.shared,
+        isCloudConfigured: Bool = SupabaseConfig.isConfigured
+    ) {
         self.client = client
+        configurationIssue = isCloudConfigured ? nil : SupabaseConfig.userFacingConfigurationMessage
+
+        guard configurationIssue == nil else {
+            isLoading = false
+            return
+        }
+
         Task {
             await restoreSession()
         }
@@ -40,15 +54,41 @@ final class AuthSessionStore: ObservableObject {
     }
 
     func restoreSession() async {
-        isLoading = true
-        defer { isLoading = false }
+        guard configurationIssue == nil else {
+            isLoading = false
+            return
+        }
+        if !isLoading {
+            isLoading = true
+        }
+        defer {
+            if isLoading {
+                isLoading = false
+            }
+        }
 
         // Apply any locally-persisted session immediately so the UI can render
         // from on-device data without waiting for a network token refresh.
-        let cachedSession = client.auth.currentSession
+        // Supabase's synchronous getter runs storage migrations, repeated
+        // Keychain reads, and JSON decoding. Keep that cold-start work away
+        // from UIKit's first-frame and keyboard initialization on the main
+        // actor, then publish the result here.
+        let cachedSessionReadStartedAt = ProcessInfo.processInfo.systemUptime
+        let client = self.client
+        let cachedSession = await Task.detached(priority: .userInitiated) {
+            client.auth.currentSession
+        }.value
+        let cachedSessionReadDuration = ProcessInfo.processInfo.systemUptime - cachedSessionReadStartedAt
+        Self.launchLogger.notice(
+            "Cached auth session read finished after \(cachedSessionReadDuration, privacy: .public) seconds"
+        )
+        Self.launchSignposter.emitEvent("Cached Auth Session Read Finished")
+
         if let cachedSession {
             apply(session: cachedSession)
-            isLoading = false
+            if isLoading {
+                isLoading = false
+            }
         }
 
         do {
@@ -103,6 +143,10 @@ final class AuthSessionStore: ObservableObject {
     }
 
     private func runAuthAction(_ action: () async throws -> Void) async {
+        guard configurationIssue == nil else {
+            errorMessage = configurationIssue
+            return
+        }
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
@@ -115,11 +159,18 @@ final class AuthSessionStore: ObservableObject {
     }
 
     private func apply(session: Session) {
-        isAuthenticated = true
-        userId = session.user.id.uuidString
-        userEmail = session.user.email
-        activeBudgetScopeId = UserDefaults.standard.string(forKey: activeBudgetScopeKey(for: session.user.id.uuidString))
-        errorMessage = nil
+        let nextUserId = session.user.id.uuidString
+        let nextUserEmail = session.user.email
+        let nextBudgetScopeId = UserDefaults.standard.string(forKey: activeBudgetScopeKey(for: nextUserId))
+
+        // Cached-session apply is followed by refreshed-session apply. Guard
+        // identical assignments so the root Dashboard is not invalidated five
+        // more times while the first interaction is beginning.
+        if !isAuthenticated { isAuthenticated = true }
+        if userId != nextUserId { userId = nextUserId }
+        if userEmail != nextUserEmail { userEmail = nextUserEmail }
+        if activeBudgetScopeId != nextBudgetScopeId { activeBudgetScopeId = nextBudgetScopeId }
+        if errorMessage != nil { errorMessage = nil }
     }
 
     private func activeBudgetScopeKey(for userId: String) -> String {

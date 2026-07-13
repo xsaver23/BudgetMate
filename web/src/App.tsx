@@ -27,8 +27,16 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, FormEvent } from "react";
 import type { Session, User } from "@supabase/supabase-js";
-import { categoryColor, categoryName, expenseCategories, incomeCategories } from "./domain/categories";
-import { currencyOptions, formatAmountNumber, formatMoney } from "./domain/currency";
+import {
+  categoryColor,
+  categoryName,
+  contrastTextColor,
+  expenseCategories,
+  incomeCategories,
+  visibleExpenseCategories
+} from "./domain/categories";
+import { currencyOptions, currencySymbol, formatAmountNumber, formatMoney } from "./domain/currency";
+import { localDateKey, localNoonISOString } from "./domain/dates";
 import {
   categoryBreakdown,
   currentMonthKey,
@@ -44,7 +52,15 @@ import {
   uniqueTransactions
 } from "./domain/budgetMath";
 import { defaultBudgetSettings } from "./domain/defaults";
-import type { AppState, BudgetInvite, BudgetMember, BudgetSettings, BudgetTransaction, TransactionType } from "./domain/types";
+import type {
+  AppState,
+  BudgetInvite,
+  BudgetMember,
+  BudgetSettings,
+  BudgetTransaction,
+  Settlement,
+  TransactionType
+} from "./domain/types";
 import {
   acceptCloudInvite,
   createCloudInvite,
@@ -56,14 +72,17 @@ import {
   signOut,
   signUpWithEmail,
   upsertCloudMember,
+  upsertCloudSettlement,
   upsertCloudSettings,
   upsertCloudTransaction
 } from "./data/cloudRepository";
 import {
+  appStatesEqual,
   clearState,
   cloudStateStorageKey,
   exportState,
   importState,
+  loadCloudState,
   loadState,
   localStateStorageKey,
   resetState,
@@ -85,9 +104,20 @@ type TransactionFormState = {
   splitWithHousehold: boolean;
 };
 
-const todayInputValue = () => new Date().toISOString().slice(0, 10);
+const todayInputValue = () => localDateKey();
 const makeId = () => crypto.randomUUID();
-const CLOUD_AUTO_REFRESH_INTERVAL_MS = 6000;
+const CLOUD_FALLBACK_REFRESH_INTERVAL_MS = 60_000;
+const CLOUD_INVALIDATION_DEBOUNCE_MS = 250;
+
+type CloudRefreshRequest = {
+  preferredBudgetId: string;
+  background: boolean;
+};
+
+type PendingSettingsWrite = {
+  latest?: BudgetSettings;
+  userId: string;
+};
 
 function memberInitials(name: string): string {
   const parts = name
@@ -132,6 +162,10 @@ function formatMonthLabel(monthKeyValue: string): string {
     month: "long",
     year: "numeric"
   });
+}
+
+function netScopeLabel(monthKeyValue: string): string {
+  return monthKeyValue === currentMonthKey() ? "Net this month" : `Net for ${formatMonthLabel(monthKeyValue)}`;
 }
 
 function formatDateLabel(value: string): string {
@@ -193,7 +227,7 @@ function App() {
   const [authLoading, setAuthLoading] = useState(supabaseConfigStatus === "configured");
   const [isCloudLoading, setIsCloudLoading] = useState(false);
   const [cloudMessage, setCloudMessage] = useState(
-    supabaseConfigStatus === "configured" ? "Sign in to sync with Supabase." : "Desktop local mode."
+    supabaseConfigStatus === "configured" ? "Sign in to sync with Supabase." : "Saved on this device"
   );
   const [cloudError, setCloudError] = useState("");
   const [pendingInvites, setPendingInvites] = useState<BudgetInvite[]>([]);
@@ -204,13 +238,27 @@ function App() {
   const [transactionSearch, setTransactionSearch] = useState("");
   const [importText, setImportText] = useState("");
   const [importError, setImportError] = useState("");
-  const cloudRefreshInFlight = useRef(false);
+  const [toastMessage, setToastMessage] = useState("");
+  const cloudRefreshInFlight = useRef<Promise<void> | null>(null);
+  const queuedCloudRefresh = useRef<CloudRefreshRequest | null>(null);
+  const cloudMutationQueue = useRef<Promise<void>>(Promise.resolve());
+  const pendingCloudMutations = useRef(0);
+  const cloudDataVersion = useRef(0);
+  const activeUserId = useRef<string | null>(null);
+  const sessionUser = useRef<User | null>(null);
+  const syncModeRef = useRef<SyncMode>(syncMode);
+  const currentBudgetIdRef = useRef(state.currentBudgetId);
+  const settingsWrites = useRef(new Map<string, PendingSettingsWrite>());
   const addTransactionButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  sessionUser.current = session?.user ?? null;
+  syncModeRef.current = syncMode;
+  currentBudgetIdRef.current = state.currentBudgetId;
 
   const canUseCloud = syncMode === "cloud" && !!session?.user && !!supabase;
   const activeStorageKey =
     syncMode === "cloud" && session?.user ? cloudStateStorageKey(session.user.id) : localStateStorageKey;
-  const canPersistState = syncMode !== "cloud" || !session?.user || state.currentUserId === session.user.id;
+  const canPersistState = syncMode === "local" || (!!session?.user && state.currentUserId === session.user.id);
   const currentBudget =
     state.budgets.find((budget) => budget.id === state.currentBudgetId) ??
     state.budgets[0] ?? {
@@ -276,24 +324,39 @@ function App() {
       if (error) {
         setCloudError(error.message);
       }
+      const nextUserId = data.session?.user.id ?? null;
+      const isAccountTransition = nextUserId !== activeUserId.current;
+      activeUserId.current = nextUserId;
+      sessionUser.current = data.session?.user ?? null;
       setSession(data.session);
-      if (data.session?.user) {
-        setState(loadState(cloudStateStorageKey(data.session.user.id)));
+      if (data.session?.user && isAccountTransition) {
+        setState(loadCloudState(data.session.user.id));
       }
       setAuthLoading(false);
     });
 
     const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!isMounted) {
+        return;
+      }
+      const nextUserId = nextSession?.user.id ?? null;
+      const isAccountTransition = nextUserId !== activeUserId.current;
+      activeUserId.current = nextUserId;
+      sessionUser.current = nextSession?.user ?? null;
       setSession(nextSession);
       if (nextSession?.user) {
+        syncModeRef.current = "cloud";
         setSyncMode("cloud");
-        setState(loadState(cloudStateStorageKey(nextSession.user.id)));
-        setCloudMessage("Signed in. Loading cloud data.");
+        if (isAccountTransition) {
+          setState(loadCloudState(nextSession.user.id));
+          setCloudMessage("Signed in. Loading cloud data.");
+        }
       }
       if (!nextSession) {
         setPendingInvites([]);
-        setCloudMessage("Signed out. Desktop local data is still available.");
+        setCloudMessage("Saved on this device");
       }
+      setAuthLoading(false);
     });
 
     return () => {
@@ -310,6 +373,39 @@ function App() {
   }, [activeStorageKey, canPersistState, state]);
 
   useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.storageArea !== window.localStorage || event.key !== activeStorageKey) {
+        return;
+      }
+
+      if (syncModeRef.current === "cloud") {
+        const user = sessionUser.current;
+        if (!user || pendingCloudMutations.current > 0) {
+          return;
+        }
+        if (!event.newValue) {
+          void reloadCloudState(currentBudgetIdRef.current, { background: true });
+          return;
+        }
+        const cachedState = loadState(activeStorageKey);
+        if (cachedState.currentUserId !== user.id) {
+          return;
+        }
+        setState((current) => (appStatesEqual(current, cachedState) ? current : cachedState));
+        cloudDataVersion.current += 1;
+        void reloadCloudState(currentBudgetIdRef.current, { background: true });
+        return;
+      }
+
+      const localState = loadState(localStateStorageKey);
+      setState((current) => (appStatesEqual(current, localState) ? current : localState));
+    };
+
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, [activeStorageKey]);
+
+  useEffect(() => {
     if (selectedMemberId !== "all" && !budgetMembers.some((member) => member.id === selectedMemberId)) {
       setSelectedMemberId("all");
     }
@@ -323,75 +419,195 @@ function App() {
   }, [session?.user.id, syncMode]);
 
   useEffect(() => {
-    if (!canUseCloud) {
+    const client = supabase;
+    if (!canUseCloud || !client) {
       return;
     }
 
-    const refreshInBackground = () => {
-      if (document.visibilityState !== "visible") {
+    let refreshTimer: number | undefined;
+    const scheduleRefresh = () => {
+      if (document.visibilityState !== "visible" || !navigator.onLine) {
         return;
       }
-      void reloadCloudState(state.currentBudgetId, { background: true });
+      if (refreshTimer !== undefined) {
+        window.clearTimeout(refreshTimer);
+      }
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = undefined;
+        void reloadCloudState(currentBudgetIdRef.current, { background: true });
+      }, CLOUD_INVALIDATION_DEBOUNCE_MS);
     };
 
-    const intervalId = window.setInterval(refreshInBackground, CLOUD_AUTO_REFRESH_INTERVAL_MS);
-    window.addEventListener("focus", refreshInBackground);
-    document.addEventListener("visibilitychange", refreshInBackground);
+    const channel = client.channel(`budgetmate-web-${session?.user.id}-${crypto.randomUUID()}`);
+    [
+      "budgets",
+      "budget_memberships",
+      "budget_members",
+      "budget_settings",
+      "budget_transactions",
+      "budget_settlements",
+      "budget_invites"
+    ].forEach((table) => {
+      channel.on("postgres_changes", { event: "*", schema: "public", table }, scheduleRefresh);
+    });
+    channel.subscribe();
+
+    const intervalId = window.setInterval(scheduleRefresh, CLOUD_FALLBACK_REFRESH_INTERVAL_MS);
+    window.addEventListener("focus", scheduleRefresh);
+    window.addEventListener("online", scheduleRefresh);
+    document.addEventListener("visibilitychange", scheduleRefresh);
 
     return () => {
+      if (refreshTimer !== undefined) {
+        window.clearTimeout(refreshTimer);
+      }
       window.clearInterval(intervalId);
-      window.removeEventListener("focus", refreshInBackground);
-      document.removeEventListener("visibilitychange", refreshInBackground);
+      window.removeEventListener("focus", scheduleRefresh);
+      window.removeEventListener("online", scheduleRefresh);
+      document.removeEventListener("visibilitychange", scheduleRefresh);
+      void client.removeChannel(channel);
     };
-  }, [canUseCloud, session?.user.id, state.currentBudgetId]);
+  }, [canUseCloud, session?.user.id]);
 
-  async function reloadCloudState(preferredBudgetId = state.currentBudgetId, options: { background?: boolean } = {}) {
-    if (!session?.user) {
+  async function reloadCloudState(
+    preferredBudgetId = currentBudgetIdRef.current,
+    options: { background?: boolean } = {}
+  ): Promise<void> {
+    if (!sessionUser.current || syncModeRef.current !== "cloud") {
       return;
     }
+
+    const existingRequest = queuedCloudRefresh.current;
+    queuedCloudRefresh.current = {
+      preferredBudgetId,
+      background: (existingRequest?.background ?? true) && !!options.background
+    };
 
     if (cloudRefreshInFlight.current) {
-      return;
+      return cloudRefreshInFlight.current;
     }
 
-    cloudRefreshInFlight.current = true;
-    if (!options.background) {
-      setIsCloudLoading(true);
-    }
-    setCloudError("");
-    try {
-      const nextState = await fetchCloudState(session.user, preferredBudgetId);
-      const invites = await fetchPendingInvites(session.user.email ?? "");
-      setState(nextState);
-      setPendingInvites(invites);
-      setCloudMessage("Synced just now");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Cloud sync failed.";
-      setCloudError(message);
-      setCloudMessage("Needs attention");
-    } finally {
-      cloudRefreshInFlight.current = false;
-      if (!options.background) {
-        setIsCloudLoading(false);
+    let showedLoading = false;
+    const drainRefreshes = async () => {
+      while (queuedCloudRefresh.current) {
+        const request = queuedCloudRefresh.current;
+        queuedCloudRefresh.current = null;
+
+        if (pendingCloudMutations.current > 0) {
+          await cloudMutationQueue.current;
+        }
+
+        const activeUser = sessionUser.current;
+        if (!activeUser || syncModeRef.current !== "cloud") {
+          continue;
+        }
+
+        if (!request.background) {
+          showedLoading = true;
+          setIsCloudLoading(true);
+          setCloudError("");
+        }
+
+        const refreshVersion = cloudDataVersion.current;
+        try {
+          const [nextState, invites] = await Promise.all([
+            fetchCloudState(activeUser, request.preferredBudgetId),
+            fetchPendingInvites(activeUser.email ?? "")
+          ]);
+
+          if (
+            sessionUser.current?.id !== activeUser.id ||
+            syncModeRef.current !== "cloud"
+          ) {
+            continue;
+          }
+
+          if (refreshVersion !== cloudDataVersion.current || pendingCloudMutations.current > 0) {
+            if (!queuedCloudRefresh.current) {
+              queuedCloudRefresh.current = {
+                preferredBudgetId: currentBudgetIdRef.current,
+                background: true
+              };
+            }
+            continue;
+          }
+
+          setState((current) => (appStatesEqual(current, nextState) ? current : nextState));
+          setPendingInvites(invites);
+          setCloudError("");
+          setCloudMessage("Synced just now");
+        } catch (error) {
+          if (sessionUser.current?.id !== activeUser.id) {
+            continue;
+          }
+          const message = error instanceof Error ? error.message : "Cloud sync failed.";
+          setCloudError(message);
+          setCloudMessage("Needs attention");
+        }
       }
-    }
+    };
+
+    const refresh = (async () => {
+      try {
+        do {
+          await drainRefreshes();
+        } while (queuedCloudRefresh.current);
+      } finally {
+        cloudRefreshInFlight.current = null;
+        if (showedLoading) {
+          setIsCloudLoading(false);
+        }
+      }
+    })();
+    cloudRefreshInFlight.current = refresh;
+    return refresh;
   }
 
-  async function runCloudMutation(action: () => Promise<void>, successMessage = "Synced just now") {
-    if (!canUseCloud) {
-      return;
+  function runCloudMutation(action: () => Promise<void>, successMessage = "Synced just now"): Promise<boolean> {
+    const userId = sessionUser.current?.id;
+    if (!userId || syncModeRef.current !== "cloud" || !supabase) {
+      return Promise.resolve(false);
     }
 
+    cloudDataVersion.current += 1;
+    pendingCloudMutations.current += 1;
     setCloudError("");
-    setCloudMessage("Syncing now");
-    try {
-      await action();
-      setCloudMessage(successMessage);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Cloud write failed.";
-      setCloudError(message);
-      setCloudMessage("Needs attention");
-    }
+    setCloudMessage("Syncing");
+
+    const execute = async () => {
+      let succeeded = false;
+      try {
+        if (sessionUser.current?.id !== userId || syncModeRef.current !== "cloud") {
+          return false;
+        }
+        await action();
+        succeeded = true;
+        return true;
+      } catch (error) {
+        if (sessionUser.current?.id === userId) {
+          const message = error instanceof Error ? error.message : "Cloud write failed.";
+          setCloudError(message);
+          setCloudMessage("Needs attention");
+        }
+        return false;
+      } finally {
+        pendingCloudMutations.current = Math.max(0, pendingCloudMutations.current - 1);
+        if (
+          sessionUser.current?.id === userId &&
+          syncModeRef.current === "cloud" &&
+          pendingCloudMutations.current === 0
+        ) {
+          if (succeeded) {
+            setCloudMessage(successMessage);
+          }
+          void reloadCloudState(currentBudgetIdRef.current, { background: true });
+        }
+      }
+    };
+
+    const operation = cloudMutationQueue.current.then(execute, execute);
+    cloudMutationQueue.current = operation.then(() => undefined, () => undefined);
+    return operation;
   }
 
   function updateSettings(nextSettings: BudgetSettings) {
@@ -403,7 +619,40 @@ function App() {
       }
     }));
 
-    void runCloudMutation(() => upsertCloudSettings(nextSettings, state.currentUserId));
+    queueSettingsWrite(nextSettings);
+  }
+
+  function queueSettingsWrite(nextSettings: BudgetSettings) {
+    const userId = sessionUser.current?.id;
+    if (!userId || syncModeRef.current !== "cloud") {
+      return;
+    }
+
+    const existingWrite = settingsWrites.current.get(nextSettings.budgetId);
+    if (existingWrite) {
+      existingWrite.latest = nextSettings;
+      cloudDataVersion.current += 1;
+      setCloudMessage("Syncing");
+      return;
+    }
+
+    const write: PendingSettingsWrite = { latest: nextSettings, userId };
+    settingsWrites.current.set(nextSettings.budgetId, write);
+    void runCloudMutation(async () => {
+      while (write.latest) {
+        const latest = write.latest;
+        write.latest = undefined;
+        await upsertCloudSettings(latest, write.userId);
+      }
+    }, "Budget saved").finally(() => {
+      if (settingsWrites.current.get(nextSettings.budgetId) === write) {
+        settingsWrites.current.delete(nextSettings.budgetId);
+      }
+      const remaining = write.latest;
+      if (remaining) {
+        queueSettingsWrite(remaining);
+      }
+    });
   }
 
   function addTransaction(form: TransactionFormState) {
@@ -445,6 +694,8 @@ function App() {
       ...current,
       transactions: [transaction, ...current.transactions]
     }));
+    setToastMessage("Transaction saved on this device");
+    window.setTimeout(() => setToastMessage(""), 2600);
     void runCloudMutation(() => upsertCloudTransaction(transaction, state.currentUserId));
     setIsAddingTransaction(false);
     window.setTimeout(() => addTransactionButtonRef.current?.focus(), 0);
@@ -457,6 +708,13 @@ function App() {
 
   function deleteTransaction(id: string) {
     const transaction = state.transactions.find((candidate) => candidate.id === id);
+    if (
+      transaction?.recurrenceRule?.startsWith("monthly") &&
+      !window.confirm(`Delete "${transaction.title}" and its entire recurring series? This cannot be undone.`)
+    ) {
+      return;
+    }
+
     setState((current) => ({
       ...current,
       transactions: current.transactions.filter((transaction) => transaction.id !== id)
@@ -465,6 +723,33 @@ function App() {
     if (transaction) {
       void runCloudMutation(() => deleteCloudTransaction(transaction.id, transaction.budgetId));
     }
+  }
+
+  function settleBalance(suggestion: ReturnType<typeof settlementSuggestions>[number]) {
+    if (
+      !window.confirm(
+        `Record that ${suggestion.from.displayName} paid ${suggestion.to.displayName} ${formatMoney(suggestion.amount, settings.currencyCode)}? This settle-up record cannot be undone on the web.`
+      )
+    ) {
+      return;
+    }
+
+    const settlementDate = localNoonISOString(localDateKey()) ?? new Date().toISOString();
+    const settlement: Settlement = {
+      id: makeId(),
+      budgetId: currentBudget.id,
+      userId: state.currentUserId,
+      fromMemberId: suggestion.from.id,
+      toMemberId: suggestion.to.id,
+      amount: suggestion.amount,
+      date: settlementDate
+    };
+
+    setState((current) => ({
+      ...current,
+      settlements: [...current.settlements, settlement]
+    }));
+    void runCloudMutation(() => upsertCloudSettlement(settlement, state.currentUserId), "Settlement saved");
   }
 
   function addMember(name: string, email: string) {
@@ -512,6 +797,10 @@ function App() {
   }
 
   function handleImport() {
+    if (syncModeRef.current === "cloud") {
+      setImportError("Cloud imports are disabled because a refresh would replace them. Sign out and use local mode to import a backup.");
+      return;
+    }
     const nextState = importState(importText);
     if (!nextState) {
       setImportError("That file does not match BudgetMate web data.");
@@ -532,9 +821,15 @@ function App() {
           : await signUpWithEmail(email, password, displayName);
 
       if (nextSession) {
+        const isAccountTransition = activeUserId.current !== nextSession.user.id;
+        activeUserId.current = nextSession.user.id;
+        sessionUser.current = nextSession.user;
+        syncModeRef.current = "cloud";
         setSession(nextSession);
         setSyncMode("cloud");
-        setState(loadState(cloudStateStorageKey(nextSession.user.id)));
+        if (isAccountTransition) {
+          setState(loadCloudState(nextSession.user.id));
+        }
         setCloudMessage("Signed in. Loading cloud data.");
       } else {
         setCloudMessage("Check your email to finish creating the account.");
@@ -552,10 +847,13 @@ function App() {
     setCloudError("");
     try {
       await signOut();
+      activeUserId.current = null;
+      sessionUser.current = null;
+      syncModeRef.current = "local";
       setSession(null);
       setState(loadState(localStateStorageKey));
       setSyncMode("local");
-      setCloudMessage("Signed out. Desktop local mode is active.");
+      setCloudMessage("Saved on this device");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Sign out failed.";
       setCloudError(message);
@@ -622,10 +920,11 @@ function App() {
         statusMessage={cloudMessage}
         onSubmit={handleAuthSubmit}
         onUseLocal={() => {
+          syncModeRef.current = "local";
           setState(loadState(localStateStorageKey));
           setSyncMode("local");
           setCloudError("");
-          setCloudMessage("Desktop local mode.");
+      setCloudMessage("Saved on this device");
         }}
       />
     );
@@ -637,8 +936,7 @@ function App() {
         activeTab={activeTab}
         onTabChange={setActiveTab}
         syncMode={syncMode}
-        statusText={cloudError || cloudMessage}
-        userEmail={session?.user.email}
+        statusText={cloudError ? "Needs attention" : cloudMessage}
       />
       <main className="workspace">
         <header className="topbar">
@@ -676,7 +974,7 @@ function App() {
             {canUseCloud && (
               <button className="secondary-action compact" onClick={() => void reloadCloudState()} disabled={isCloudLoading}>
                 <RefreshCcw size={17} aria-hidden="true" />
-                Refresh
+                {isCloudLoading ? "Syncing…" : "Sync now"}
               </button>
             )}
             {syncMode === "local" && supabase && (
@@ -698,7 +996,7 @@ function App() {
           </div>
         </header>
 
-        {activeTab !== "settings" && (
+        {activeTab !== "settings" && budgetMembers.length > 1 && (
           <div className="member-subbar">
             <span>Filter by member</span>
             <MemberFilter members={budgetMembers} selectedMemberId={selectedMemberId} onSelect={setSelectedMemberId} />
@@ -714,6 +1012,9 @@ function App() {
             transactions={displayedTransactions}
             selectedMonth={selectedMonth}
             members={budgetMembers}
+            onViewAll={() => setActiveTab("transactions")}
+            onOpenBudget={() => setActiveTab("budget")}
+            onSettle={settleBalance}
           />
         )}
 
@@ -727,6 +1028,7 @@ function App() {
             search={transactionSearch}
             onSearch={setTransactionSearch}
             onDelete={deleteTransaction}
+            onAddTransaction={() => setIsAddingTransaction(true)}
           />
         )}
 
@@ -754,7 +1056,11 @@ function App() {
             onImportTextChange={setImportText}
             onImport={handleImport}
             onReset={() => {
-              if (window.confirm("Reset all BudgetMate web data on this computer? This cannot be undone.")) {
+              const resetMessage =
+                syncMode === "cloud"
+                  ? "Clear this browser's BudgetMate cache and download the latest cloud data? Nothing will be deleted from Supabase."
+                  : "Reset all local BudgetMate data on this computer? This cannot be undone.";
+              if (window.confirm(resetMessage)) {
                 if (syncMode === "cloud" && session?.user) {
                   clearState(activeStorageKey);
                   void reloadCloudState();
@@ -767,6 +1073,7 @@ function App() {
             user={session?.user}
             cloudMessage={cloudMessage}
             cloudError={cloudError}
+            isCloudLoading={isCloudLoading}
             pendingInvites={pendingInvites}
             onRefresh={() => void reloadCloudState()}
             onSignOut={() => void handleSignOut()}
@@ -779,10 +1086,18 @@ function App() {
       {isAddingTransaction && (
           <TransactionDialog
             members={budgetMembers}
+            settings={settings}
+            transactions={budgetTransactions}
             defaultMemberId={currentBudgetMember?.id}
             onClose={closeTransactionDialog}
             onSubmit={addTransaction}
           />
+      )}
+      {toastMessage && (
+        <div className="toast" role="status" aria-live="polite">
+          <CheckCircle2 size={17} aria-hidden="true" />
+          {toastMessage}
+        </div>
       )}
     </div>
   );
@@ -897,14 +1212,12 @@ function Sidebar({
   activeTab,
   onTabChange,
   syncMode,
-  statusText,
-  userEmail
+  statusText
 }: {
   activeTab: Tab;
   onTabChange: (tab: Tab) => void;
   syncMode: SyncMode;
   statusText: string;
-  userEmail?: string;
 }) {
   const tabs: Array<{ id: Tab; label: string; icon: typeof Home }> = [
     { id: "dashboard", label: "Dashboard", icon: Home },
@@ -943,7 +1256,7 @@ function Sidebar({
         <span className={syncMode === "cloud" ? "sync-dot cloud" : "sync-dot local"} aria-hidden="true" />
         <div>
           <strong>{syncMode === "cloud" ? "Cloud sync" : "Local data"}</strong>
-          <span>{userEmail ?? statusText}</span>
+          <span>{statusText}</span>
         </div>
       </div>
     </aside>
@@ -994,7 +1307,10 @@ function DashboardView({
   settlements,
   transactions,
   selectedMonth,
-  members
+  members,
+  onViewAll,
+  onOpenBudget,
+  onSettle
 }: {
   settings: BudgetSettings;
   totals: ReturnType<typeof dashboardTotals>;
@@ -1003,6 +1319,9 @@ function DashboardView({
   transactions: BudgetTransaction[];
   selectedMonth: string;
   members: BudgetMember[];
+  onViewAll: () => void;
+  onOpenBudget: () => void;
+  onSettle: (settlement: ReturnType<typeof settlementSuggestions>[number]) => void;
 }) {
   const budgetLimit = monthlyBudget(settings, selectedMonth);
   const spentRatio = budgetLimit > 0 ? Math.min(1, Math.max(0, totals.totalExpenses / budgetLimit)) : 0;
@@ -1019,7 +1338,7 @@ function DashboardView({
     <section className="dashboard-grid">
       <div className="kpi-band">
         <div className="balance-panel">
-          <p className="eyebrow">Total balance</p>
+          <p className="eyebrow">{netScopeLabel(selectedMonth)}</p>
           <strong>{formatMoney(totals.currentBalance, settings.currencyCode)}</strong>
           <div className="pacing">
             <div>
@@ -1084,7 +1403,7 @@ function DashboardView({
       <section className="panel recent-panel">
         <div className="panel-heading">
           <h2>Recent activity</h2>
-          <button className="text-action" type="button" onClick={() => undefined}>
+          <button className="text-action" type="button" onClick={onViewAll}>
             View all
           </button>
         </div>
@@ -1102,17 +1421,22 @@ function DashboardView({
           ) : (
             settlements.slice(0, 4).map((settlement) => (
               <div key={settlement.id} className="settlement-row">
-                <div className="avatar-pair">
+                <div className="avatar-pair" aria-hidden="true">
                   <MemberBadge member={settlement.from} />
                   <MemberBadge member={settlement.to} />
                 </div>
-                <div>
+                <div className="settlement-copy">
                   <strong>
                     {firstName(settlement.from.displayName)} pays {firstName(settlement.to.displayName)}
                   </strong>
-                  <span>{formatMoney(settlement.amount, settings.currencyCode)}</span>
+                  <span className="settlement-amount">{formatMoney(settlement.amount, settings.currencyCode)}</span>
                 </div>
-                <button className="ghost-button small" type="button">
+                <button
+                  className="ghost-button small settlement-action"
+                  type="button"
+                  onClick={() => onSettle(settlement)}
+                  aria-label={`Settle ${firstName(settlement.from.displayName)} paying ${firstName(settlement.to.displayName)}`}
+                >
                   Settle
                 </button>
               </div>
@@ -1132,8 +1456,13 @@ function DashboardView({
               ? `${Math.round(spentRatio * 100)}% of your ${formatMoney(budgetLimit, settings.currencyCode)} monthly budget is used${
                   daysLeftInMonth(selectedMonth) ? ` with ${daysLeftInMonth(selectedMonth)} days left` : ""
                 }.`
-              : "Set a monthly budget to track your pacing."}
+              : "Set up category budgets to track your pacing."}
           </span>
+          {budgetLimit <= 0 && (
+            <button className="text-action" type="button" onClick={onOpenBudget}>
+              Set up budgets
+            </button>
+          )}
         </div>
         <em>Spending insight</em>
       </section>
@@ -1252,7 +1581,8 @@ function TransactionsView({
   selectedMonth,
   search,
   onSearch,
-  onDelete
+  onDelete,
+  onAddTransaction
 }: {
   settings: BudgetSettings;
   transactions: BudgetTransaction[];
@@ -1262,13 +1592,28 @@ function TransactionsView({
   search: string;
   onSearch: (search: string) => void;
   onDelete: (id: string) => void;
+  onAddTransaction: () => void;
 }) {
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState<"all" | TransactionType>("all");
   const memberById = new Map(members.map((member) => [member.id, member]));
-  const visibleCategories = [...expenseCategories, ...incomeCategories].filter((category, index, categories) =>
-    categories.findIndex((candidate) => candidate.id === category.id) === index
+  const visibleCategories = useMemo(
+    () =>
+      [...expenseCategories, ...incomeCategories, ...transactions.map((transaction) => ({
+        id: transaction.category,
+        name: categoryName(transaction.category)
+      }))].filter(
+        (category, index, categories) => categories.findIndex((candidate) => candidate.id === category.id) === index
+      ),
+    [transactions]
   );
+
+  useEffect(() => {
+    if (categoryFilter !== "all" && !visibleCategories.some((category) => category.id === categoryFilter)) {
+      setCategoryFilter("all");
+    }
+  }, [categoryFilter, visibleCategories]);
+
   const filteredTransactions = transactions.filter((transaction) => {
     const query = search.trim().toLowerCase();
     const matchesSearch = `${transaction.title} ${categoryName(transaction.category)}`
@@ -1280,6 +1625,13 @@ function TransactionsView({
   });
   const summaryTotals = dashboardTotals(filteredTransactions, monthlyBudget(settings, selectedMonth), memberId);
   const summaryScope = filteredTransactions.length === transactions.length ? "this month" : "this view";
+  const hasActiveFilters = search.trim().length > 0 || categoryFilter !== "all" || typeFilter !== "all";
+
+  function clearFilters() {
+    onSearch("");
+    setCategoryFilter("all");
+    setTypeFilter("all");
+  }
 
   return (
     <section className="transactions-view">
@@ -1327,7 +1679,12 @@ function TransactionsView({
       />
       <div className="panel table-panel">
         {filteredTransactions.length === 0 ? (
-          <div className="empty-state">No transactions in this view.</div>
+          <div className="empty-state">
+            <p>{hasActiveFilters ? "No transactions match these filters." : "No transactions this month yet."}</p>
+            <button className="text-action" type="button" onClick={hasActiveFilters ? clearFilters : onAddTransaction}>
+              {hasActiveFilters ? "Clear filters" : "Add transaction"}
+            </button>
+          </div>
         ) : (
           <>
             <div className="transaction-head" aria-hidden="true">
@@ -1373,7 +1730,7 @@ function TransactionsView({
                     className="icon-button subtle"
                     onClick={() => onDelete(transaction.id)}
                     title="Delete transaction"
-                    aria-label={`Delete ${transaction.title}`}
+                    aria-label={`Delete ${transaction.title}${transaction.recurrenceRule?.startsWith("monthly") ? " recurring series" : ""}`}
                     type="button"
                   >
                     <Trash2 size={17} aria-hidden="true" />
@@ -1408,7 +1765,7 @@ function TransactionSummaryStrip({
         value={formatMoney(totals.totalExpenses, currencyCode)}
       />
       <TransactionSummaryMetric
-        label="Balance"
+        label="Net"
         value={formatMoney(totals.currentBalance, currencyCode)}
       />
     </section>
@@ -1453,7 +1810,8 @@ function BudgetView({
   const memberSpending = memberExpenseTotals(transactions, members);
   const activeCategoryBudgets = selectedCategoryBudgets(settings, selectedMonth);
   const budgetLimit = monthlyBudget(settings, selectedMonth);
-  const visibleCategoryRows = expenseCategories.map((category) => {
+  const expenseCategoryOptions = visibleExpenseCategories(settings, transactions);
+  const visibleCategoryRows = expenseCategoryOptions.map((category) => {
     const budget = activeCategoryBudgets[category.id] ?? 0;
     const spent = spendingByCategory.get(category.id) ?? 0;
     return { category, budget, spent };
@@ -1481,7 +1839,7 @@ function BudgetView({
           <span>{formatMoney(totals.remainingBudget, settings.currencyCode)} left</span>
         </div>
         <p className="panel-intro">
-          {budgetedRows.length} of {expenseCategories.length} categories budgeted this month.
+          {budgetedRows.length} of {expenseCategoryOptions.length} categories budgeted this month.
         </p>
         <div className="budget-list">
           {rowsToShow.map(({ category, spent, budget }) => {
@@ -1490,7 +1848,10 @@ function BudgetView({
             return (
             <div key={category.id} className={`budget-row ${tone}`}>
               <div>
-                <strong>{category.name}</strong>
+                <strong>
+                  {settings.categoryEmojis[category.id] ? `${settings.categoryEmojis[category.id]} ` : ""}
+                  {category.name}
+                </strong>
                 <span>
                   {formatMoney(spent, settings.currencyCode)} of {formatMoney(budget, settings.currencyCode)}
                 </span>
@@ -1499,7 +1860,7 @@ function BudgetView({
                 </div>
               </div>
               <label className="budget-input">
-                <span>$</span>
+                <span>{currencySymbol(settings.currencyCode)}</span>
                 <input
                   type="number"
                   min="0"
@@ -1570,6 +1931,7 @@ function SettingsView({
   user,
   cloudMessage,
   cloudError,
+  isCloudLoading,
   pendingInvites,
   onSettingsChange,
   onAddMember,
@@ -1590,6 +1952,7 @@ function SettingsView({
   user?: User;
   cloudMessage: string;
   cloudError: string;
+  isCloudLoading: boolean;
   pendingInvites: BudgetInvite[];
   onSettingsChange: (settings: BudgetSettings) => void;
   onAddMember: (name: string, email: string) => boolean;
@@ -1682,14 +2045,14 @@ function SettingsView({
           {syncMode === "cloud" ? <CheckCircle2 size={18} aria-hidden="true" /> : <HardDrive size={18} aria-hidden="true" />}
           <div>
             <strong>{syncMode === "cloud" ? user?.email ?? "Signed in" : "Desktop local"}</strong>
-            <span>{syncMode === "cloud" ? cloudError || cloudMessage : "Data stored on this device only"}</span>
+            <span>{syncMode === "cloud" ? (cloudError ? "Needs attention. Try Sync now." : cloudMessage) : "Saved on this device"}</span>
           </div>
           <em className="status-pill">{syncMode === "cloud" ? "Cloud" : "Active"}</em>
         </div>
         <div className="data-actions">
-          <button className="ghost-button" onClick={onRefresh} disabled={syncMode !== "cloud"}>
+          <button className="ghost-button" onClick={onRefresh} disabled={syncMode !== "cloud" || isCloudLoading}>
             <RefreshCcw size={17} aria-hidden="true" />
-            Refresh
+            {isCloudLoading ? "Syncing…" : "Sync now"}
           </button>
           <button className="ghost-button" onClick={onSignOut} disabled={syncMode !== "cloud"}>
             <LogOut size={17} aria-hidden="true" />
@@ -1721,8 +2084,8 @@ function SettingsView({
           <div>
             <strong>Cloud backup</strong>
             <span>
-              {syncMode === "cloud"
-                ? cloudError || cloudMessage
+                {syncMode === "cloud"
+                  ? cloudError ? "Needs attention. Try Sync now." : cloudMessage
                 : supabaseConfigStatus === "configured"
                   ? "Supabase configured"
                   : "Ready for Supabase config"}
@@ -1740,18 +2103,21 @@ function SettingsView({
           <span>{state.budgets.length} active</span>
         </div>
         <div className="member-list">
-          {state.budgets.map((budget) => (
-            <div key={budget.id} className="member-row">
-              <span className="household-mark">
-                <Home size={16} aria-hidden="true" />
-              </span>
-              <div>
-                <strong>{budget.name}</strong>
-                <span>{budget.id === state.currentUserId ? "Personal" : `Shared · ${members.length} members`}</span>
+          {state.budgets.map((budget) => {
+            const memberCount = state.members.filter((member) => member.budgetId === budget.id).length;
+            return (
+              <div key={budget.id} className="member-row">
+                <span className="household-mark">
+                  <Home size={16} aria-hidden="true" />
+                </span>
+                <div>
+                  <strong>{budget.name}</strong>
+                  <span>{budget.id === state.currentUserId ? "Personal" : `Shared · ${memberCount} members`}</span>
+                </div>
+                {currentBudget?.id === budget.id && <em className="status-pill">Current</em>}
               </div>
-              {currentBudget?.id === budget.id && <em className="status-pill">Current</em>}
-            </div>
-          ))}
+            );
+          })}
         </div>
         <form className="member-form household-form" onSubmit={handleCreateSharedBudget}>
           <input
@@ -1853,40 +2219,55 @@ function SettingsView({
           <h2>Data</h2>
           <span>{syncMode === "cloud" ? "Cached" : "Stored locally"}</span>
         </div>
-        <p className="panel-intro">Export a backup, import from another device, or reset everything on this device.</p>
-        <div className="data-tools">
-          <textarea readOnly value={exportState(state)} aria-label="Exported BudgetMate data" />
-          <div className="data-tool-actions">
-            <a
-              className="primary-action"
-              href={`data:application/json;charset=utf-8,${encodeURIComponent(exportState(state))}`}
-              download="budgetmate-web-data.json"
-            >
-              <Download size={17} aria-hidden="true" />
-              Export
-            </a>
-            <textarea
-              value={importText}
-              onChange={(event) => onImportTextChange(event.target.value)}
-              placeholder="Paste exported data"
-              aria-label="Import BudgetMate data"
-            />
-            {importError && <p className="form-error" role="alert">{importError}</p>}
-            <button className="ghost-button" onClick={onImport}>
-              <Upload size={17} aria-hidden="true" />
-              Import
+        <details className="advanced-data-tools">
+          <summary>
+            <strong>Advanced data tools</strong>
+            <span>Export, import, and cache controls</span>
+          </summary>
+          <p className="panel-intro">
+            {syncMode === "cloud"
+              ? "Export the current cache or clear it to download a fresh cloud copy. Import is available in local mode only."
+              : "Export a backup, import from another device, or reset everything on this device."}
+          </p>
+          <div className="data-tools">
+            <textarea readOnly value={exportState(state)} aria-label="Exported BudgetMate data" />
+            <div className="data-tool-actions">
+              <a
+                className="primary-action"
+                href={`data:application/json;charset=utf-8,${encodeURIComponent(exportState(state))}`}
+                download="budgetmate-web-data.json"
+              >
+                <Download size={17} aria-hidden="true" />
+                Export
+              </a>
+              <textarea
+                value={importText}
+                onChange={(event) => onImportTextChange(event.target.value)}
+                placeholder={syncMode === "cloud" ? "Sign out and use local mode to import" : "Paste exported data"}
+                aria-label="Import BudgetMate data"
+                disabled={syncMode === "cloud"}
+              />
+              {importError && <p className="form-error" role="alert">{importError}</p>}
+              <button className="ghost-button" onClick={onImport} disabled={syncMode === "cloud"}>
+                <Upload size={17} aria-hidden="true" />
+                Import
+              </button>
+            </div>
+          </div>
+          <div className="danger-zone">
+            <div>
+              <strong>{syncMode === "cloud" ? "Clear browser cache" : "Reset all local data"}</strong>
+              <span>
+                {syncMode === "cloud"
+                  ? "Removes this browser's cached copy, then downloads the latest data from Supabase."
+                  : "Permanently deletes every local transaction, budget, and member on this device."}
+              </span>
+            </div>
+            <button className="danger-action" onClick={onReset}>
+              {syncMode === "cloud" ? "Clear cache" : "Reset"}
             </button>
           </div>
-        </div>
-        <div className="danger-zone">
-          <div>
-            <strong>Reset all data</strong>
-            <span>Permanently deletes every transaction, budget, and member on this device.</span>
-          </div>
-          <button className="danger-action" onClick={onReset}>
-            Reset
-          </button>
-        </div>
+        </details>
       </section>
     </section>
   );
@@ -1894,21 +2275,29 @@ function SettingsView({
 
 function TransactionDialog({
   members,
+  settings,
+  transactions,
   defaultMemberId,
   onClose,
   onSubmit
 }: {
   members: BudgetMember[];
+  settings: BudgetSettings;
+  transactions: BudgetTransaction[];
   defaultMemberId?: string;
   onClose: () => void;
   onSubmit: (form: TransactionFormState) => void;
 }) {
   const resolvedDefaultMemberId = defaultMemberId ?? members[0]?.id ?? "";
+  const expenseCategoryOptions = visibleExpenseCategories(settings, transactions);
+  const defaultExpenseCategory = expenseCategoryOptions.some((category) => category.id === "groceries")
+    ? "groceries"
+    : expenseCategoryOptions[0]?.id ?? "other";
   const [form, setForm] = useState<TransactionFormState>({
     type: "expense",
     title: "",
     amount: "",
-    category: "groceries",
+    category: defaultExpenseCategory,
     paymentMethod: "card",
     createdByMemberId: resolvedDefaultMemberId,
     date: todayInputValue(),
@@ -1916,9 +2305,17 @@ function TransactionDialog({
   });
   const [formError, setFormError] = useState("");
   const dialogRef = useRef<HTMLFormElement | null>(null);
+  const amountRef = useRef<HTMLInputElement | null>(null);
+  const titleRef = useRef<HTMLInputElement | null>(null);
   const memberChoiceChangedRef = useRef(false);
 
-  const categories = form.type === "income" ? incomeCategories : expenseCategories;
+  const categories = form.type === "income" ? incomeCategories : expenseCategoryOptions;
+
+  useEffect(() => {
+    if (!categories.some((category) => category.id === form.category)) {
+      setForm((current) => ({ ...current, category: categories[0]?.id ?? "other" }));
+    }
+  }, [categories, form.category]);
 
   useEffect(() => {
     const currentMemberStillExists = members.some((member) => member.id === form.createdByMemberId);
@@ -1930,6 +2327,11 @@ function TransactionDialog({
     }
     updateForm({ createdByMemberId: resolvedDefaultMemberId });
   }, [form.createdByMemberId, members, resolvedDefaultMemberId]);
+
+  useEffect(() => {
+    const focusId = window.requestAnimationFrame(() => amountRef.current?.focus());
+    return () => window.cancelAnimationFrame(focusId);
+  }, []);
 
   useEffect(() => {
     function focusableElements() {
@@ -1982,7 +2384,7 @@ function TransactionDialog({
     setForm((current) => {
       const next = { ...current, ...patch };
       if (patch.type) {
-        next.category = patch.type === "income" ? "work" : "groceries";
+        next.category = patch.type === "income" ? "work" : defaultExpenseCategory;
         next.splitWithHousehold = false;
       }
       return next;
@@ -2050,14 +2452,21 @@ function TransactionDialog({
         <label className="amount-hero">
           <span>Amount</span>
           <div>
-            <b>$</b>
+            <b>{currencySymbol(settings.currencyCode)}</b>
             <input
               type="number"
               min="0"
               step="0.01"
               value={form.amount}
               onChange={(event) => updateForm({ amount: event.target.value })}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  titleRef.current?.focus();
+                }
+              }}
               placeholder="0.00"
+              ref={amountRef}
               required
               aria-label="Transaction amount"
               aria-invalid={!!formError && normalizeAmount(Number(form.amount)) <= 0}
@@ -2071,8 +2480,8 @@ function TransactionDialog({
           <input
             value={form.title}
             onChange={(event) => updateForm({ title: event.target.value })}
-            placeholder="e.g. Groceries"
-            autoFocus
+            placeholder="What was this for?"
+            ref={titleRef}
             required
             aria-invalid={!!formError && !form.title.trim()}
             aria-describedby={formError ? "transaction-form-error" : undefined}
@@ -2089,6 +2498,7 @@ function TransactionDialog({
             <select value={form.category} onChange={(event) => updateForm({ category: event.target.value })} required>
               {categories.map((category) => (
                 <option key={category.id} value={category.id}>
+                  {settings.categoryEmojis[category.id] ? `${settings.categoryEmojis[category.id]} ` : ""}
                   {category.name}
                 </option>
               ))}
@@ -2114,7 +2524,7 @@ function TransactionDialog({
           </select>
         </label>
 
-        {form.type === "expense" && (
+        {form.type === "expense" && members.length > 1 && (
           <label className="toggle-row">
             <input
               type="checkbox"
@@ -2220,7 +2630,13 @@ function CategoryRow({
 
 function MemberBadge({ member }: { member: BudgetMember }) {
   return (
-    <span className="member-badge" style={{ backgroundColor: member.color }}>
+    <span
+      className="member-badge"
+      style={{
+        backgroundColor: member.color,
+        "--member-text-color": contrastTextColor(member.color)
+      } as CSSProperties}
+    >
       {member.initials}
     </span>
   );

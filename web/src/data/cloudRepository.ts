@@ -2,6 +2,8 @@ import type { User } from "@supabase/supabase-js";
 import { supabase } from "./supabaseClient";
 import { defaultBudgetSettings } from "../domain/defaults";
 import { monthlyBudget, uniqueTransactions } from "../domain/budgetMath";
+import { localDateKey, localNoonISOString } from "../domain/dates";
+import { normalizedCurrencyCode } from "../domain/currency";
 import type {
   AppState,
   Budget,
@@ -65,6 +67,7 @@ type TransactionRow = {
   payment_method: "cash" | "card" | "paypal" | null;
   created_by_member_id: string;
   date: string;
+  occurred_on?: string | null;
   created_at: string;
   recurrence_rule: string | null;
   splits: Array<{ id: string; member_id?: string; memberId?: string; amount: number | string }> | null;
@@ -78,6 +81,7 @@ type SettlementRow = {
   to_member_id: string;
   amount: number | string;
   date: string;
+  occurred_on?: string | null;
 };
 
 type InviteRow = {
@@ -91,6 +95,9 @@ type InviteRow = {
 };
 
 const palette = ["#3B8FE2", "#E2572E", "#1FA37D", "#7B6EE6"];
+const ensuredPersonalBudgets = new Map<string, Promise<void>>();
+let supportsTransactionOccurredOn: boolean | undefined;
+let supportsSettlementOccurredOn: boolean | undefined;
 
 function swiftISODate(value: string | Date = new Date()) {
   const date = value instanceof Date ? value : new Date(value);
@@ -135,11 +142,16 @@ function mapBudget(row: BudgetRow): Budget {
 }
 
 function mapSettings(row: SettingsRow): BudgetSettings {
+  const categoryBudgets = row.category_budgets ?? {};
+  const legacyMonthlyBudget = Number(row.monthly_budget);
   return {
     budgetId: row.budget_id,
-    currencyCode: row.currency_code ?? "USD",
+    currencyCode: normalizedCurrencyCode(row.currency_code ?? "USD"),
     appearance: row.appearance ?? "system",
-    categoryBudgets: row.category_budgets ?? {},
+    categoryBudgets:
+      Object.keys(categoryBudgets).length === 0 && legacyMonthlyBudget > 0
+        ? { other: legacyMonthlyBudget }
+        : categoryBudgets,
     categoryEmojis: row.category_emojis ?? {}
   };
 }
@@ -356,6 +368,7 @@ function mapSplits(splits: TransactionRow["splits"]): TransactionSplit[] {
 }
 
 function mapTransaction(row: TransactionRow): BudgetTransaction {
+  const occurredOnDate = row.occurred_on ? localNoonISOString(row.occurred_on) : undefined;
   return {
     id: row.id,
     budgetId: row.budget_id,
@@ -366,7 +379,7 @@ function mapTransaction(row: TransactionRow): BudgetTransaction {
     category: row.category,
     paymentMethod: row.payment_method ?? undefined,
     createdByMemberId: row.created_by_member_id,
-    date: row.date,
+    date: occurredOnDate ?? row.date,
     createdAt: row.created_at,
     recurrenceRule: row.recurrence_rule ?? undefined,
     splits: mapSplits(row.splits)
@@ -374,6 +387,7 @@ function mapTransaction(row: TransactionRow): BudgetTransaction {
 }
 
 function mapSettlement(row: SettlementRow): Settlement {
+  const occurredOnDate = row.occurred_on ? localNoonISOString(row.occurred_on) : undefined;
   return {
     id: row.id,
     budgetId: row.budget_id,
@@ -381,7 +395,7 @@ function mapSettlement(row: SettlementRow): Settlement {
     fromMemberId: row.from_member_id,
     toMemberId: row.to_member_id,
     amount: Number(row.amount),
-    date: row.date
+    date: occurredOnDate ?? row.date
   };
 }
 
@@ -429,7 +443,7 @@ function memberRow(member: BudgetMember, userId: string): MemberRow {
 function transactionRow(transaction: BudgetTransaction, userId: string): TransactionRow {
   return {
     id: transaction.id,
-    user_id: userId,
+    user_id: transaction.userId || userId,
     budget_id: transaction.budgetId,
     title: transaction.title,
     amount: transaction.amount,
@@ -438,6 +452,7 @@ function transactionRow(transaction: BudgetTransaction, userId: string): Transac
     payment_method: transaction.paymentMethod ?? null,
     created_by_member_id: transaction.createdByMemberId,
     date: swiftISODate(transaction.date),
+    occurred_on: localDateKey(new Date(transaction.date)),
     created_at: swiftISODate(transaction.createdAt),
     recurrence_rule: transaction.recurrenceRule ?? null,
     splits: transaction.splits.map((split) => ({
@@ -480,6 +495,20 @@ export async function signOut() {
 }
 
 export async function ensurePersonalBudget(user: User) {
+  const existingEnsure = ensuredPersonalBudgets.get(user.id);
+  if (existingEnsure) {
+    return existingEnsure;
+  }
+
+  const ensure = performEnsurePersonalBudget(user).catch((error) => {
+    ensuredPersonalBudgets.delete(user.id);
+    throw error;
+  });
+  ensuredPersonalBudgets.set(user.id, ensure);
+  return ensure;
+}
+
+async function performEnsurePersonalBudget(user: User) {
   const client = requireSupabase();
   const now = swiftISODate();
   const userId = user.id;
@@ -489,8 +518,7 @@ export async function ensurePersonalBudget(user: User) {
     id: userId,
     owner_user_id: userId,
     name: "My Budget",
-    created_at: now,
-    updated_at: now
+    created_at: now
   };
   const membership: MembershipRow = {
     budget_id: userId,
@@ -513,7 +541,9 @@ export async function ensurePersonalBudget(user: User) {
     created_date: now
   };
 
-  const { error: budgetError } = await client.from("budgets").upsert(budget, { onConflict: "id" });
+  const { error: budgetError } = await client
+    .from("budgets")
+    .upsert(budget, { onConflict: "id", ignoreDuplicates: true });
   if (budgetError) throw budgetError;
 
   const { error: membershipError } = await client
@@ -552,10 +582,23 @@ export async function fetchCloudState(user: User, preferredBudgetId?: string): P
   const memberships = (membershipData ?? []) as MembershipRow[];
   const budgetIds = Array.from(new Set([user.id, ...memberships.map((membership) => membership.budget_id)]));
 
-  const { data: budgetData, error: budgetError } = await client.from("budgets").select().in("id", budgetIds);
-  if (budgetError) throw budgetError;
+  const [budgetsResult, settingsResult, membersResult, membershipsResult, transactionsResult, settlementsResult] = await Promise.all([
+    client.from("budgets").select().in("id", budgetIds),
+    client.from("budget_settings").select().in("budget_id", budgetIds),
+    client.from("budget_members").select().in("budget_id", budgetIds),
+    client.from("budget_memberships").select().in("budget_id", budgetIds).eq("status", "active"),
+    client.from("budget_transactions").select().in("budget_id", budgetIds),
+    client.from("budget_settlements").select().in("budget_id", budgetIds)
+  ]);
 
-  const budgetsById = new Map(((budgetData ?? []) as BudgetRow[]).map((row) => [row.id, mapBudget(row)]));
+  if (budgetsResult.error) throw budgetsResult.error;
+  if (settingsResult.error) throw settingsResult.error;
+  if (membersResult.error) throw membersResult.error;
+  if (membershipsResult.error) throw membershipsResult.error;
+  if (transactionsResult.error) throw transactionsResult.error;
+  if (settlementsResult.error) throw settlementsResult.error;
+
+  const budgetsById = new Map(((budgetsResult.data ?? []) as BudgetRow[]).map((row) => [row.id, mapBudget(row)]));
   if (!budgetsById.has(user.id)) {
     budgetsById.set(user.id, {
       id: user.id,
@@ -565,20 +608,6 @@ export async function fetchCloudState(user: User, preferredBudgetId?: string): P
       updatedAt: swiftISODate()
     });
   }
-
-  const [settingsResult, membersResult, membershipsResult, transactionsResult, settlementsResult] = await Promise.all([
-    client.from("budget_settings").select().in("budget_id", budgetIds),
-    client.from("budget_members").select().in("budget_id", budgetIds),
-    client.from("budget_memberships").select().in("budget_id", budgetIds).eq("status", "active"),
-    client.from("budget_transactions").select().in("budget_id", budgetIds),
-    client.from("budget_settlements").select().in("budget_id", budgetIds)
-  ]);
-
-  if (settingsResult.error) throw settingsResult.error;
-  if (membersResult.error) throw membersResult.error;
-  if (membershipsResult.error) throw membershipsResult.error;
-  if (transactionsResult.error) throw transactionsResult.error;
-  if (settlementsResult.error) throw settlementsResult.error;
 
   const settingsRows = (settingsResult.data ?? []) as SettingsRow[];
   const settingsByBudgetId = Object.fromEntries(settingsRows.map((row) => [row.budget_id, mapSettings(row)]));
@@ -658,8 +687,22 @@ export async function createCloudSharedBudget(name: string, user: User): Promise
   await ensurePersonalBudget(user);
 
   const budgetId = crypto.randomUUID();
+  const ownerMemberId = crypto.randomUUID();
   const now = swiftISODate();
   const budgetName = name.trim() || "Shared Budget";
+
+  const { data: rpcBudgetId, error: rpcError } = await client.rpc("create_budget_household", {
+    p_name: budgetName,
+    p_budget_id: budgetId,
+    p_owner_member_id: ownerMemberId
+  });
+  if (!rpcError) {
+    return typeof rpcBudgetId === "string" ? rpcBudgetId : budgetId;
+  }
+  if (!isMissingFunctionError(rpcError, "create_budget_household")) {
+    throw rpcError;
+  }
+
   const budget: BudgetRow = {
     id: budgetId,
     owner_user_id: user.id,
@@ -674,7 +717,7 @@ export async function createCloudSharedBudget(name: string, user: User): Promise
     status: "active"
   };
   const ownerMember: MemberRow = {
-    id: crypto.randomUUID(),
+    id: ownerMemberId,
     user_id: user.id,
     budget_id: budgetId,
     display_name: safeName(user),
@@ -732,21 +775,64 @@ export async function createCloudInvite(member: BudgetMember, userId: string) {
 
 export async function upsertCloudTransaction(transaction: BudgetTransaction, userId: string) {
   const client = requireSupabase();
-  const { data: existingData, error: fetchError } = await client
-    .from("budget_members")
-    .select()
-    .eq("budget_id", transaction.budgetId);
-  if (fetchError) throw fetchError;
+  // New web transactions are created from the already-canonical member list
+  // returned by fetchCloudState, so another full member-table read here only
+  // adds latency and opens a needless read/write race.
+  const row = transactionRow(transaction, userId);
+  if (supportsTransactionOccurredOn === false) {
+    const { occurred_on: _occurredOn, ...legacyRow } = row;
+    const { error } = await client.from("budget_transactions").upsert(legacyRow, { onConflict: "id" });
+    if (error) throw error;
+    return;
+  }
 
-  const existingMembers = ((existingData ?? []) as MemberRow[]).map(mapMember);
-  const canonicalMembers = deduplicateMembersForBudget(existingMembers);
-  const aliases = memberAliasMap(existingMembers, canonicalMembers, userId);
-  const normalizedTransaction = remapTransactionMembers(transaction, aliases, knownMemberIds(existingMembers, aliases));
+  const { error } = await client.from("budget_transactions").upsert(row, { onConflict: "id" });
+  if (!error) {
+    supportsTransactionOccurredOn = true;
+    return;
+  }
+  if (!isMissingColumnError(error, "occurred_on")) {
+    throw error;
+  }
 
-  const { error } = await client
-    .from("budget_transactions")
-    .upsert(transactionRow(normalizedTransaction, userId), { onConflict: "id" });
-  if (error) throw error;
+  supportsTransactionOccurredOn = false;
+  const { occurred_on: _occurredOn, ...legacyRow } = row;
+  const { error: legacyError } = await client.from("budget_transactions").upsert(legacyRow, { onConflict: "id" });
+  if (legacyError) throw legacyError;
+}
+
+export async function upsertCloudSettlement(settlement: Settlement, userId: string) {
+  const client = requireSupabase();
+  const row: SettlementRow = {
+    id: settlement.id,
+    user_id: settlement.userId || userId,
+    budget_id: settlement.budgetId,
+    from_member_id: settlement.fromMemberId,
+    to_member_id: settlement.toMemberId,
+    amount: settlement.amount,
+    date: swiftISODate(settlement.date),
+    occurred_on: localDateKey(new Date(settlement.date))
+  };
+  if (supportsSettlementOccurredOn === false) {
+    const { occurred_on: _occurredOn, ...legacyRow } = row;
+    const { error } = await client.from("budget_settlements").upsert(legacyRow, { onConflict: "id" });
+    if (error) throw error;
+    return;
+  }
+
+  const { error } = await client.from("budget_settlements").upsert(row, { onConflict: "id" });
+  if (!error) {
+    supportsSettlementOccurredOn = true;
+    return;
+  }
+  if (!isMissingColumnError(error, "occurred_on")) {
+    throw error;
+  }
+
+  supportsSettlementOccurredOn = false;
+  const { occurred_on: _occurredOn, ...legacyRow } = row;
+  const { error: legacyError } = await client.from("budget_settlements").upsert(legacyRow, { onConflict: "id" });
+  if (legacyError) throw legacyError;
 }
 
 export async function deleteCloudTransaction(transactionId: string, budgetId: string) {
@@ -774,6 +860,16 @@ export async function fetchPendingInvites(email: string): Promise<BudgetInvite[]
 export async function acceptCloudInvite(invite: BudgetInvite, userId: string) {
   const client = requireSupabase();
   const now = swiftISODate();
+
+  const { error: rpcError } = await client.rpc("accept_budget_invite", {
+    p_invite_id: invite.id
+  });
+  if (!rpcError) {
+    return;
+  }
+  if (!isMissingFunctionError(rpcError, "accept_budget_invite")) {
+    throw rpcError;
+  }
 
   const membership: MembershipRow = {
     budget_id: invite.budgetId,
@@ -807,4 +903,18 @@ export async function acceptCloudInvite(invite: BudgetInvite, userId: string) {
     })
     .eq("id", invite.id);
   if (inviteError) throw inviteError;
+}
+
+function isMissingColumnError(error: { code?: string; message?: string; details?: string }, column: string) {
+  const message = `${error.message ?? ""} ${error.details ?? ""}`.toLowerCase();
+  return error.code === "PGRST204" || (message.includes(column.toLowerCase()) && message.includes("column"));
+}
+
+function isMissingFunctionError(error: { code?: string; message?: string; details?: string }, functionName: string) {
+  const message = `${error.message ?? ""} ${error.details ?? ""}`.toLowerCase();
+  return (
+    error.code === "PGRST202" ||
+    error.code === "42883" ||
+    (message.includes(functionName.toLowerCase()) && (message.includes("function") || message.includes("schema cache")))
+  );
 }

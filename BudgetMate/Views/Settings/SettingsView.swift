@@ -255,11 +255,7 @@ struct SettingsView: View {
                         rowButton("Reset Settings", tint: AppTheme.brand) {
                             settingsStore.resetSettings()
                             syncFieldsFromStore()
-                            cloudSyncStore.saveSettings(
-                                settingsStore.settings,
-                                userScopeId: authStore.currentUserScopeId,
-                                budgetScopeId: authStore.currentBudgetScopeId
-                            )
+                            saveCurrentSettingsToCloud()
                         }
 
                         Divider()
@@ -281,9 +277,6 @@ struct SettingsView: View {
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
                 syncFieldsFromStore()
-                Task {
-                    await refreshSharedBudgetSection()
-                }
             }
             .task(id: "\(authStore.userEmail ?? "")-\(authStore.currentBudgetScopeId)") {
                 await refreshSharedBudgetSection()
@@ -332,21 +325,21 @@ struct SettingsView: View {
 
     private var syncButtonTitle: String {
         if cloudSyncStore.isSyncing {
-            return "Syncing Now"
+            return "Syncing…"
         }
         return cloudSyncStore.hasSyncIssue ? "Retry Sync" : "Sync Now"
     }
 
     private var settingsSectionTitleFont: Font {
-        .system(size: 24, weight: .black, design: .rounded)
+        .system(size: 20, weight: .bold, design: .rounded)
     }
 
     private var settingsRowLabelFont: Font {
-        .system(size: 18, weight: .bold, design: .rounded)
+        .system(size: 16, weight: .semibold, design: .rounded)
     }
 
     private var settingsRowValueFont: Font {
-        .system(size: 18, weight: .bold, design: .rounded)
+        .system(size: 16, weight: .semibold, design: .rounded)
     }
 
     private var settingsCompactValueFont: Font {
@@ -362,7 +355,7 @@ struct SettingsView: View {
     }
 
     private var settingsActionFont: Font {
-        .system(size: 18, weight: .bold, design: .rounded)
+        .system(size: 16, weight: .semibold, design: .rounded)
     }
 
     private func settingsSection<Content: View>(
@@ -469,11 +462,7 @@ struct SettingsView: View {
             return
         }
 
-        cloudSyncStore.saveMembers(
-            memberViewModel.members,
-            userScopeId: authStore.currentUserScopeId,
-            budgetScopeId: authStore.currentBudgetScopeId
-        )
+        saveCurrentMembersToCloud()
         isShowingProfileEditor = false
         clearFeedbackMessage = "Profile name updated."
     }
@@ -530,6 +519,11 @@ struct SettingsView: View {
                 memberships.removeAll { $0.budgetId.uuidString == sharedBudgetScopeId }
                 authStore.switchBudgetScope(to: authStore.currentUserScopeId)
                 settingsStore.switchUser(to: authStore.currentUserScopeId)
+                memberViewModel.switchUser(
+                    to: authStore.currentUserScopeId,
+                    budgetScopeId: authStore.currentUserScopeId,
+                    email: authStore.userEmail
+                )
                 await loadMemberships()
                 await refreshAllData(showFeedback: false, forceSync: true)
                 clearFeedbackMessage = "You left the shared budget. You are now viewing your personal budget."
@@ -540,45 +534,90 @@ struct SettingsView: View {
     }
 
     private func refreshAllData(showFeedback: Bool, forceSync: Bool) async {
+        let userScopeId = authStore.currentUserScopeId
+        let budgetScopeId = authStore.currentBudgetScopeId
+
         do {
             if forceSync {
+                let transactionDescriptor = FetchDescriptor<Transaction>(
+                    predicate: #Predicate { $0.ownerUserId == budgetScopeId }
+                )
+                let settlementDescriptor = FetchDescriptor<Settlement>(
+                    predicate: #Predicate { $0.ownerUserId == budgetScopeId }
+                )
+                let syncTransactions = try modelContext.fetch(transactionDescriptor)
+                let syncSettlements = try modelContext.fetch(settlementDescriptor)
+                let settingsSyncToken = settingsStore.pendingCloudSyncToken
+                let memberSyncToken = memberViewModel.pendingCloudSyncToken
                 let summary = try await cloudSyncStore.sync(
                     settings: settingsStore.settings,
+                    shouldPushSettings: settingsSyncToken != nil,
                     members: memberViewModel.members,
-                    transactions: scopedTransactions,
-                    settlements: scopedSettlements,
+                    shouldPushMembers: memberSyncToken != nil,
+                    transactions: syncTransactions,
+                    settlements: syncSettlements,
                     into: modelContext,
-                    userScopeId: authStore.currentUserScopeId,
+                    userScopeId: userScopeId,
                     userEmail: authStore.userEmail,
-                    budgetScopeId: authStore.currentBudgetScopeId
+                    budgetScopeId: budgetScopeId
                 )
+
+                // The sync already observed cloud settings and members;
+                // reuse them instead of two extra fetches.
+                if summary.pushedSettings, let settingsSyncToken {
+                    settingsStore.markCloudSyncSucceeded(settingsSyncToken)
+                }
+                if summary.pushedMembers > 0, let memberSyncToken {
+                    memberViewModel.markCloudSyncSucceeded(memberSyncToken)
+                }
+
+                guard authStore.currentUserScopeId == userScopeId,
+                      authStore.currentBudgetScopeId == budgetScopeId else {
+                    return
+                }
 
                 if showFeedback {
                     clearFeedbackMessage = summary.message
                 }
-
-                // The sync already observed cloud settings and members;
-                // reuse them instead of two extra fetches.
-                if let cloudSettings = summary.settings {
+                if settingsStore.pendingCloudSyncToken == nil,
+                   let cloudSettings = summary.settings {
                     settingsStore.replaceSettings(cloudSettings)
                     syncFieldsFromStore()
                 }
-                memberViewModel.replaceMembers(with: summary.members)
+                if memberViewModel.pendingCloudSyncToken == nil {
+                    memberViewModel.replaceMembers(with: summary.members)
+                }
             } else {
                 await appRefreshStore.refreshCurrentBudget(forceSync: false)
 
-                if let cloudSettings = try await cloudSyncStore.fetchSettings(
-                    userScopeId: authStore.currentUserScopeId,
-                    budgetScopeId: authStore.currentBudgetScopeId
+                guard authStore.currentUserScopeId == userScopeId,
+                      authStore.currentBudgetScopeId == budgetScopeId else {
+                    return
+                }
+
+                if settingsStore.pendingCloudSyncToken == nil,
+                   let cloudSettings = try await cloudSyncStore.fetchSettings(
+                    userScopeId: userScopeId,
+                    budgetScopeId: budgetScopeId
                 ) {
+                    guard authStore.currentUserScopeId == userScopeId,
+                          authStore.currentBudgetScopeId == budgetScopeId else {
+                        return
+                    }
                     settingsStore.replaceSettings(cloudSettings)
                     syncFieldsFromStore()
                 }
-                let cloudMembers = try await cloudSyncStore.fetchMembers(
-                    userScopeId: authStore.currentUserScopeId,
-                    budgetScopeId: authStore.currentBudgetScopeId
-                )
-                memberViewModel.replaceMembers(with: cloudMembers)
+                if memberViewModel.pendingCloudSyncToken == nil {
+                    let cloudMembers = try await cloudSyncStore.fetchMembers(
+                        userScopeId: userScopeId,
+                        budgetScopeId: budgetScopeId
+                    )
+                    guard authStore.currentUserScopeId == userScopeId,
+                          authStore.currentBudgetScopeId == budgetScopeId else {
+                        return
+                    }
+                    memberViewModel.replaceMembers(with: cloudMembers)
+                }
             }
             await refreshSharedBudgetSection()
         } catch {
@@ -620,6 +659,11 @@ struct SettingsView: View {
     private func switchActiveBudget(to budgetScopeId: String) {
         authStore.switchBudgetScope(to: budgetScopeId)
         settingsStore.switchUser(to: budgetScopeId)
+        memberViewModel.switchUser(
+            to: authStore.currentUserScopeId,
+            budgetScopeId: budgetScopeId,
+            email: authStore.userEmail
+        )
         clearFeedbackMessage = "Switched budget. Syncing now."
         Task {
             await refreshAllData(showFeedback: false, forceSync: true)
@@ -632,6 +676,11 @@ struct SettingsView: View {
                 try await cloudSyncStore.acceptInvite(invite, userScopeId: authStore.currentUserScopeId)
                 authStore.switchBudgetScope(to: invite.budgetId.uuidString)
                 settingsStore.switchUser(to: invite.budgetId.uuidString)
+                memberViewModel.switchUser(
+                    to: authStore.currentUserScopeId,
+                    budgetScopeId: invite.budgetId.uuidString,
+                    email: authStore.userEmail
+                )
                 pendingInvites.removeAll { $0.id == invite.id }
                 await refreshAllData(showFeedback: false, forceSync: true)
                 clearFeedbackMessage = "Invite accepted. You are now viewing the shared budget."
@@ -644,9 +693,9 @@ struct SettingsView: View {
     private var syncBadgeColor: Color {
         switch memberViewModel.syncMode {
         case .local:
-            return .orange
+            return AppTheme.warningText
         case .cloudPlaceholder:
-            return .blue
+            return AppTheme.brand
         }
     }
 
@@ -747,11 +796,7 @@ struct SettingsView: View {
 
     private func updateCurrencyCode(_ code: String) {
         settingsStore.updateCurrencyCode(code)
-        cloudSyncStore.saveSettings(
-            settingsStore.settings,
-            userScopeId: authStore.currentUserScopeId,
-            budgetScopeId: authStore.currentBudgetScopeId
-        )
+        saveCurrentSettingsToCloud()
     }
 
     private var appearanceSelection: Binding<AppearanceOption> {
@@ -759,11 +804,35 @@ struct SettingsView: View {
             get: { settingsStore.settings.appearance },
             set: {
                 settingsStore.updateAppearance($0)
-                cloudSyncStore.saveSettings(
-                    settingsStore.settings,
-                    userScopeId: authStore.currentUserScopeId,
-                    budgetScopeId: authStore.currentBudgetScopeId
-                )
+                saveCurrentSettingsToCloud()
+            }
+        )
+    }
+
+    private func saveCurrentSettingsToCloud() {
+        let syncToken = settingsStore.pendingCloudSyncToken
+        cloudSyncStore.saveSettings(
+            settingsStore.settings,
+            userScopeId: authStore.currentUserScopeId,
+            budgetScopeId: authStore.currentBudgetScopeId,
+            onSuccess: {
+                if let syncToken {
+                    settingsStore.markCloudSyncSucceeded(syncToken)
+                }
+            }
+        )
+    }
+
+    private func saveCurrentMembersToCloud() {
+        let syncToken = memberViewModel.pendingCloudSyncToken
+        cloudSyncStore.saveMembers(
+            memberViewModel.members,
+            userScopeId: authStore.currentUserScopeId,
+            budgetScopeId: authStore.currentBudgetScopeId,
+            onSuccess: {
+                if let syncToken {
+                    memberViewModel.markCloudSyncSucceeded(syncToken)
+                }
             }
         )
     }
