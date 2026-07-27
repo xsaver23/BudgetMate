@@ -29,7 +29,9 @@ final class CloudSyncStore: ObservableObject {
     private let logger = Logger(subsystem: "BudgetMate", category: "CloudSync")
     private let maxRetryAttempts = 3
     private let userDefaults: UserDefaults
-    private static let pendingCloudDeletionsKey = "budgetmate.pendingCloudDeletions"
+    // Internal so the test foundation can verify the durable codec without
+    // reaching into a live Supabase client or exposing a public API.
+    static let pendingCloudDeletionsKey = "budgetmate.pendingCloudDeletions"
     private var activeFullSync: ActiveFullSync?
     private var pendingMutationTask: Task<Void, Never>?
     private var pendingMutationToken: UUID?
@@ -664,7 +666,7 @@ final class CloudSyncStore: ObservableObject {
         userDefaults.set(data, forKey: Self.pendingCloudDeletionsKey)
     }
 
-    private static func loadPendingCloudDeletions(
+    static func loadPendingCloudDeletions(
         from userDefaults: UserDefaults,
         key: String
     ) -> [PendingCloudDeletion] {
@@ -779,7 +781,7 @@ private struct ActiveFullSync {
     let task: Task<CloudBudgetSyncSummary, Error>
 }
 
-private struct PendingCloudDeletion: Codable, Hashable {
+struct PendingCloudDeletion: Codable, Hashable {
     enum Entity: String, Codable {
         case member
         case membership
