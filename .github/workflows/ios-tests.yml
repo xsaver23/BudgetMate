@@ -20,21 +20,27 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Select an installed Xcode
+      - name: Select required Xcode 16.4
         shell: bash
         run: |
           set -euo pipefail
-          for candidate in \
-            /Applications/Xcode_16.4.app \
-            /Applications/Xcode_16.3.app \
-            /Applications/Xcode.app; do
-            if [[ -d "${candidate}/Contents/Developer" ]]; then
-              sudo xcode-select --switch "${candidate}/Contents/Developer"
-              break
-            fi
-          done
+          developer_dir="/Applications/Xcode_16.4.app/Contents/Developer"
+          if [[ ! -d "${developer_dir}" ]]; then
+            echo "Required Xcode 16.4 is not installed on this runner." >&2
+            ls -1d /Applications/Xcode*.app 2>/dev/null || true
+            exit 1
+          fi
+          sudo xcode-select --switch "${developer_dir}"
+          xcode_version="$(xcodebuild -version | sed -n '1s/^Xcode //p')"
+          if [[ "${xcode_version}" != "16.4" ]]; then
+            echo "Expected Xcode 16.4, selected ${xcode_version:-unknown}." >&2
+            exit 1
+          fi
           xcodebuild -version
           swift --version
+
+      - name: Validate checked-in Xcode project
+        run: ruby generate_project.rb
 
       - name: Verify checked-in secret safety
         run: ./scripts/verify_ios_secrets.sh
@@ -44,6 +50,7 @@ jobs:
           xcodebuild
           -project BudgetMate.xcodeproj
           -scheme BudgetMate
+          -disableAutomaticPackageResolution
           -resolvePackageDependencies
 
       - name: Select an available iPhone simulator
@@ -100,3 +107,84 @@ jobs:
             ${{ runner.temp }}/budgetmate-build.log
             ${{ runner.temp }}/budgetmate-tests.log
             ${{ runner.temp }}/BudgetMateDerivedData/Logs/Test/*.xcresult
+
+  ios-release-advisory:
+    name: Advisory Release and analyze
+    runs-on: macos-latest
+    continue-on-error: true
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Select latest installed Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest_xcode=""
+          for candidate in /Applications/Xcode*.app; do
+            if [[ -d "${candidate}/Contents/Developer" ]] && \
+              { [[ -z "${latest_xcode}" ]] || [[ "${candidate}" > "${latest_xcode}" ]]; }; then
+              latest_xcode="${candidate}"
+            fi
+          done
+          if [[ -z "${latest_xcode}" ]]; then
+            echo "No installed Xcode was found for the advisory lane." >&2
+            exit 1
+          fi
+          sudo xcode-select --switch "${latest_xcode}/Contents/Developer"
+          xcodebuild -version
+          swift --version
+
+      - name: Validate checked-in Xcode project
+        run: ruby generate_project.rb
+
+      - name: Verify checked-in secret safety
+        run: ./scripts/verify_ios_secrets.sh
+
+      - name: Resolve Swift packages
+        run: >-
+          xcodebuild
+          -project BudgetMate.xcodeproj
+          -scheme BudgetMate
+          -disableAutomaticPackageResolution
+          -resolvePackageDependencies
+
+      - name: Build unsigned Release simulator app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project BudgetMate.xcodeproj \
+            -scheme BudgetMate \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "${RUNNER_TEMP}/BudgetMateReleaseDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build 2>&1 | tee "${RUNNER_TEMP}/budgetmate-release-build.log"
+
+      - name: Analyze Release configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project BudgetMate.xcodeproj \
+            -scheme BudgetMate \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "${RUNNER_TEMP}/BudgetMateReleaseDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            analyze 2>&1 | tee "${RUNNER_TEMP}/budgetmate-release-analyze.log"
+
+      - name: Upload advisory diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: budgetmate-ios-release-advisory
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/budgetmate-release-build.log
+            ${{ runner.temp }}/budgetmate-release-analyze.log
