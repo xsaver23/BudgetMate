@@ -1,4 +1,3 @@
-import SwiftData
 import SwiftUI
 
 struct BudgetMembersView: View {
@@ -6,8 +5,6 @@ struct BudgetMembersView: View {
     @EnvironmentObject private var authStore: AuthSessionStore
     @EnvironmentObject private var cloudSyncStore: CloudSyncStore
     @EnvironmentObject private var settingsStore: SettingsStore
-    @Environment(\.modelContext) private var modelContext
-    @Query private var transactions: [Transaction]
     @State private var isShowingInviteSheet = false
     @State private var feedbackMessage: String?
     @State private var ownedBudgets: [BudgetSummary] = []
@@ -23,22 +20,21 @@ struct BudgetMembersView: View {
                 if canManageMembers {
                     ForEach(memberViewModel.members) { member in
                         memberRow(member)
-                            .contextMenu {
-                                if member.role != .owner {
-                                    Button(role: .destructive) {
-                                        deleteMember(member)
-                                    } label: {
-                                        Label("Remove Member", systemImage: "trash")
-                                    }
-                                }
-                            }
+                    }
+
+                    if memberViewModel.members.contains(where: { $0.role != .owner }) {
+                        Label(DestructiveActionGuardrails.memberRemovalSummary, systemImage: "lock.shield.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(BudgetBeaverPalette.wood)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("budgetMembers.memberRemovalSummary")
                     }
                 } else {
                     ForEach(memberViewModel.members) { member in
                         memberRow(member)
                     }
 
-                    Text("Only the budget owner can invite or remove members.")
+                    Text("Only the budget owner can invite members. Member removal is temporarily unavailable for everyone.")
                         .font(.caption)
                         .foregroundStyle(BudgetBeaverPalette.wood)
                 }
@@ -234,17 +230,14 @@ struct BudgetMembersView: View {
             Spacer(minLength: 8)
 
             if canManageMembers, member.role != .owner {
-                Button(role: .destructive) {
-                    deleteMember(member)
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(AppTheme.danger)
-                        .frame(width: 44, height: 44)
-                        .background(AppTheme.expenseTint, in: Circle())
-                }
-                .buttonStyle(PressableButtonStyle(scale: 0.94))
-                .accessibilityLabel("Remove \(member.displayName)")
+                let restriction = DestructiveActionGuardrails.memberRemoval(for: member)
+                Image(systemName: "lock.shield.fill")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(BudgetBeaverPalette.wood)
+                    .frame(width: 44, height: 44)
+                    .background(AppTheme.surfaceAlt, in: Circle())
+                    .accessibilityLabel("\(restriction.title). \(restriction.message)")
+                    .accessibilityIdentifier(restriction.accessibilityIdentifier)
             }
         }
         .padding(18)
@@ -297,74 +290,6 @@ struct BudgetMembersView: View {
         )
     }
 
-    private func deleteMembers(at offsets: IndexSet) {
-        do {
-            let membersToDelete = offsets.compactMap { memberViewModel.members[safe: $0] }
-            let result = try memberViewModel.removeMembers(at: offsets)
-            let deletedTransactionCount = deleteTransactions(
-                forMemberIds: result.removedMemberIds
-            )
-            membersToDelete.forEach {
-                cloudSyncStore.deleteMember(
-                    $0,
-                    userScopeId: authStore.currentUserScopeId,
-                    budgetScopeId: authStore.currentBudgetScopeId
-                )
-                if let authUserId = $0.authUserId {
-                    cloudSyncStore.revokeMembership(
-                        memberUserId: authUserId,
-                        userScopeId: authStore.currentUserScopeId,
-                        budgetScopeId: authStore.currentBudgetScopeId
-                    )
-                }
-            }
-            let syncToken = memberViewModel.pendingCloudSyncToken
-            cloudSyncStore.saveMembers(
-                memberViewModel.members,
-                userScopeId: authStore.currentUserScopeId,
-                budgetScopeId: authStore.currentBudgetScopeId,
-                onSuccess: {
-                    if let syncToken {
-                        memberViewModel.markCloudSyncSucceeded(syncToken)
-                    }
-                }
-            )
-
-            if result.didReassignActiveMember {
-                feedbackMessage = "Deleted member and \(deletedTransactionCount) related transactions. \"Using app as\" was switched to \(memberViewModel.activeMember.displayName)."
-            } else if deletedTransactionCount > 0 {
-                feedbackMessage = "Deleted member and \(deletedTransactionCount) related transactions."
-            }
-        } catch {
-            feedbackMessage = error.localizedDescription
-        }
-    }
-
-    private func deleteMember(_ member: BudgetMember) {
-        guard let index = memberViewModel.members.firstIndex(where: { $0.id == member.id }) else { return }
-        deleteMembers(at: IndexSet(integer: index))
-    }
-
-    private func deleteTransactions(forMemberIds ids: Set<UUID>) -> Int {
-        let budgetScopeId = authStore.currentBudgetScopeId
-        let toDelete = transactions.filter {
-            $0.ownerUserId == budgetScopeId && ids.contains($0.createdByMemberId)
-        }
-        toDelete.forEach { transaction in
-            cloudSyncStore.deleteTransaction(
-                transaction,
-                userScopeId: authStore.currentUserScopeId,
-                budgetScopeId: authStore.currentBudgetScopeId
-            )
-            modelContext.delete(transaction)
-        }
-        do {
-            try modelContext.save()
-        } catch {
-            cloudSyncStore.recordSyncIssue(error, context: "Deleting member transactions locally")
-        }
-        return toDelete.count
-    }
 }
 
 #Preview {
@@ -374,11 +299,5 @@ struct BudgetMembersView: View {
             .environmentObject(AuthSessionStore())
             .environmentObject(CloudSyncStore())
             .environmentObject(SettingsStore())
-    }
-}
-
-private extension Array {
-    subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
     }
 }

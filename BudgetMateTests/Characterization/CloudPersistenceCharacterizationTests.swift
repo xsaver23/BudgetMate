@@ -87,6 +87,10 @@ final class CloudPersistenceCharacterizationTests: XCTestCase {
         XCTAssertEqual(first["budgetScopeId"] as? String, expected.budgetScopeId)
 
         let defaults = BudgetMateTestFixtures.isolatedDefaults()
+        defaults.set(
+            CloudSyncStore.currentPendingCloudDeletionSafetyVersion,
+            forKey: CloudSyncStore.pendingCloudDeletionSafetyVersionKey
+        )
         defaults.set(encoded, forKey: CloudSyncStore.pendingCloudDeletionsKey)
         let restored = CloudSyncStore.loadPendingCloudDeletions(
             from: defaults,
@@ -98,6 +102,10 @@ final class CloudPersistenceCharacterizationTests: XCTestCase {
 
     func testCorruptPendingCloudDeletionDataRestoresAsEmpty() {
         let defaults = BudgetMateTestFixtures.isolatedDefaults()
+        defaults.set(
+            CloudSyncStore.currentPendingCloudDeletionSafetyVersion,
+            forKey: CloudSyncStore.pendingCloudDeletionSafetyVersionKey
+        )
         defaults.set(Data("not-json".utf8), forKey: CloudSyncStore.pendingCloudDeletionsKey)
 
         let restored = CloudSyncStore.loadPendingCloudDeletions(
@@ -106,5 +114,123 @@ final class CloudPersistenceCharacterizationTests: XCTestCase {
         )
 
         XCTAssertTrue(restored.isEmpty)
+    }
+
+    func testLegacyMemberRemovalBatchIsDiscardedBeforeItCanReplay() throws {
+        let defaults = BudgetMateTestFixtures.isolatedDefaults()
+        defaults.set(
+            CloudSyncStore.currentPendingCloudDeletionSafetyVersion,
+            forKey: CloudSyncStore.pendingCloudDeletionSafetyVersionKey
+        )
+        let sharedScope = BudgetMateTestFixtures.sharedBudgetID.uuidString
+        let personalScope = BudgetMateTestFixtures.personalBudgetID.uuidString
+        let userScope = BudgetMateTestFixtures.aliceUserID.uuidString
+        let legacyBatch = [
+            PendingCloudDeletion(
+                entity: .transaction,
+                recordId: BudgetMateTestFixtures.expenseTransactionID,
+                userScopeId: userScope,
+                budgetScopeId: sharedScope
+            ),
+            PendingCloudDeletion(
+                entity: .member,
+                recordId: BudgetMateTestFixtures.bobMemberID,
+                userScopeId: userScope,
+                budgetScopeId: sharedScope
+            ),
+            PendingCloudDeletion(
+                entity: .membership,
+                recordId: BudgetMateTestFixtures.bobUserID,
+                userScopeId: userScope,
+                budgetScopeId: sharedScope
+            ),
+            PendingCloudDeletion(
+                entity: .transaction,
+                recordId: BudgetMateTestFixtures.incomeTransactionID,
+                userScopeId: userScope,
+                budgetScopeId: personalScope
+            )
+        ]
+        defaults.set(
+            try JSONEncoder().encode(legacyBatch),
+            forKey: CloudSyncStore.pendingCloudDeletionsKey
+        )
+
+        let restored = CloudSyncStore.loadPendingCloudDeletions(
+            from: defaults,
+            key: CloudSyncStore.pendingCloudDeletionsKey
+        )
+
+        XCTAssertEqual(restored, [legacyBatch[3]])
+        let persistedData = try XCTUnwrap(
+            defaults.data(forKey: CloudSyncStore.pendingCloudDeletionsKey)
+        )
+        XCTAssertEqual(
+            try JSONDecoder().decode([PendingCloudDeletion].self, from: persistedData),
+            restored
+        )
+    }
+
+    func testLegacyMembershipOnlyBatchAlsoBlocksSameScopeReplay() throws {
+        let defaults = BudgetMateTestFixtures.isolatedDefaults()
+        defaults.set(
+            CloudSyncStore.currentPendingCloudDeletionSafetyVersion,
+            forKey: CloudSyncStore.pendingCloudDeletionSafetyVersionKey
+        )
+        let sharedScope = BudgetMateTestFixtures.sharedBudgetID.uuidString
+        let userScope = BudgetMateTestFixtures.aliceUserID.uuidString
+        let legacyBatch = [
+            PendingCloudDeletion(
+                entity: .settlement,
+                recordId: BudgetMateTestFixtures.settlementID,
+                userScopeId: userScope,
+                budgetScopeId: sharedScope
+            ),
+            PendingCloudDeletion(
+                entity: .membership,
+                recordId: BudgetMateTestFixtures.bobUserID,
+                userScopeId: userScope,
+                budgetScopeId: sharedScope
+            )
+        ]
+        defaults.set(
+            try JSONEncoder().encode(legacyBatch),
+            forKey: CloudSyncStore.pendingCloudDeletionsKey
+        )
+
+        let restored = CloudSyncStore.loadPendingCloudDeletions(
+            from: defaults,
+            key: CloudSyncStore.pendingCloudDeletionsKey
+        )
+
+        XCTAssertTrue(restored.isEmpty)
+    }
+
+    func testPreGuardrailTransactionOnlyPrefixIsDiscardedOnUpgrade() throws {
+        let defaults = BudgetMateTestFixtures.isolatedDefaults()
+        let legacyTransactionOnlyPrefix = [
+            PendingCloudDeletion(
+                entity: .transaction,
+                recordId: BudgetMateTestFixtures.expenseTransactionID,
+                userScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+                budgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString
+            )
+        ]
+        defaults.set(
+            try JSONEncoder().encode(legacyTransactionOnlyPrefix),
+            forKey: CloudSyncStore.pendingCloudDeletionsKey
+        )
+
+        let restored = CloudSyncStore.loadPendingCloudDeletions(
+            from: defaults,
+            key: CloudSyncStore.pendingCloudDeletionsKey
+        )
+
+        XCTAssertTrue(restored.isEmpty)
+        XCTAssertNil(defaults.data(forKey: CloudSyncStore.pendingCloudDeletionsKey))
+        XCTAssertEqual(
+            defaults.integer(forKey: CloudSyncStore.pendingCloudDeletionSafetyVersionKey),
+            CloudSyncStore.currentPendingCloudDeletionSafetyVersion
+        )
     }
 }
