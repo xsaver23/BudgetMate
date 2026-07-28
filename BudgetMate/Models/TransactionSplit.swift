@@ -3,6 +3,7 @@ import SwiftData
 
 /// One member's share of a split expense. A transaction with no splits is a
 /// regular (non-split) transaction fully attributed to its payer.
+// Historical BudgetMateSchemaV1 model. Its persisted shape is immutable.
 @Model
 final class TransactionSplit {
     var id: UUID
