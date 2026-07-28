@@ -1,0 +1,102 @@
+name: iOS tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ios-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios:
+    name: Build and test iOS
+    runs-on: macos-15
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Select an installed Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          for candidate in \
+            /Applications/Xcode_16.4.app \
+            /Applications/Xcode_16.3.app \
+            /Applications/Xcode.app; do
+            if [[ -d "${candidate}/Contents/Developer" ]]; then
+              sudo xcode-select --switch "${candidate}/Contents/Developer"
+              break
+            fi
+          done
+          xcodebuild -version
+          swift --version
+
+      - name: Verify checked-in secret safety
+        run: ./scripts/verify_ios_secrets.sh
+
+      - name: Resolve Swift packages
+        run: >-
+          xcodebuild
+          -project BudgetMate.xcodeproj
+          -scheme BudgetMate
+          -resolvePackageDependencies
+
+      - name: Select an available iPhone simulator
+        id: simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          simulator_id="$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ { print $2; exit }')"
+          if [[ -z "${simulator_id}" ]]; then
+            echo "No available iPhone simulator was found." >&2
+            xcrun simctl list devices available >&2
+            exit 1
+          fi
+          echo "destination=platform=iOS Simulator,id=${simulator_id}" >> "${GITHUB_OUTPUT}"
+          echo "Using simulator ${simulator_id}"
+
+      - name: Build unsigned simulator app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project BudgetMate.xcodeproj \
+            -scheme BudgetMate \
+            -configuration Debug \
+            -destination "${{ steps.simulator.outputs.destination }}" \
+            -derivedDataPath "${RUNNER_TEMP}/BudgetMateDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build 2>&1 | tee "${RUNNER_TEMP}/budgetmate-build.log"
+
+      - name: Run native unit and UI tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project BudgetMate.xcodeproj \
+            -scheme BudgetMate \
+            -configuration Debug \
+            -destination "${{ steps.simulator.outputs.destination }}" \
+            -derivedDataPath "${RUNNER_TEMP}/BudgetMateDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            test \
+            -only-testing:BudgetMateTests \
+            -only-testing:BudgetMateUITests 2>&1 | tee "${RUNNER_TEMP}/budgetmate-tests.log"
+
+      - name: Upload build and test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: budgetmate-ios-diagnostics
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/budgetmate-build.log
+            ${{ runner.temp }}/budgetmate-tests.log
+            ${{ runner.temp }}/BudgetMateDerivedData/Logs/Test/*.xcresult
