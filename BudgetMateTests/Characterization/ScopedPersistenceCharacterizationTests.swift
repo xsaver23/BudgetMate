@@ -170,4 +170,100 @@ final class ScopedPersistenceCharacterizationTests: XCTestCase {
             XCTAssertTrue(restriction.message.localizedCaseInsensitiveContains("temporarily unavailable"))
         }
     }
+
+    func testPersonalBudgetRecordMutationsRemainAvailable() {
+        let decision = SharedRecordMutationCapability.decision(
+            currentUserScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+            activeBudgetScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+            recordBudgetScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+            members: []
+        )
+
+        XCTAssertTrue(decision.isAllowed)
+        XCTAssertEqual(decision.reason, .personalBudget)
+        XCTAssertNil(decision.readOnlyMessage)
+    }
+
+    func testAuthenticatedHouseholdOwnerCanMutateSharedRecords() {
+        let decision = SharedRecordMutationCapability.decision(
+            currentUserScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+            activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            recordBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            members: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob]
+        )
+
+        XCTAssertTrue(decision.isAllowed)
+        XCTAssertEqual(decision.reason, .householdOwner)
+    }
+
+    func testRegularHouseholdMemberCannotMutateSharedRecords() {
+        let decision = SharedRecordMutationCapability.decision(
+            currentUserScopeId: BudgetMateTestFixtures.bobUserID.uuidString,
+            activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            recordBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            members: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob]
+        )
+
+        XCTAssertFalse(decision.isAllowed)
+        XCTAssertEqual(decision.reason, .restrictedSharedMember)
+        XCTAssertEqual(
+            decision.readOnlyMessage,
+            "Only the household owner can edit or delete shared records right now."
+        )
+    }
+
+    func testUnverifiedOwnerDisplayRoleDoesNotGrantSharedMutationAuthority() {
+        let unmatchedOwner = BudgetMember(
+            displayName: "Unverified Owner",
+            email: "alice@example.com",
+            initials: "UO",
+            color: "#3B82F6",
+            authUserId: nil,
+            role: .owner,
+            inviteStatus: .active
+        )
+        let decision = SharedRecordMutationCapability.decision(
+            currentUserScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+            activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            recordBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            members: [unmatchedOwner]
+        )
+
+        XCTAssertFalse(decision.isAllowed)
+        XCTAssertEqual(decision.reason, .restrictedSharedMember)
+    }
+
+    func testAmbiguousAuthenticatedMemberIdentityFailsClosed() {
+        let legacyAlias = BudgetMember(
+            id: BudgetMateTestFixtures.aliceUserID,
+            displayName: "Legacy Alice",
+            email: "alice@example.com",
+            initials: "LA",
+            color: "#F97316",
+            authUserId: nil,
+            role: .member,
+            inviteStatus: .active
+        )
+        let decision = SharedRecordMutationCapability.decision(
+            currentUserScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+            activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            recordBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            members: [BudgetMateTestFixtures.alice, legacyAlias]
+        )
+
+        XCTAssertFalse(decision.isAllowed)
+        XCTAssertEqual(decision.reason, .restrictedSharedMember)
+    }
+
+    func testRecordFromInactiveBudgetFailsClosed() {
+        let decision = SharedRecordMutationCapability.decision(
+            currentUserScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+            activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            recordBudgetScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+            members: [BudgetMateTestFixtures.alice]
+        )
+
+        XCTAssertFalse(decision.isAllowed)
+        XCTAssertEqual(decision.reason, .restrictedSharedMember)
+    }
 }

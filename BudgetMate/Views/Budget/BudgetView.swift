@@ -78,6 +78,15 @@ struct BudgetView: View {
         return builtInCategories + customCategories
     }
 
+    private var recordMutationDecision: RecordMutationDecision {
+        SharedRecordMutationCapability.decision(
+            currentUserScopeId: authStore.currentUserScopeId,
+            activeBudgetScopeId: authStore.currentBudgetScopeId,
+            recordBudgetScopeId: budgetScopeId,
+            members: memberViewModel.members
+        )
+    }
+
     private var hasConfiguredCategoryBudgets: Bool {
         categories.contains { configuredBudget(for: $0) > 0 }
     }
@@ -243,6 +252,16 @@ struct BudgetView: View {
                     .font(.caption)
                     .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.7))
 
+                if isEditingCategories, !recordMutationDecision.isAllowed {
+                    Label(
+                        "Only the household owner can rename or remove shared transaction categories.",
+                        systemImage: "lock.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.78))
+                    .accessibilityIdentifier("budget.sharedCategoryReadOnly")
+                }
+
                 if !hasConfiguredCategoryBudgets && !isEditingCategories {
                     budgetEmptyState(
                         systemImage: "slider.horizontal.below.rectangle",
@@ -285,20 +304,26 @@ struct BudgetView: View {
                 )
 
                 if isEditingCategories {
-                    Button {
-                        categoryBeingEdited = category
-                        isShowingCategoryEditor = true
-                    } label: {
-                        HStack(spacing: 6) {
-                            Text(category.displayName)
-                                .font(.subheadline.weight(.bold))
-                            Image(systemName: "pencil")
-                                .font(.caption.weight(.semibold))
+                    if recordMutationDecision.isAllowed {
+                        Button {
+                            categoryBeingEdited = category
+                            isShowingCategoryEditor = true
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text(category.displayName)
+                                    .font(.subheadline.weight(.bold))
+                                Image(systemName: "pencil")
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .foregroundStyle(BudgetBeaverPalette.ink)
                         }
+                        .buttonStyle(.plain)
+                        .buttonStyle(PressableButtonStyle(scale: 0.97))
+                    } else {
+                        Text(category.displayName)
+                            .font(.subheadline.weight(.bold))
                         .foregroundStyle(BudgetBeaverPalette.ink)
                     }
-                    .buttonStyle(.plain)
-                    .buttonStyle(PressableButtonStyle(scale: 0.97))
                 } else {
                     Text(category.displayName)
                         .font(.subheadline.weight(.bold))
@@ -307,7 +332,9 @@ struct BudgetView: View {
 
                 Spacer()
 
-                if isEditingCategories, !category.isProtectedCategory {
+                if isEditingCategories,
+                   !category.isProtectedCategory,
+                   recordMutationDecision.isAllowed {
                     Button(role: .destructive) {
                         removeCategory(category)
                     } label: {
@@ -516,6 +543,12 @@ struct BudgetView: View {
 
         let newCategory = TransactionCategory(rawValue: rawValue)
         let oldCategory = categoryBeingEdited
+        if let oldCategory,
+           oldCategory != newCategory,
+           !recordMutationDecision.isAllowed {
+            saveMessage = recordMutationDecision.readOnlyMessage
+            return
+        }
         let duplicate = categories.contains { category in
             category != oldCategory &&
             (
@@ -545,6 +578,10 @@ struct BudgetView: View {
 
     private func removeCategory(_ category: TransactionCategory) {
         guard !category.isProtectedCategory else { return }
+        guard recordMutationDecision.isAllowed else {
+            saveMessage = recordMutationDecision.readOnlyMessage
+            return
+        }
 
         settingsStore.removeCategory(category)
         categoryBudgetInputs.removeValue(forKey: category.rawValue)
