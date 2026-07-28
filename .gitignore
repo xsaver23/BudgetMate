@@ -17,6 +17,12 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Reproducible local tool caches
+/.wrangler/
+/supabase/.temp/
+/web/.wrangler/
+/web/supabase/.temp/
+
 # Local configuration and secrets
 .env
 .env.*
