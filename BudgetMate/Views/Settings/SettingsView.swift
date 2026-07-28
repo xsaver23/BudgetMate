@@ -10,19 +10,14 @@ struct SettingsView: View {
     @Environment(\.modelContext) private var modelContext
     let budgetScopeId: String
     @Query private var transactions: [Transaction]
-    @Query private var settlements: [Settlement]
 
     init(budgetScopeId: String) {
         self.budgetScopeId = budgetScopeId
         _transactions = Query(
             filter: #Predicate<Transaction> { $0.ownerUserId == budgetScopeId }
         )
-        _settlements = Query(
-            filter: #Predicate<Settlement> { $0.ownerUserId == budgetScopeId }
-        )
     }
 
-    @State private var isShowingClearConfirmation = false
     @State private var isShowingLeaveBudgetConfirmation = false
     @State private var isShowingProfileEditor = false
     @State private var clearFeedbackMessage: String?
@@ -32,7 +27,6 @@ struct SettingsView: View {
 
     // Queries are already scoped to the active budget in init.
     private var scopedTransactions: [Transaction] { transactions }
-    private var scopedSettlements: [Settlement] { settlements }
 
     private var recurringExpenses: [Transaction] {
         scopedTransactions
@@ -260,9 +254,7 @@ struct SettingsView: View {
 
                         Divider()
 
-                        rowButton("Clear All Transactions", tint: AppTheme.danger) {
-                            isShowingClearConfirmation = true
-                        }
+                        unavailableActionRow(DestructiveActionGuardrails.clearAll)
                     }
                 }
                 .padding(.horizontal)
@@ -280,17 +272,6 @@ struct SettingsView: View {
             }
             .task(id: "\(authStore.userEmail ?? "")-\(authStore.currentBudgetScopeId)") {
                 await refreshSharedBudgetSection()
-            }
-            .fullScreenCover(isPresented: $isShowingClearConfirmation) {
-                ClearTransactionsConfirmationView(
-                    onCancel: {
-                        isShowingClearConfirmation = false
-                    },
-                    onConfirm: {
-                        isShowingClearConfirmation = false
-                        clearAllTransactions()
-                    }
-                )
             }
             .sheet(isPresented: $isShowingProfileEditor) {
                 EditProfileNameView(
@@ -433,6 +414,31 @@ struct SettingsView: View {
         .buttonStyle(PressableButtonStyle(scale: 0.985))
     }
 
+    private func unavailableActionRow(_ restriction: RestrictedDestructiveAction) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "lock.shield.fill")
+                .font(settingsActionFont)
+                .foregroundStyle(AppTheme.danger)
+                .frame(width: 24, height: 24)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(restriction.title)
+                    .font(settingsActionFont)
+                    .foregroundStyle(AppTheme.danger)
+
+                Text(restriction.message)
+                    .font(settingsHelperFont)
+                    .foregroundStyle(BudgetBeaverPalette.wood)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 8)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(restriction.title). \(restriction.message)")
+        .accessibilityIdentifier(restriction.accessibilityIdentifier)
+    }
+
     private func syncFieldsFromStore() {
     }
 
@@ -465,42 +471,6 @@ struct SettingsView: View {
         saveCurrentMembersToCloud()
         isShowingProfileEditor = false
         clearFeedbackMessage = "Profile name updated."
-    }
-
-    private func clearAllTransactions() {
-        let transactionCount = scopedTransactions.count
-        let settlementCount = scopedSettlements.count
-
-        Task {
-            do {
-                try await cloudSyncStore.deleteAllBudgetDataNow(
-                    userScopeId: authStore.currentUserScopeId,
-                    budgetScopeId: authStore.currentBudgetScopeId
-                )
-                scopedTransactions.forEach { modelContext.delete($0) }
-                scopedSettlements.forEach { modelContext.delete($0) }
-                do {
-                    try modelContext.save()
-                } catch {
-                    cloudSyncStore.recordSyncIssue(error, context: "Clearing local budget data")
-                }
-
-                if transactionCount == 0 && settlementCount == 0 {
-                    clearFeedbackMessage = "Nothing to clear."
-                } else {
-                    var parts: [String] = []
-                    if transactionCount > 0 {
-                        parts.append("\(transactionCount) transaction\(transactionCount == 1 ? "" : "s")")
-                    }
-                    if settlementCount > 0 {
-                        parts.append("\(settlementCount) settle-up record\(settlementCount == 1 ? "" : "s")")
-                    }
-                    clearFeedbackMessage = "Cleared " + parts.joined(separator: " and ") + "."
-                }
-            } catch {
-                clearFeedbackMessage = cloudSyncStore.userFacingMessage(for: error)
-            }
-        }
     }
 
     private func leaveCurrentBudget() {

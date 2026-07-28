@@ -32,6 +32,8 @@ final class CloudSyncStore: ObservableObject {
     // Internal so the test foundation can verify the durable codec without
     // reaching into a live Supabase client or exposing a public API.
     static let pendingCloudDeletionsKey = "budgetmate.pendingCloudDeletions"
+    static let pendingCloudDeletionSafetyVersionKey = "budgetmate.pendingCloudDeletions.safetyVersion"
+    static let currentPendingCloudDeletionSafetyVersion = 1
     private var activeFullSync: ActiveFullSync?
     private var pendingMutationTask: Task<Void, Never>?
     private var pendingMutationToken: UUID?
@@ -670,11 +672,57 @@ final class CloudSyncStore: ObservableObject {
         from userDefaults: UserDefaults,
         key: String
     ) -> [PendingCloudDeletion] {
+        let safetyVersionKey = key == Self.pendingCloudDeletionsKey
+            ? Self.pendingCloudDeletionSafetyVersionKey
+            : "\(key).safetyVersion"
+        let storedSafetyVersion = userDefaults.integer(forKey: safetyVersionKey)
+
+        // The pre-00B queue did not record why a transaction was deleted. The
+        // old member-removal flow could therefore persist a transaction-only
+        // prefix before it reached its member marker. Clear every pre-00B job
+        // once on upgrade; a recoverable remote row may reappear, but unknown
+        // legacy work can no longer permanently erase history.
+        guard storedSafetyVersion >= Self.currentPendingCloudDeletionSafetyVersion else {
+            userDefaults.removeObject(forKey: key)
+            userDefaults.set(
+                Self.currentPendingCloudDeletionSafetyVersion,
+                forKey: safetyVersionKey
+            )
+            return []
+        }
+
         guard let data = userDefaults.data(forKey: key),
               let deletions = try? JSONDecoder().decode([PendingCloudDeletion].self, from: data) else {
             return []
         }
-        return deletions
+
+        // PR 00B removes the legacy UI that queued member, membership, and
+        // member-linked transaction deletions as one non-atomic batch. Those
+        // legacy records have no origin metadata, so preserve data on upgrade:
+        // if a scope contains either lifecycle deletion, discard the entire
+        // pending batch for that scope instead of replaying a partial history
+        // deletion. Standalone record deletions in other scopes stay queued.
+        let unsafeScopeKeys = Set(
+            deletions.compactMap { deletion -> String? in
+                switch deletion.entity {
+                case .member, .membership:
+                    return deletion.scopeKey
+                case .transaction, .settlement:
+                    return nil
+                }
+            }
+        )
+        guard !unsafeScopeKeys.isEmpty else {
+            return deletions
+        }
+
+        let sanitized = deletions.filter { !unsafeScopeKeys.contains($0.scopeKey) }
+        if let sanitizedData = try? JSONEncoder().encode(sanitized) {
+            userDefaults.set(sanitizedData, forKey: key)
+        } else {
+            userDefaults.removeObject(forKey: key)
+        }
+        return sanitized
     }
 
     @discardableResult
@@ -793,4 +841,8 @@ struct PendingCloudDeletion: Codable, Hashable {
     let recordId: UUID
     let userScopeId: String
     let budgetScopeId: String
+
+    fileprivate var scopeKey: String {
+        "\(userScopeId)|\(budgetScopeId)"
+    }
 }

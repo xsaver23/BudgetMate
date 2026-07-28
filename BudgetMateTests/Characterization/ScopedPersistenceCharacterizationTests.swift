@@ -112,4 +112,62 @@ final class ScopedPersistenceCharacterizationTests: XCTestCase {
             BudgetMateTestFixtures.invitedMemberID
         ])
     }
+
+    func testClearAllGuardrailHasNoEnabledActionAndExplainsRecoveryRequirement() {
+        let restriction = DestructiveActionGuardrails.clearAll
+
+        XCTAssertFalse(restriction.isEnabled)
+        XCTAssertEqual(restriction.title, "Clear All Transactions")
+        XCTAssertTrue(restriction.message.localizedCaseInsensitiveContains("temporarily unavailable"))
+        XCTAssertTrue(restriction.message.localizedCaseInsensitiveContains("atomic"))
+        XCTAssertTrue(restriction.message.localizedCaseInsensitiveContains("recoverable"))
+        XCTAssertEqual(restriction.accessibilityIdentifier, "settings.clearAllUnavailable")
+    }
+
+    func testAcceptedMemberRemovalGuardrailProtectsSharedTransactionHistory() {
+        let restriction = DestructiveActionGuardrails.memberRemoval(for: BudgetMateTestFixtures.bob)
+
+        XCTAssertFalse(restriction.isEnabled)
+        XCTAssertTrue(restriction.title.contains(BudgetMateTestFixtures.bob.displayName))
+        XCTAssertTrue(restriction.message.localizedCaseInsensitiveContains("accepted member"))
+        XCTAssertTrue(restriction.message.localizedCaseInsensitiveContains("transaction history"))
+        XCTAssertTrue(restriction.accessibilityIdentifier.contains("acceptedRemovalUnavailable"))
+    }
+
+    func testInvitePlaceholderRemovalIsAlsoUnavailableUntilItIsProvenHistorySafe() {
+        let restriction = DestructiveActionGuardrails.memberRemoval(for: BudgetMateTestFixtures.invitedMember)
+
+        XCTAssertFalse(restriction.isEnabled)
+        XCTAssertTrue(restriction.title.localizedCaseInsensitiveContains("cancel invite"))
+        XCTAssertTrue(restriction.message.localizedCaseInsensitiveContains("temporarily unavailable"))
+        XCTAssertTrue(restriction.message.localizedCaseInsensitiveContains("history-safe"))
+        XCTAssertTrue(restriction.accessibilityIdentifier.contains("inviteCancellationUnavailable"))
+    }
+
+    func testMemberRemovalGuardrailBlocksLegacyAndAmbiguousIdentityShapes() {
+        let activeWithoutAuthIdentity = BudgetMember(
+            displayName: "Legacy Member",
+            email: "legacy@example.com",
+            initials: "LM",
+            color: "#3B82F6",
+            authUserId: nil,
+            role: .member,
+            inviteStatus: .active
+        )
+        let pendingWithAuthIdentity = BudgetMember(
+            displayName: "Ambiguous Member",
+            email: "ambiguous@example.com",
+            initials: "AM",
+            color: "#F97316",
+            authUserId: BudgetMateTestFixtures.carolUserID,
+            role: .member,
+            inviteStatus: .pending
+        )
+
+        for member in [activeWithoutAuthIdentity, pendingWithAuthIdentity] {
+            let restriction = DestructiveActionGuardrails.memberRemoval(for: member)
+            XCTAssertFalse(restriction.isEnabled)
+            XCTAssertTrue(restriction.message.localizedCaseInsensitiveContains("temporarily unavailable"))
+        }
+    }
 }
