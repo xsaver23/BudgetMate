@@ -311,6 +311,15 @@ struct BudgetMateApp: App {
         autoSyncScopesInFlight.insert(syncKey)
         defer { autoSyncScopesInFlight.remove(syncKey) }
 
+        guard await observeCurrencyCloudBaselineIfNeeded(
+            userScopeId: userScopeId,
+            budgetScopeId: budgetScopeId
+        ) else {
+            guard !Task.isCancelled else { return }
+            recordAutoSyncFailure(for: syncKey)
+            return
+        }
+
         let context = persistenceController.container.mainContext
         let transactions: [Transaction]
         let settlements: [Settlement]
@@ -337,6 +346,9 @@ struct BudgetMateApp: App {
         } catch {
             cloudSyncStore.recordSyncIssue(error, context: "Loading local data for sync")
             return
+        }
+        if !transactions.isEmpty || !settlements.isEmpty {
+            settingsStore.recordFinancialHistoryObserved()
         }
 
         let settingsSyncToken = settingsStore.pendingCloudSyncToken
@@ -380,11 +392,78 @@ struct BudgetMateApp: App {
 
         if settingsStore.pendingCloudSyncToken == nil,
            let cloudSettings = summary.settings {
-            settingsStore.replaceSettings(cloudSettings)
+            settingsStore.replaceSettings(
+                cloudSettings,
+                preservingEstablishedCurrency: currencyProtectionRequired(
+                    in: context,
+                    budgetScopeId: budgetScopeId,
+                    incomingSettings: cloudSettings
+                )
+            )
         }
         if memberViewModel.pendingCloudSyncToken == nil,
            !summary.members.isEmpty {
             memberViewModel.replaceMembers(with: summary.members)
+        }
+    }
+
+    @MainActor
+    private func currencyProtectionRequired(
+        in context: ModelContext,
+        budgetScopeId: String,
+        incomingSettings: BudgetSettings
+    ) -> Bool {
+        guard settingsStore.hasEstablishedCurrencyConflict(with: incomingSettings) else {
+            return false
+        }
+
+        do {
+            let categoryBudgetKeys = Set(settingsStore.settings.categoryBudgets.keys)
+                .union(incomingSettings.categoryBudgets.keys)
+
+            return try CurrencyChangeGuardrail.snapshot(
+                in: context,
+                budgetScopeId: budgetScopeId,
+                categoryBudgetKeys: Array(categoryBudgetKeys),
+                hasPreviouslyObservedFinancialHistory: settingsStore.hasObservedFinancialHistory
+            ).state != .knownEmpty
+        } catch {
+            // A failed local read cannot prove that the household is empty.
+            return true
+        }
+    }
+
+    @MainActor
+    private func observeCurrencyCloudBaselineIfNeeded(
+        userScopeId: String,
+        budgetScopeId: String
+    ) async -> Bool {
+        guard !settingsStore.hasObservedCloudSettingsBaseline else {
+            return true
+        }
+
+        do {
+            let baseline = try await cloudSyncStore.fetchCurrencyBaseline(
+                userScopeId: userScopeId,
+                budgetScopeId: budgetScopeId
+            )
+            guard authStore.currentUserScopeId == userScopeId,
+                  authStore.currentBudgetScopeId == budgetScopeId else {
+                return false
+            }
+            settingsStore.recordCloudSettingsBaseline(
+                baseline.settings,
+                hasRemoteFinancialRecords:
+                    baseline.hasTransactionOrSplit ||
+                    baseline.hasSettlement
+            )
+            return true
+        } catch {
+            cloudSyncStore.recordSyncIssue(
+                error,
+                context: "Validating currency settings baseline"
+            )
+            return false
         }
     }
 

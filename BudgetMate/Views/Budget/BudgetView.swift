@@ -613,6 +613,10 @@ struct BudgetView: View {
     }
 
     private func saveSettingsToCloud() {
+        guard settingsStore.hasObservedCloudSettingsBaseline else {
+            return
+        }
+
         let syncToken = settingsStore.pendingCloudSyncToken
         cloudSyncStore.saveSettings(
             settingsStore.settings,

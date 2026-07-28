@@ -14,27 +14,33 @@ final class SettingsStore: ObservableObject {
     private let decoder = JSONDecoder()
     private let userDefaults: UserDefaults
     private var currentUserScopeId = "local"
+    private var hasEstablishedCurrencyBaseline: Bool
     private let cloudDirtyKey = "budgetmate.settingsCloudDirty"
     private let cloudRevisionKey = "budgetmate.settingsCloudRevision"
+    private let currencyCloudBaselineObservedKey = "budgetmate.currencyCloudBaselineObserved"
+    private let financialHistoryObservedKey = "budgetmate.financialHistoryObserved"
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
-
-        settings = Self.loadSettings(
+        let storedSettings = Self.storedSettings(
             userDefaults: userDefaults,
-            decoder: decoder,
+            decoder: JSONDecoder(),
             key: Self.settingsKey(baseKey: baseSettingsKey, userScopeId: currentUserScopeId)
         )
+        settings = storedSettings ?? .default
+        hasEstablishedCurrencyBaseline = storedSettings != nil
     }
 
     func switchUser(to userScopeId: String) {
         guard currentUserScopeId != userScopeId else { return }
         currentUserScopeId = userScopeId
-        settings = Self.loadSettings(
+        let storedSettings = Self.storedSettings(
             userDefaults: userDefaults,
             decoder: decoder,
             key: Self.settingsKey(baseKey: baseSettingsKey, userScopeId: userScopeId)
         )
+        settings = storedSettings ?? .default
+        hasEstablishedCurrencyBaseline = storedSettings != nil
     }
 
     func updateMonthlyBudget(_ amount: Double) {
@@ -51,13 +57,85 @@ final class SettingsStore: ObservableObject {
         persist()
     }
 
-    func replaceSettings(_ settings: BudgetSettings) {
-        if self.settings != settings {
-            self.settings = settings
-            persist(markCloudDirty: false)
+    func replaceSettings(
+        _ incomingSettings: BudgetSettings,
+        preservingEstablishedCurrency shouldPreserveCurrency: Bool
+    ) {
+        var resolvedSettings = incomingSettings
+        let hasCurrencyConflict =
+            shouldPreserveCurrency &&
+            hasEstablishedCurrencyBaseline &&
+            incomingSettings.currencyCode != settings.currencyCode
+
+        if hasCurrencyConflict {
+            resolvedSettings.currencyCode = settings.currencyCode
+        }
+
+        if settings != resolvedSettings ||
+            hasCurrencyConflict ||
+            !hasEstablishedCurrencyBaseline {
+            settings = resolvedSettings
+            // When an older client changed the cloud currency, keep the
+            // established local baseline and queue it to repair the cloud row.
+            persist(markCloudDirty: hasCurrencyConflict)
         } else {
             markCurrentScopeCloudClean()
         }
+    }
+
+    func hasEstablishedCurrencyConflict(with incomingSettings: BudgetSettings) -> Bool {
+        hasEstablishedCurrencyBaseline &&
+            incomingSettings.currencyCode != settings.currencyCode
+    }
+
+    var hasObservedCloudSettingsBaseline: Bool {
+        userDefaults.bool(
+            forKey: scopedCurrencyCloudBaselineObservedKey(for: currentUserScopeId)
+        )
+    }
+
+    var hasObservedFinancialHistory: Bool {
+        userDefaults.bool(
+            forKey: scopedFinancialHistoryObservedKey(for: currentUserScopeId)
+        )
+    }
+
+    func recordCloudSettingsBaseline(
+        _ cloudSettings: BudgetSettings?,
+        hasRemoteFinancialRecords: Bool = false
+    ) {
+        userDefaults.set(
+            true,
+            forKey: scopedCurrencyCloudBaselineObservedKey(for: currentUserScopeId)
+        )
+        let hasRemoteFinancialHistory =
+            hasRemoteFinancialRecords ||
+            cloudSettings?.categoryBudgets.isEmpty == false
+        guard hasRemoteFinancialHistory else {
+            return
+        }
+
+        let hadPendingLocalChanges = pendingCloudSyncToken != nil
+        recordFinancialHistoryObserved()
+        guard let cloudSettings else {
+            return
+        }
+        guard settings.currencyCode != cloudSettings.currencyCode else {
+            return
+        }
+
+        // Remote financial records prove that the household already has a
+        // currency baseline. Keep unrelated local edits pending, but never let
+        // a pre-hydration default or stale currency overwrite that code.
+        settings.currencyCode = cloudSettings.currencyCode
+        persist(markCloudDirty: hadPendingLocalChanges)
+    }
+
+    func recordFinancialHistoryObserved() {
+        userDefaults.set(
+            true,
+            forKey: scopedFinancialHistoryObservedKey(for: currentUserScopeId)
+        )
     }
 
     var pendingCloudSyncToken: SettingsCloudSyncToken? {
@@ -206,14 +284,22 @@ final class SettingsStore: ObservableObject {
         persist()
     }
 
-    func resetSettings() {
+    func resetSettings(preservingCurrencyCode: Bool = false) {
+        let currentCurrencyCode = settings.currencyCode
         settings = .default
+        if preservingCurrencyCode {
+            settings.currencyCode = currentCurrencyCode
+        }
         persist()
     }
 
     private func persist(markCloudDirty: Bool = true) {
         guard let data = try? encoder.encode(settings) else { return }
         userDefaults.set(data, forKey: Self.settingsKey(baseKey: baseSettingsKey, userScopeId: currentUserScopeId))
+        hasEstablishedCurrencyBaseline = true
+        if !settings.categoryBudgets.isEmpty {
+            recordFinancialHistoryObserved()
+        }
         if markCloudDirty {
             let revisionKey = scopedCloudRevisionKey(for: currentUserScopeId)
             userDefaults.set(userDefaults.integer(forKey: revisionKey) + 1, forKey: revisionKey)
@@ -235,19 +321,27 @@ final class SettingsStore: ObservableObject {
         "\(cloudRevisionKey).\(scopeId)"
     }
 
+    private func scopedCurrencyCloudBaselineObservedKey(for scopeId: String) -> String {
+        "\(currencyCloudBaselineObservedKey).\(scopeId)"
+    }
+
+    private func scopedFinancialHistoryObservedKey(for scopeId: String) -> String {
+        "\(financialHistoryObservedKey).\(scopeId)"
+    }
+
     private static func settingsKey(baseKey: String, userScopeId: String) -> String {
         "\(baseKey).\(userScopeId)"
     }
 
-    private static func loadSettings(
+    private static func storedSettings(
         userDefaults: UserDefaults,
         decoder: JSONDecoder,
         key: String
-    ) -> BudgetSettings {
+    ) -> BudgetSettings? {
         if let data = userDefaults.data(forKey: key),
            let decoded = try? decoder.decode(BudgetSettings.self, from: data) {
             return decoded
         }
-        return .default
+        return nil
     }
 }

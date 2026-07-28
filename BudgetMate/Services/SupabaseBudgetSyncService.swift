@@ -30,6 +30,22 @@ struct CloudBudgetSyncSummary {
     }
 }
 
+struct CloudCurrencyBaselineSnapshot {
+    let settings: BudgetSettings?
+    let hasTransactionOrSplit: Bool
+    let hasSettlement: Bool
+
+    var hasFinancialHistory: Bool {
+        settings?.categoryBudgets.isEmpty == false ||
+            hasTransactionOrSplit ||
+            hasSettlement
+    }
+}
+
+private struct CloudRecordIdentityRow: Decodable {
+    let id: UUID
+}
+
 enum SupabaseBudgetSyncError: LocalizedError {
     case missingUser
     case notBudgetOwner
@@ -924,6 +940,40 @@ final class SupabaseBudgetSyncService {
             .value
 
         return rows.first?.makeSettings()
+    }
+
+    func fetchCurrencyBaseline(
+        userScopeId: String,
+        budgetScopeId: String? = nil
+    ) async throws -> CloudCurrencyBaselineSnapshot {
+        guard let userId = UUID(uuidString: userScopeId) else {
+            throw SupabaseBudgetSyncError.missingUser
+        }
+        let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
+        let settings = try await fetchSettings(
+            userScopeId: userScopeId,
+            budgetScopeId: budgetId.uuidString
+        )
+        let transactionRows: [CloudRecordIdentityRow] = try await client
+            .from("budget_transactions")
+            .select("id")
+            .eq("budget_id", value: budgetId)
+            .limit(1)
+            .execute()
+            .value
+        let settlementRows: [CloudRecordIdentityRow] = try await client
+            .from("budget_settlements")
+            .select("id")
+            .eq("budget_id", value: budgetId)
+            .limit(1)
+            .execute()
+            .value
+
+        return CloudCurrencyBaselineSnapshot(
+            settings: settings,
+            hasTransactionOrSplit: !transactionRows.isEmpty,
+            hasSettlement: !settlementRows.isEmpty
+        )
     }
 
     func upsertSettings(_ settings: BudgetSettings, userScopeId: String, budgetScopeId: String? = nil) async throws {

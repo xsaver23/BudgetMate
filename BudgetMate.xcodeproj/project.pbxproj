@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		00B7B6C4A4B747928095F295 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8193DE58AE5D4F869D585E51 /* Assets.xcassets */; };
 		00C000000000000000000002 /* RecordMutationCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00C000000000000000000001 /* RecordMutationCapability.swift */; };
+		00D000000000000000000002 /* CurrencyChangeGuardrail.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00D000000000000000000001 /* CurrencyChangeGuardrail.swift */; };
 		01C45EA17D4867C98032DDEC /* BudgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A1FC905A9F16321E1F78B89 /* BudgetView.swift */; };
 		04EBBEF2DC5D653E00C11553 /* CloudSyncStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C1FF8CAF3956F5439C907B /* CloudSyncStore.swift */; };
 		0CFD806005C4C0E4C5A5E519 /* Settlement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5236CAB74F2EBB8C4E6B245E /* Settlement.swift */; };
@@ -110,6 +111,7 @@
 
 /* Begin PBXFileReference section */
 		00C000000000000000000001 /* RecordMutationCapability.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RecordMutationCapability.swift; path = Utilities/RecordMutationCapability.swift; sourceTree = "<group>"; };
+		00D000000000000000000001 /* CurrencyChangeGuardrail.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CurrencyChangeGuardrail.swift; path = Utilities/CurrencyChangeGuardrail.swift; sourceTree = "<group>"; };
 		00CFD35A06272805C431F28C /* FirstRunIntroView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FirstRunIntroView.swift; path = Views/Onboarding/FirstRunIntroView.swift; sourceTree = "<group>"; };
 		0295C0D6BBB4FA2FAC7AC147 /* TransactionRowView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TransactionRowView.swift; path = Components/TransactionRowView.swift; sourceTree = "<group>"; };
 		04BCD5E086B1D469BC4FE6D2 /* TransactionType.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TransactionType.swift; path = Models/TransactionType.swift; sourceTree = "<group>"; };
@@ -274,6 +276,7 @@
 				3820979D6FDC1013E67248AA /* TransactionFlowCoordinator.swift */,
 				CA3286145D7F040FC10A5F36 /* AppTab.swift */,
 				00C000000000000000000001 /* RecordMutationCapability.swift */,
+				00D000000000000000000001 /* CurrencyChangeGuardrail.swift */,
 				B32BF4F258B8F0BAAEAB1A51 /* BudgetSampleData.swift */,
 				655F029369B1D6B368219EF2 /* CategoryColor.swift */,
 				16A074877590C32F59F707BF /* CurrencyFormatter.swift */,
@@ -608,6 +611,7 @@
 				CF62A6B68200659F1B630627 /* TransactionFlowCoordinator.swift in Sources */,
 				842E93A51D891F281964FAA8 /* AppTab.swift in Sources */,
 				00C000000000000000000002 /* RecordMutationCapability.swift in Sources */,
+				00D000000000000000000002 /* CurrencyChangeGuardrail.swift in Sources */,
 				AB5DC5D78422735AE3591179 /* BudgetSampleData.swift in Sources */,
 				C93C90F4DCC4D048B0344B66 /* CategoryColor.swift in Sources */,
 				A9D7B995031D0849D02FE7EE /* CurrencyFormatter.swift in Sources */,
