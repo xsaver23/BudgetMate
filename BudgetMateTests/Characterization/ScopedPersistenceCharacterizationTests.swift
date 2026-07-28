@@ -266,4 +266,389 @@ final class ScopedPersistenceCharacterizationTests: XCTestCase {
         XCTAssertFalse(decision.isAllowed)
         XCTAssertEqual(decision.reason, .restrictedSharedMember)
     }
+
+    func testCurrencyChangeIsAvailableAfterValidatedEmptyHistory() {
+        for budgetScopeId in [
+            BudgetMateTestFixtures.personalBudgetID.uuidString,
+            BudgetMateTestFixtures.sharedBudgetID.uuidString
+        ] {
+            let decision = CurrencyChangeGuardrail.decision(
+                activeBudgetScopeId: budgetScopeId,
+                presentedBudgetScopeId: budgetScopeId,
+                isHistoryValidated: true,
+                isSyncing: false,
+                history: currencyHistory(budgetScopeId: budgetScopeId)
+            )
+
+            XCTAssertTrue(decision.isAllowed)
+            XCTAssertEqual(decision.reason, .available)
+        }
+    }
+
+    func testCurrencyChangeWaitsForCurrentBudgetHistoryValidation() {
+        let emptyHistory = currencyHistory()
+
+        for decision in [
+            CurrencyChangeGuardrail.decision(
+                activeBudgetScopeId: BudgetMateTestFixtures.personalBudgetID.uuidString,
+                presentedBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+                isHistoryValidated: true,
+                isSyncing: false,
+                history: emptyHistory
+            ),
+            CurrencyChangeGuardrail.decision(
+                activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+                presentedBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+                isHistoryValidated: false,
+                isSyncing: false,
+                history: emptyHistory
+            ),
+            CurrencyChangeGuardrail.decision(
+                activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+                presentedBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+                isHistoryValidated: true,
+                isSyncing: true,
+                history: emptyHistory
+            )
+        ] {
+            XCTAssertFalse(decision.isAllowed)
+            XCTAssertEqual(decision.reason, .checkingHistory)
+        }
+    }
+
+    func testEveryStoredFinancialRecordKindLocksCurrency() {
+        let activeScope = BudgetMateTestFixtures.sharedBudgetID.uuidString
+        let histories = [
+            currencyHistory(
+                transactionOwnerScopeIds: [activeScope]
+            ),
+            currencyHistory(
+                splitTransactionOwnerScopeIds: [activeScope]
+            ),
+            currencyHistory(
+                settlementOwnerScopeIds: [activeScope]
+            )
+        ]
+
+        for history in histories {
+            let decision = CurrencyChangeGuardrail.decision(
+                activeBudgetScopeId: activeScope,
+                presentedBudgetScopeId: activeScope,
+                isHistoryValidated: true,
+                isSyncing: false,
+                history: history
+            )
+
+            XCTAssertFalse(decision.isAllowed)
+            XCTAssertEqual(decision.reason, .financialHistory)
+        }
+    }
+
+    func testOtherKnownBudgetRecordsDoNotLockValidatedEmptyScope() {
+        let history = currencyHistory(
+            transactionOwnerScopeIds: [BudgetMateTestFixtures.personalBudgetID.uuidString],
+            splitTransactionOwnerScopeIds: [BudgetMateTestFixtures.personalBudgetID.uuidString],
+            settlementOwnerScopeIds: [BudgetMateTestFixtures.personalBudgetID.uuidString]
+        )
+
+        XCTAssertEqual(history.state, .knownEmpty)
+    }
+
+    func testLegacyOrOrphanRecordScopesFailClosed() {
+        for history in [
+            currencyHistory(transactionOwnerScopeIds: ["local"]),
+            currencyHistory(settlementOwnerScopeIds: ["malformed-scope"]),
+            currencyHistory(splitTransactionOwnerScopeIds: [nil])
+        ] {
+            let decision = CurrencyChangeGuardrail.decision(
+                activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+                presentedBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+                isHistoryValidated: true,
+                isSyncing: false,
+                history: history
+            )
+
+            XCTAssertEqual(history.state, .unknown)
+            XCTAssertFalse(decision.isAllowed)
+            XCTAssertEqual(decision.reason, .unverifiedHistory)
+        }
+    }
+
+    func testEveryStoredCategoryBudgetKeyLocksCurrency() {
+        let keys = [
+            TransactionCategory.groceries.rawValue,
+            BudgetSettings.monthBudgetKey(
+                monthKey: "2026-07",
+                categoryRawValue: TransactionCategory.rent.rawValue
+            ),
+            TransactionCategory.hiddenMarkerKey(for: .restaurant)
+        ]
+
+        for key in keys {
+            XCTAssertEqual(currencyHistory(categoryBudgetKeys: [key]).state, .populated)
+        }
+    }
+
+    func testRemoteCategoryBaselineAndRacingLocalEditRemainLocked() {
+        let budgetScopeId = BudgetMateTestFixtures.sharedBudgetID.uuidString
+        let store = SettingsStore(userDefaults: BudgetMateTestFixtures.isolatedDefaults())
+        store.switchUser(to: budgetScopeId)
+        let remoteSettings = BudgetSettings(
+            monthlyBudget: 0,
+            currencyCode: CurrencyOption.cad.code,
+            categoryBudgets: [TransactionCategory.groceries.rawValue: 0]
+        )
+
+        store.updateAppearance(.dark)
+        store.recordCloudSettingsBaseline(remoteSettings)
+
+        let history = CurrencyFinancialHistorySnapshot(
+            budgetScopeId: budgetScopeId,
+            transactionOwnerScopeIds: [],
+            splitTransactionOwnerScopeIds: [],
+            settlementOwnerScopeIds: [],
+            categoryBudgetKeys: Array(store.settings.categoryBudgets.keys),
+            hasPreviouslyObservedFinancialHistory: store.hasObservedFinancialHistory
+        )
+        let decision = CurrencyChangeGuardrail.decision(
+            activeBudgetScopeId: budgetScopeId,
+            presentedBudgetScopeId: budgetScopeId,
+            isHistoryValidated:
+                store.hasObservedCloudSettingsBaseline &&
+                store.pendingCloudSyncToken == nil,
+            isSyncing: false,
+            history: history
+        )
+
+        XCTAssertTrue(store.hasObservedCloudSettingsBaseline)
+        XCTAssertTrue(store.hasObservedFinancialHistory)
+        XCTAssertNotNil(store.pendingCloudSyncToken)
+        XCTAssertEqual(store.settings.currencyCode, CurrencyOption.cad.code)
+        XCTAssertEqual(history.state, .populated)
+        XCTAssertFalse(decision.isAllowed)
+    }
+
+    func testRemoteRecordBaselineAdoptsCurrencyBeforePendingSettingsPush() {
+        let budgetScopeId = BudgetMateTestFixtures.sharedBudgetID.uuidString
+        let store = SettingsStore(userDefaults: BudgetMateTestFixtures.isolatedDefaults())
+        store.switchUser(to: budgetScopeId)
+        store.updateAppearance(.dark)
+        let remoteSettings = BudgetSettings(
+            monthlyBudget: 0,
+            currencyCode: CurrencyOption.cad.code,
+            categoryBudgets: [:]
+        )
+
+        store.recordCloudSettingsBaseline(
+            remoteSettings,
+            hasRemoteFinancialRecords: true
+        )
+
+        XCTAssertTrue(store.hasObservedCloudSettingsBaseline)
+        XCTAssertTrue(store.hasObservedFinancialHistory)
+        XCTAssertEqual(store.settings.currencyCode, CurrencyOption.cad.code)
+        XCTAssertNotNil(store.pendingCloudSyncToken)
+    }
+
+    func testObservedCategoryHistorySurvivesSettingsReset() {
+        let store = SettingsStore(userDefaults: BudgetMateTestFixtures.isolatedDefaults())
+        store.switchUser(to: BudgetMateTestFixtures.sharedBudgetID.uuidString)
+        store.updateCategoryBudget(0, for: .groceries)
+        XCTAssertTrue(store.hasObservedFinancialHistory)
+
+        store.resetSettings(preservingCurrencyCode: true)
+
+        XCTAssertTrue(store.settings.categoryBudgets.isEmpty)
+        XCTAssertTrue(store.hasObservedFinancialHistory)
+    }
+
+    func testObservedCurrencyGuardStateIsBudgetScoped() {
+        let store = SettingsStore(userDefaults: BudgetMateTestFixtures.isolatedDefaults())
+        store.switchUser(to: BudgetMateTestFixtures.sharedBudgetID.uuidString)
+        store.recordCloudSettingsBaseline(
+            BudgetMateTestFixtures.settings,
+            hasRemoteFinancialRecords: true
+        )
+        XCTAssertTrue(store.hasObservedCloudSettingsBaseline)
+        XCTAssertTrue(store.hasObservedFinancialHistory)
+
+        store.switchUser(to: BudgetMateTestFixtures.personalBudgetID.uuidString)
+
+        XCTAssertFalse(store.hasObservedCloudSettingsBaseline)
+        XCTAssertFalse(store.hasObservedFinancialHistory)
+    }
+
+    func testPositiveLegacyMonthlyBudgetDecodesIntoLockingCategoryEntry() throws {
+        let data = try XCTUnwrap(
+            """
+            {
+              "monthlyBudget": 250,
+              "currencySymbol": "$",
+              "appearance": "system"
+            }
+            """.data(using: .utf8)
+        )
+        let decoded = try JSONDecoder().decode(BudgetSettings.self, from: data)
+
+        XCTAssertEqual(
+            currencyHistory(categoryBudgetKeys: Array(decoded.categoryBudgets.keys)).state,
+            .populated
+        )
+    }
+
+    func testFreshMutationSnapshotClosesPreviouslyEmptyCurrencyAction() throws {
+        let persistence = InMemoryModelContainer()
+        let budgetScopeId = BudgetMateTestFixtures.sharedBudgetID.uuidString
+        let staleHistory = try CurrencyChangeGuardrail.snapshot(
+            in: persistence.context,
+            budgetScopeId: budgetScopeId,
+            categoryBudgetKeys: []
+        )
+        XCTAssertEqual(staleHistory.state, .knownEmpty)
+
+        persistence.context.insert(BudgetMateTestFixtures.expense())
+
+        let freshHistory = try CurrencyChangeGuardrail.snapshot(
+            in: persistence.context,
+            budgetScopeId: budgetScopeId,
+            categoryBudgetKeys: []
+        )
+        let freshDecision = CurrencyChangeGuardrail.decision(
+            activeBudgetScopeId: budgetScopeId,
+            presentedBudgetScopeId: budgetScopeId,
+            isHistoryValidated: true,
+            isSyncing: false,
+            history: freshHistory
+        )
+
+        XCTAssertEqual(freshHistory.state, .populated)
+        XCTAssertFalse(freshDecision.isAllowed)
+    }
+
+    func testFreshResetDecisionPreservesCurrencyAfterStaleEmptyState() throws {
+        let persistence = InMemoryModelContainer()
+        let budgetScopeId = BudgetMateTestFixtures.sharedBudgetID.uuidString
+        let defaults = BudgetMateTestFixtures.isolatedDefaults()
+        let store = SettingsStore(userDefaults: defaults)
+        store.updateCurrencyCode(CurrencyOption.cad.code)
+
+        let staleHistory = try CurrencyChangeGuardrail.snapshot(
+            in: persistence.context,
+            budgetScopeId: budgetScopeId,
+            categoryBudgetKeys: []
+        )
+        XCTAssertEqual(staleHistory.state, .knownEmpty)
+
+        persistence.context.insert(BudgetMateTestFixtures.settlement())
+        let freshHistory = try CurrencyChangeGuardrail.snapshot(
+            in: persistence.context,
+            budgetScopeId: budgetScopeId,
+            categoryBudgetKeys: []
+        )
+        let freshDecision = CurrencyChangeGuardrail.decision(
+            activeBudgetScopeId: budgetScopeId,
+            presentedBudgetScopeId: budgetScopeId,
+            isHistoryValidated: true,
+            isSyncing: false,
+            history: freshHistory
+        )
+
+        store.resetSettings(preservingCurrencyCode: !freshDecision.isAllowed)
+
+        XCTAssertFalse(freshDecision.isAllowed)
+        XCTAssertEqual(store.settings.currencyCode, CurrencyOption.cad.code)
+    }
+
+    func testResetSettingsCanPreserveLockedCurrency() {
+        let defaults = BudgetMateTestFixtures.isolatedDefaults()
+        let store = SettingsStore(userDefaults: defaults)
+        store.updateCurrencyCode(CurrencyOption.cad.code)
+        store.updateCategoryBudget(200, for: .groceries)
+
+        store.resetSettings(preservingCurrencyCode: true)
+
+        XCTAssertEqual(store.settings.currencyCode, CurrencyOption.cad.code)
+        XCTAssertTrue(store.settings.categoryBudgets.isEmpty)
+        XCTAssertEqual(store.settings.appearance, .system)
+    }
+
+    func testFirstCloudHydrationAdoptsCurrencyBaselineBeforeLocking() {
+        let store = SettingsStore(userDefaults: BudgetMateTestFixtures.isolatedDefaults())
+        let cloudSettings = BudgetSettings(
+            monthlyBudget: 0,
+            currencyCode: CurrencyOption.cad.code,
+            appearance: .dark,
+            categoryBudgets: [TransactionCategory.groceries.rawValue: 0]
+        )
+
+        store.replaceSettings(
+            cloudSettings,
+            preservingEstablishedCurrency: true
+        )
+
+        XCTAssertEqual(store.settings.currencyCode, CurrencyOption.cad.code)
+        XCTAssertEqual(store.settings.appearance, .dark)
+        XCTAssertNil(store.pendingCloudSyncToken)
+    }
+
+    func testDefaultFirstHydrationStillEstablishesProtectedBaseline() {
+        let store = SettingsStore(userDefaults: BudgetMateTestFixtures.isolatedDefaults())
+        store.replaceSettings(
+            .default,
+            preservingEstablishedCurrency: true
+        )
+
+        let conflictingCloudSettings = BudgetSettings(
+            monthlyBudget: 0,
+            currencyCode: CurrencyOption.cad.code,
+            categoryBudgets: [TransactionCategory.groceries.rawValue: 0]
+        )
+        store.replaceSettings(
+            conflictingCloudSettings,
+            preservingEstablishedCurrency: true
+        )
+
+        XCTAssertEqual(store.settings.currencyCode, CurrencyOption.usd.code)
+        XCTAssertNotNil(store.pendingCloudSyncToken)
+    }
+
+    func testLaterCloudConflictPreservesEstablishedCurrencyAndQueuesRepair() {
+        let defaults = BudgetMateTestFixtures.isolatedDefaults()
+        let store = SettingsStore(userDefaults: defaults)
+        store.updateCurrencyCode(CurrencyOption.eur.code)
+        if let token = store.pendingCloudSyncToken {
+            store.markCloudSyncSucceeded(token)
+        }
+
+        let conflictingCloudSettings = BudgetSettings(
+            monthlyBudget: 0,
+            currencyCode: CurrencyOption.cad.code,
+            appearance: .dark,
+            categoryBudgets: [TransactionCategory.groceries.rawValue: 0]
+        )
+        store.replaceSettings(
+            conflictingCloudSettings,
+            preservingEstablishedCurrency: true
+        )
+
+        XCTAssertEqual(store.settings.currencyCode, CurrencyOption.eur.code)
+        XCTAssertEqual(store.settings.appearance, .dark)
+        XCTAssertNotNil(store.pendingCloudSyncToken)
+    }
+
+    private func currencyHistory(
+        budgetScopeId: String = BudgetMateTestFixtures.sharedBudgetID.uuidString,
+        transactionOwnerScopeIds: [String] = [],
+        splitTransactionOwnerScopeIds: [String?] = [],
+        settlementOwnerScopeIds: [String] = [],
+        categoryBudgetKeys: [String] = []
+    ) -> CurrencyFinancialHistorySnapshot {
+        CurrencyFinancialHistorySnapshot(
+            budgetScopeId: budgetScopeId,
+            transactionOwnerScopeIds: transactionOwnerScopeIds,
+            splitTransactionOwnerScopeIds: splitTransactionOwnerScopeIds,
+            settlementOwnerScopeIds: settlementOwnerScopeIds,
+            categoryBudgetKeys: categoryBudgetKeys
+        )
+    }
 }

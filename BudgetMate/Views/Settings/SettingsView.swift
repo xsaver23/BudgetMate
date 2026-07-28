@@ -10,12 +10,11 @@ struct SettingsView: View {
     @Environment(\.modelContext) private var modelContext
     let budgetScopeId: String
     @Query private var transactions: [Transaction]
+    @Query private var settlementRecords: [Settlement]
+    @Query private var transactionSplits: [TransactionSplit]
 
     init(budgetScopeId: String) {
         self.budgetScopeId = budgetScopeId
-        _transactions = Query(
-            filter: #Predicate<Transaction> { $0.ownerUserId == budgetScopeId }
-        )
     }
 
     @State private var isShowingLeaveBudgetConfirmation = false
@@ -24,9 +23,36 @@ struct SettingsView: View {
     @State private var pendingInvites: [BudgetInvite] = []
     @State private var memberships: [BudgetMembership] = []
     @State private var isLoadingInvites = false
+    @State private var currencyHistoryValidatedBudgetScopeId: String?
 
-    // Queries are already scoped to the active budget in init.
-    private var scopedTransactions: [Transaction] { transactions }
+    private var scopedTransactions: [Transaction] {
+        transactions.filter { $0.ownerUserId == budgetScopeId }
+    }
+
+    private var currencyFinancialHistory: CurrencyFinancialHistorySnapshot {
+        CurrencyFinancialHistorySnapshot(
+            budgetScopeId: budgetScopeId,
+            transactionOwnerScopeIds: transactions.map(\.ownerUserId),
+            splitTransactionOwnerScopeIds: transactionSplits.map { $0.transaction?.ownerUserId },
+            settlementOwnerScopeIds: settlementRecords.map(\.ownerUserId),
+            categoryBudgetKeys: Array(settingsStore.settings.categoryBudgets.keys),
+            hasPreviouslyObservedFinancialHistory: settingsStore.hasObservedFinancialHistory
+        )
+    }
+
+    private var currencyChangeDecision: CurrencyChangeDecision {
+        CurrencyChangeGuardrail.decision(
+            activeBudgetScopeId: authStore.currentBudgetScopeId,
+            presentedBudgetScopeId: budgetScopeId,
+            isHistoryValidated:
+                currencyHistoryValidatedBudgetScopeId == budgetScopeId &&
+                !cloudSyncStore.hasSyncIssue &&
+                settingsStore.pendingCloudSyncToken == nil &&
+                settingsStore.hasObservedCloudSettingsBaseline,
+            isSyncing: cloudSyncStore.isSyncing,
+            history: currencyFinancialHistory
+        )
+    }
 
     private var recurringExpenses: [Transaction] {
         scopedTransactions
@@ -72,15 +98,29 @@ struct SettingsView: View {
                                     }
                                 }
                             } label: {
-                                settingsValue(settingsStore.settings.currencyCode)
+                                HStack(spacing: 6) {
+                                    settingsValue(settingsStore.settings.currencyCode)
+                                    if !currencyChangeDecision.isAllowed {
+                                        Image(systemName: "lock.fill")
+                                            .font(.caption.weight(.semibold))
+                                    }
+                                }
                             }
+                            .disabled(!currencyChangeDecision.isAllowed)
+                            .accessibilityIdentifier("settings.householdCurrency")
+                            .accessibilityHint(currencyHelperText)
                         }
 
                         Divider()
 
-                        Text("Changing currency updates the symbol only. Saved amounts are not converted.")
+                        Text(currencyHelperText)
                             .font(settingsHelperFont)
-                            .foregroundStyle(BudgetBeaverPalette.wood)
+                            .foregroundStyle(
+                                currencyChangeDecision.isAllowed
+                                    ? BudgetBeaverPalette.wood
+                                    : AppTheme.warningText
+                            )
+                            .accessibilityIdentifier("settings.currencyGuardrailMessage")
                     }
 
                     settingsSection("Appearance") {
@@ -247,7 +287,10 @@ struct SettingsView: View {
 
                     settingsSection("Data") {
                         rowButton("Reset Settings", tint: AppTheme.brand) {
-                            settingsStore.resetSettings()
+                            let currentDecision = freshCurrencyChangeDecision()
+                            settingsStore.resetSettings(
+                                preservingCurrencyCode: !currentDecision.isAllowed
+                            )
                             syncFieldsFromStore()
                             saveCurrentSettingsToCloud()
                         }
@@ -271,7 +314,8 @@ struct SettingsView: View {
                 syncFieldsFromStore()
             }
             .task(id: "\(authStore.userEmail ?? "")-\(authStore.currentBudgetScopeId)") {
-                await refreshSharedBudgetSection()
+                currencyHistoryValidatedBudgetScopeId = nil
+                await refreshAllData(showFeedback: false, forceSync: true)
             }
             .sheet(isPresented: $isShowingProfileEditor) {
                 EditProfileNameView(
@@ -503,11 +547,35 @@ struct SettingsView: View {
         }
     }
 
-    private func refreshAllData(showFeedback: Bool, forceSync: Bool) async {
+    @discardableResult
+    private func refreshAllData(showFeedback: Bool, forceSync: Bool) async -> Bool {
         let userScopeId = authStore.currentUserScopeId
         let budgetScopeId = authStore.currentBudgetScopeId
 
+        guard budgetScopeId == self.budgetScopeId else {
+            return false
+        }
+        currencyHistoryValidatedBudgetScopeId = nil
+
         do {
+            if !settingsStore.hasObservedCloudSettingsBaseline {
+                let baseline = try await cloudSyncStore.fetchCurrencyBaseline(
+                    userScopeId: userScopeId,
+                    budgetScopeId: budgetScopeId
+                )
+                guard authStore.currentUserScopeId == userScopeId,
+                      authStore.currentBudgetScopeId == budgetScopeId,
+                      budgetScopeId == self.budgetScopeId else {
+                    return false
+                }
+                settingsStore.recordCloudSettingsBaseline(
+                    baseline.settings,
+                    hasRemoteFinancialRecords:
+                        baseline.hasTransactionOrSplit ||
+                        baseline.hasSettlement
+                )
+            }
+
             if forceSync {
                 let transactionDescriptor = FetchDescriptor<Transaction>(
                     predicate: #Predicate { $0.ownerUserId == budgetScopeId }
@@ -543,7 +611,7 @@ struct SettingsView: View {
 
                 guard authStore.currentUserScopeId == userScopeId,
                       authStore.currentBudgetScopeId == budgetScopeId else {
-                    return
+                    return false
                 }
 
                 if showFeedback {
@@ -551,7 +619,12 @@ struct SettingsView: View {
                 }
                 if settingsStore.pendingCloudSyncToken == nil,
                    let cloudSettings = summary.settings {
-                    settingsStore.replaceSettings(cloudSettings)
+                    settingsStore.replaceSettings(
+                        cloudSettings,
+                        preservingEstablishedCurrency: currencyProtectionRequired(
+                            including: cloudSettings
+                        )
+                    )
                     syncFieldsFromStore()
                 }
                 if memberViewModel.pendingCloudSyncToken == nil {
@@ -562,7 +635,7 @@ struct SettingsView: View {
 
                 guard authStore.currentUserScopeId == userScopeId,
                       authStore.currentBudgetScopeId == budgetScopeId else {
-                    return
+                    return false
                 }
 
                 if settingsStore.pendingCloudSyncToken == nil,
@@ -572,9 +645,14 @@ struct SettingsView: View {
                 ) {
                     guard authStore.currentUserScopeId == userScopeId,
                           authStore.currentBudgetScopeId == budgetScopeId else {
-                        return
+                        return false
                     }
-                    settingsStore.replaceSettings(cloudSettings)
+                    settingsStore.replaceSettings(
+                        cloudSettings,
+                        preservingEstablishedCurrency: currencyProtectionRequired(
+                            including: cloudSettings
+                        )
+                    )
                     syncFieldsFromStore()
                 }
                 if memberViewModel.pendingCloudSyncToken == nil {
@@ -584,16 +662,30 @@ struct SettingsView: View {
                     )
                     guard authStore.currentUserScopeId == userScopeId,
                           authStore.currentBudgetScopeId == budgetScopeId else {
-                        return
+                        return false
                     }
                     memberViewModel.replaceMembers(with: cloudMembers)
                 }
             }
             await refreshSharedBudgetSection()
+            guard authStore.currentUserScopeId == userScopeId,
+                  authStore.currentBudgetScopeId == budgetScopeId,
+                  budgetScopeId == self.budgetScopeId else {
+                return false
+            }
+            recordFinancialHistoryIfPresent()
+            if budgetScopeId == self.budgetScopeId,
+               settingsStore.hasObservedCloudSettingsBaseline,
+               settingsStore.pendingCloudSyncToken == nil,
+               !cloudSyncStore.hasSyncIssue {
+                currencyHistoryValidatedBudgetScopeId = budgetScopeId
+            }
+            return true
         } catch {
             if showFeedback {
                 clearFeedbackMessage = cloudSyncErrorMessage(for: error)
             }
+            return false
         }
     }
 
@@ -765,8 +857,77 @@ struct SettingsView: View {
     }
 
     private func updateCurrencyCode(_ code: String) {
-        settingsStore.updateCurrencyCode(code)
+        let normalizedCode = CurrencyOption.normalizedCode(code)
+        guard normalizedCode != settingsStore.settings.currencyCode else {
+            return
+        }
+        let currentDecision = freshCurrencyChangeDecision()
+        guard currentDecision.isAllowed else {
+            clearFeedbackMessage = currentDecision.restrictionMessage
+            return
+        }
+
+        settingsStore.updateCurrencyCode(normalizedCode)
         saveCurrentSettingsToCloud()
+    }
+
+    private var currencyHelperText: String {
+        currencyChangeDecision.restrictionMessage ??
+            "Choose the household currency before adding financial activity. Saved amounts are not converted later."
+    }
+
+    private func currencyProtectionRequired(
+        including incomingSettings: BudgetSettings
+    ) -> Bool {
+        guard settingsStore.hasEstablishedCurrencyConflict(with: incomingSettings) else {
+            return false
+        }
+
+        do {
+            return try CurrencyChangeGuardrail.snapshot(
+                in: modelContext,
+                budgetScopeId: budgetScopeId,
+                categoryBudgetKeys: Array(
+                    Set(settingsStore.settings.categoryBudgets.keys)
+                        .union(incomingSettings.categoryBudgets.keys)
+                ),
+                hasPreviouslyObservedFinancialHistory: settingsStore.hasObservedFinancialHistory
+            ).state != .knownEmpty
+        } catch {
+            // A failed local read cannot prove that the household is empty.
+            return true
+        }
+    }
+
+    private func freshCurrencyChangeDecision() -> CurrencyChangeDecision {
+        let history: CurrencyFinancialHistorySnapshot
+        do {
+            history = try CurrencyChangeGuardrail.snapshot(
+                in: modelContext,
+                budgetScopeId: budgetScopeId,
+                categoryBudgetKeys: Array(settingsStore.settings.categoryBudgets.keys),
+                hasPreviouslyObservedFinancialHistory: settingsStore.hasObservedFinancialHistory
+            )
+        } catch {
+            return CurrencyChangeDecision(reason: .unverifiedHistory)
+        }
+
+        if history.state == .populated,
+           authStore.currentBudgetScopeId == budgetScopeId {
+            settingsStore.recordFinancialHistoryObserved()
+        }
+
+        return CurrencyChangeGuardrail.decision(
+            activeBudgetScopeId: authStore.currentBudgetScopeId,
+            presentedBudgetScopeId: budgetScopeId,
+            isHistoryValidated:
+                currencyHistoryValidatedBudgetScopeId == budgetScopeId &&
+                !cloudSyncStore.hasSyncIssue &&
+                settingsStore.pendingCloudSyncToken == nil &&
+                settingsStore.hasObservedCloudSettingsBaseline,
+            isSyncing: cloudSyncStore.isSyncing,
+            history: history
+        )
     }
 
     private var appearanceSelection: Binding<AppearanceOption> {
@@ -780,6 +941,10 @@ struct SettingsView: View {
     }
 
     private func saveCurrentSettingsToCloud() {
+        guard settingsStore.hasObservedCloudSettingsBaseline else {
+            return
+        }
+
         let syncToken = settingsStore.pendingCloudSyncToken
         cloudSyncStore.saveSettings(
             settingsStore.settings,
@@ -791,6 +956,19 @@ struct SettingsView: View {
                 }
             }
         )
+    }
+
+    private func recordFinancialHistoryIfPresent() {
+        guard !settingsStore.hasObservedFinancialHistory,
+              let history = try? CurrencyChangeGuardrail.snapshot(
+                in: modelContext,
+                budgetScopeId: budgetScopeId,
+                categoryBudgetKeys: Array(settingsStore.settings.categoryBudgets.keys)
+              ),
+              history.state == .populated else {
+            return
+        }
+        settingsStore.recordFinancialHistoryObserved()
     }
 
     private func saveCurrentMembersToCloud() {

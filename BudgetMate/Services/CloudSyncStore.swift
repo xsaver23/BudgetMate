@@ -362,6 +362,23 @@ final class CloudSyncStore: ObservableObject {
         }
     }
 
+    func fetchCurrencyBaseline(
+        userScopeId: String,
+        budgetScopeId: String? = nil
+    ) async throws -> CloudCurrencyBaselineSnapshot {
+        do {
+            return try await runWithRetry {
+                try await self.service.fetchCurrencyBaseline(
+                    userScopeId: userScopeId,
+                    budgetScopeId: budgetScopeId
+                )
+            }
+        } catch {
+            markFailed(error, context: "Fetching currency baseline")
+            throw error
+        }
+    }
+
     func saveSettings(
         _ settings: BudgetSettings,
         userScopeId: String,
