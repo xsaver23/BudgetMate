@@ -51,6 +51,15 @@ struct TransactionDetailView: View {
         transaction.isMonthlyRecurring || transaction.isGeneratedRecurringOccurrence
     }
 
+    private var mutationDecision: RecordMutationDecision {
+        SharedRecordMutationCapability.decision(
+            currentUserScopeId: authStore.currentUserScopeId,
+            activeBudgetScopeId: authStore.currentBudgetScopeId,
+            recordBudgetScopeId: transaction.ownerUserId,
+            members: members
+        )
+    }
+
     private var sortedSplits: [TransactionSplit] {
         transaction.splits.sorted { $0.amount > $1.amount }
     }
@@ -76,7 +85,11 @@ struct TransactionDetailView: View {
                     if transaction.isSplit {
                         splitCard
                     }
-                    deleteButton
+                    if mutationDecision.isAllowed {
+                        deleteButton
+                    } else {
+                        readOnlyCard
+                    }
                 }
                 .padding()
             }
@@ -90,8 +103,10 @@ struct TransactionDetailView: View {
                 }
 
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Edit") {
-                        isEditing = true
+                    if mutationDecision.isAllowed {
+                        Button("Edit") {
+                            isEditing = true
+                        }
                     }
                 }
             }
@@ -322,9 +337,24 @@ struct TransactionDetailView: View {
         .buttonStyle(PressableButtonStyle(scale: 0.98))
     }
 
+    private var readOnlyCard: some View {
+        CardContainer(showsShadow: false) {
+            Label(
+                mutationDecision.readOnlyMessage ?? "This record is read only.",
+                systemImage: "lock.shield.fill"
+            )
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(AppTheme.textSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("transactionDetail.sharedReadOnly")
+        }
+    }
+
     private func stopFutureOccurrences() {
+        guard mutationDecision.isAllowed else { return }
         let calendar = Calendar.current
         let source = sourceTransaction
+        guard source.ownerUserId == authStore.currentBudgetScopeId else { return }
         let stopDate = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: transaction.date)) ?? .now
         source.recurrenceRule = Transaction.monthlyRecurrenceRule(until: stopDate)
         source.needsSync = true
@@ -342,6 +372,8 @@ struct TransactionDetailView: View {
     }
 
     private func deleteTransaction(_ transactionToDelete: Transaction) {
+        guard mutationDecision.isAllowed else { return }
+        guard transactionToDelete.ownerUserId == authStore.currentBudgetScopeId else { return }
         cloudSyncStore.deleteTransaction(
             transactionToDelete,
             userScopeId: authStore.currentUserScopeId,

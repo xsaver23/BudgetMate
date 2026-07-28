@@ -275,6 +275,15 @@ private struct SettlementDetailView: View {
         members.first(where: { $0.id == settlement.toMemberId })
     }
 
+    private var mutationDecision: RecordMutationDecision {
+        SharedRecordMutationCapability.decision(
+            currentUserScopeId: authStore.currentUserScopeId,
+            activeBudgetScopeId: authStore.currentBudgetScopeId,
+            recordBudgetScopeId: settlement.ownerUserId,
+            members: members
+        )
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -282,7 +291,11 @@ private struct SettlementDetailView: View {
                     headerCard
                     balanceContextCard
                     detailsCard
-                    deleteButton
+                    if mutationDecision.isAllowed {
+                        deleteButton
+                    } else {
+                        readOnlyCard
+                    }
                 }
                 .padding()
             }
@@ -389,6 +402,7 @@ private struct SettlementDetailView: View {
 
     private var deleteButton: some View {
         Button(role: .destructive) {
+            guard mutationDecision.isAllowed else { return }
             cloudSyncStore.deleteSettlement(
                 settlement,
                 userScopeId: authStore.currentUserScopeId,
@@ -409,6 +423,19 @@ private struct SettlementDetailView: View {
         .buttonStyle(.bordered)
         .tint(AppTheme.expense)
         .controlSize(.large)
+    }
+
+    private var readOnlyCard: some View {
+        CardContainer(showsShadow: false) {
+            Label(
+                mutationDecision.readOnlyMessage ?? "This record is read only.",
+                systemImage: "lock.shield.fill"
+            )
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(AppTheme.textSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("settlementDetail.sharedReadOnly")
+        }
     }
 
     private func detailRow<Trailing: View>(

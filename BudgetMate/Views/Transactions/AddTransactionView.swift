@@ -63,6 +63,19 @@ struct AddTransactionView: View {
         settingsStore.settings.currencySymbol
     }
 
+    private var recordMutationDecision: RecordMutationDecision {
+        SharedRecordMutationCapability.decision(
+            currentUserScopeId: authStore.currentUserScopeId,
+            activeBudgetScopeId: authStore.currentBudgetScopeId,
+            recordBudgetScopeId: transactionToEdit?.ownerUserId ?? authStore.currentBudgetScopeId,
+            members: memberViewModel.members
+        )
+    }
+
+    private var isEditingRestrictedSharedRecord: Bool {
+        transactionToEdit != nil && !recordMutationDecision.isAllowed
+    }
+
     private var amountBinding: Binding<String> {
         Binding(
             get: { viewModel.amountText },
@@ -74,6 +87,7 @@ struct AddTransactionView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 amountHero
+                    .disabled(isEditingRestrictedSharedRecord)
 
                 if let saveErrorMessage {
                     Label(saveErrorMessage, systemImage: "exclamationmark.triangle.fill")
@@ -84,6 +98,22 @@ struct AddTransactionView: View {
                         .padding(.vertical, 10)
                         .background(AppTheme.expenseTint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .padding(.horizontal, 16)
+                }
+
+                if isEditingRestrictedSharedRecord,
+                   let readOnlyMessage = recordMutationDecision.readOnlyMessage {
+                    Label(readOnlyMessage, systemImage: "lock.fill")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(BudgetBeaverPalette.wood)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .background(
+                            AppTheme.surfaceAlt,
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        )
+                        .padding(.horizontal, 16)
+                        .accessibilityIdentifier("transactionEditor.sharedReadOnly")
                 }
 
                 Form {
@@ -129,6 +159,7 @@ struct AddTransactionView: View {
 
                     recurringSection
                 }
+                .disabled(isEditingRestrictedSharedRecord)
                 .scrollContentBackground(.hidden)
                 // Avoid continuously resizing the text editor and its host
                 // while a drag tracks the keyboard. Immediate dismissal is a
@@ -197,7 +228,7 @@ struct AddTransactionView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     TransactionSaveToolbarButton(
                         title: transactionToEdit == nil ? "Save" : "Update",
-                        isEnabled: viewModel.canSave
+                        isEnabled: viewModel.canSave && !isEditingRestrictedSharedRecord
                     ) { cloudSyncStore in
                         saveTransaction(using: cloudSyncStore)
                     }
@@ -424,6 +455,10 @@ struct AddTransactionView: View {
         saveErrorMessage = nil
         let member = memberViewModel.members.first(where: { $0.id == selectedMemberId }) ?? defaultTransactionMember
         if let transactionToEdit {
+            guard recordMutationDecision.isAllowed else {
+                saveErrorMessage = recordMutationDecision.readOnlyMessage
+                return
+            }
             viewModel.applyChanges(to: transactionToEdit, paidBy: member)
             transactionToEdit.ownerUserId = authStore.currentBudgetScopeId
             replaceSplits(for: transactionToEdit, paidBy: member)

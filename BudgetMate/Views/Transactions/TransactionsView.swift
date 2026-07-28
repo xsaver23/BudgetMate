@@ -40,6 +40,15 @@ struct TransactionsView: View {
         settingsStore.settings.currencySymbol
     }
 
+    private var mutationDecision: RecordMutationDecision {
+        SharedRecordMutationCapability.decision(
+            currentUserScopeId: authStore.currentUserScopeId,
+            activeBudgetScopeId: authStore.currentBudgetScopeId,
+            recordBudgetScopeId: budgetScopeId,
+            members: memberViewModel.members
+        )
+    }
+
     // Recompute the derived list/summary only when the underlying data or
     // filters change, not on every body evaluation (see DashboardView).
     private var metricsRefreshToken: String {
@@ -242,12 +251,14 @@ struct TransactionsView: View {
                 .contextMenu {
                     if transaction.isGeneratedRecurringOccurrence {
                         Text("Recurring occurrence")
-                    } else {
+                    } else if mutationDecision.isAllowed {
                         Button(role: .destructive) {
                             delete(transaction)
                         } label: {
                             Label("Delete", systemImage: "trash")
                         }
+                    } else {
+                        Label("Read only in this shared budget", systemImage: "lock.fill")
                     }
                 }
             }
@@ -285,6 +296,7 @@ struct TransactionsView: View {
     }
 
     private func delete(_ transaction: Transaction) {
+        guard mutationDecision.isAllowed else { return }
         guard transaction.ownerUserId == authStore.currentBudgetScopeId else { return }
         cloudSyncStore.deleteTransaction(
             transaction,
