@@ -20,11 +20,7 @@ final class PersistenceController {
             )
         }
 
-        let schema = Schema([
-            Transaction.self,
-            TransactionSplit.self,
-            Settlement.self
-        ])
+        let schema = BudgetMateSchema.current
         do {
             container = try Self.makeContainer(schema: schema, inMemory: inMemory)
         } catch {
@@ -40,6 +36,10 @@ final class PersistenceController {
             schema: schema,
             isStoredInMemoryOnly: inMemory
         )
-        return try ModelContainer(for: schema, configurations: [configuration])
+        return try ModelContainer(
+            for: schema,
+            migrationPlan: BudgetMateSchemaMigrationPlan.self,
+            configurations: [configuration]
+        )
     }
 }

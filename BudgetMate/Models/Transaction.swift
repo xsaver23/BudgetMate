@@ -1,6 +1,7 @@
 import Foundation
 import SwiftData
 
+// Historical BudgetMateSchemaV1 model. Its persisted shape is immutable.
 @Model
 final class Transaction {
     var id: UUID
