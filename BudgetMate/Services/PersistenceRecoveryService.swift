@@ -109,6 +109,7 @@ struct PersistenceReplacementJournal: Codable {
 @MainActor
 final class PersistenceRecoveryService {
     static let archiveFormatVersion = 1
+    private static let legacySchemaVersion = "1.0.0"
     private static let replacementJournalSuffix = ".budgetmate-replacement.json"
 
     private let fileManager: FileManager
@@ -178,7 +179,10 @@ final class PersistenceRecoveryService {
 
         let primary = try requirePrimary(in: artifacts)
         let stagedPrimary = payloadDirectory.appendingPathComponent(primary.targetRelativePath)
-        let stagedSnapshot = try? validateStore(at: stagedPrimary)
+        let stagedSnapshot = try? validateStore(
+            at: stagedPrimary,
+            schemaVersion: descriptor.schemaVersion
+        )
         let isRestorable = stagedSnapshot != nil
         let manifestFiles = try artifacts.flatMap { artifact in
             try filesForManifest(
@@ -241,7 +245,10 @@ final class PersistenceRecoveryService {
             throw PersistenceRecoveryError.incompleteArchive
         }
         let payloadPath = archiveURL.appendingPathComponent(primary.relativePath)
-        guard let actualSnapshot = try? validateStore(at: payloadPath),
+        guard let actualSnapshot = try? validateStore(
+            at: payloadPath,
+            schemaVersion: manifest.schemaVersion
+        ),
               actualSnapshot == expectedSnapshot else {
             throw PersistenceRecoveryError.storeValidationFailed
         }
@@ -254,8 +261,11 @@ final class PersistenceRecoveryService {
 
     /// Test seam for asserting the same count/relationship summary used by
     /// archive verification without exposing a second production data path.
-    func verifyStoreForTesting(at storeURL: URL) throws -> PersistenceStoreSnapshot {
-        try validateStore(at: storeURL)
+    func verifyStoreForTesting(
+        at storeURL: URL,
+        schemaVersion: String = BudgetMateSchema.currentVersionString
+    ) throws -> PersistenceStoreSnapshot {
+        try validateStore(at: storeURL, schemaVersion: schemaVersion)
     }
 
     func restoreArchive(
@@ -285,7 +295,10 @@ final class PersistenceRecoveryService {
         }
 
         let stagedPrimary = stageDirectory.appendingPathComponent(descriptor.storeURL.lastPathComponent)
-        guard let stagedSnapshot = try? validateStore(at: stagedPrimary),
+        guard let stagedSnapshot = try? validateStore(
+            at: stagedPrimary,
+            schemaVersion: verification.manifest.schemaVersion
+        ),
               stagedSnapshot == verification.snapshot else {
             throw PersistenceRecoveryError.storeValidationFailed
         }
@@ -295,7 +308,8 @@ final class PersistenceRecoveryService {
             targetDirectory: parent,
             descriptor: descriptor,
             newTargets: verification.manifest.files.map(\.targetRelativePath),
-            expectedSnapshot: verification.snapshot
+            expectedSnapshot: verification.snapshot,
+            schemaVersion: verification.manifest.schemaVersion
         )
         return verification
     }
@@ -350,7 +364,8 @@ final class PersistenceRecoveryService {
             targetDirectory: parent,
             descriptor: descriptor,
             newTargets: [descriptor.storeURL.lastPathComponent],
-            expectedSnapshot: emptySnapshot
+            expectedSnapshot: emptySnapshot,
+            schemaVersion: BudgetMateSchema.currentVersionString
         )
     }
 
@@ -433,7 +448,8 @@ final class PersistenceRecoveryService {
         targetDirectory: URL,
         descriptor: PersistenceStoreDescriptor,
         newTargets: [String],
-        expectedSnapshot: PersistenceStoreSnapshot
+        expectedSnapshot: PersistenceStoreSnapshot,
+        schemaVersion: String
     ) throws {
         let oldArtifacts: [PersistenceArchiveArtifact]
         if fileManager.fileExists(atPath: descriptor.storeURL.path) {
@@ -497,7 +513,10 @@ final class PersistenceRecoveryService {
             journal.phase = "newArtifactsMoved"
             try writeJournal(journal, to: journalURL)
 
-            guard let actual = try? validateStore(at: descriptor.storeURL), actual == expectedSnapshot else {
+            guard let actual = try? validateStore(
+                at: descriptor.storeURL,
+                schemaVersion: schemaVersion
+            ), actual == expectedSnapshot else {
                 throw PersistenceRecoveryError.storeValidationFailed
             }
             journal.phase = "validated"
@@ -709,7 +728,7 @@ final class PersistenceRecoveryService {
             from: Data(contentsOf: manifestURL)
         )
         guard manifest.archiveFormatVersion == Self.archiveFormatVersion,
-              manifest.schemaVersion == "1.0.0",
+              ["1.0.0", BudgetMateSchema.currentVersionString].contains(manifest.schemaVersion),
               !manifest.files.isEmpty,
               manifest.files.filter({ $0.kind == "primary" }).count == 1 else {
             throw PersistenceRecoveryError.unsupportedArchive
@@ -775,7 +794,21 @@ final class PersistenceRecoveryService {
         return manifest
     }
 
-    private func validateStore(at storeURL: URL) throws -> PersistenceStoreSnapshot {
+    private func validateStore(
+        at storeURL: URL,
+        schemaVersion: String = BudgetMateSchema.currentVersionString
+    ) throws -> PersistenceStoreSnapshot {
+        if schemaVersion == Self.legacySchemaVersion {
+            return try validateLegacyStoreOnIsolatedCopy(at: storeURL)
+        }
+        guard schemaVersion == BudgetMateSchema.currentVersionString else {
+            throw PersistenceRecoveryError.unsupportedArchive
+        }
+
+        return try validateCurrentStore(at: storeURL)
+    }
+
+    private func validateCurrentStore(at storeURL: URL) throws -> PersistenceStoreSnapshot {
         let configuration = ModelConfiguration(
             "BudgetMateValidation",
             schema: BudgetMateSchema.current,
@@ -791,6 +824,76 @@ final class PersistenceRecoveryService {
         let transactions = try context.fetch(FetchDescriptor<Transaction>())
         let splits = try context.fetch(FetchDescriptor<TransactionSplit>())
         let settlements = try context.fetch(FetchDescriptor<Settlement>())
+        let relationships = transactions
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .map { transaction in
+                transaction.id.uuidString + ":" + transaction.splits.map(\.id.uuidString).sorted().joined(separator: ",")
+            }
+            + splits
+                .filter { $0.transaction == nil }
+                .map { "orphan:\($0.id.uuidString)" }
+                .sorted()
+        let digest = Self.sha256(Data(relationships.joined(separator: "|").utf8))
+        return PersistenceStoreSnapshot(
+            transactionCount: transactions.count,
+            splitCount: splits.count,
+            settlementCount: settlements.count,
+            relationshipDigest: digest
+        )
+    }
+
+    private func validateLegacyStoreOnIsolatedCopy(at storeURL: URL) throws -> PersistenceStoreSnapshot {
+        let isolatedDirectory = fileManager.temporaryDirectory.appendingPathComponent(
+            "BudgetMateV1Validation-" + UUID().uuidString,
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: isolatedDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: isolatedDirectory) }
+
+        let primaryName = storeURL.lastPathComponent
+        let artifactNames = [
+            primaryName,
+            primaryName + "-wal",
+            primaryName + "-shm",
+            primaryName + "-journal"
+        ]
+        for artifactName in artifactNames {
+            let source = storeURL.deletingLastPathComponent().appendingPathComponent(artifactName)
+            guard fileManager.fileExists(atPath: source.path) else { continue }
+            guard try !isSymbolicLink(source) else {
+                throw PersistenceRecoveryError.invalidArchive
+            }
+            try fileManager.copyItem(
+                at: source,
+                to: isolatedDirectory.appendingPathComponent(artifactName)
+            )
+        }
+
+        return try validateLegacyStore(at: isolatedDirectory.appendingPathComponent(primaryName))
+    }
+
+    private func validateLegacyStore(at storeURL: URL) throws -> PersistenceStoreSnapshot {
+        let schema = Schema(versionedSchema: BudgetMateSchemaV1.self)
+        let configuration = ModelConfiguration(
+            "BudgetMateLegacyValidation",
+            schema: schema,
+            url: storeURL,
+            cloudKitDatabase: .none
+        )
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [configuration]
+        )
+        let context = container.mainContext
+        let transactions = try context.fetch(
+            FetchDescriptor<BudgetMateSchemaV1.Transaction>()
+        )
+        let splits = try context.fetch(
+            FetchDescriptor<BudgetMateSchemaV1.TransactionSplit>()
+        )
+        let settlements = try context.fetch(
+            FetchDescriptor<BudgetMateSchemaV1.Settlement>()
+        )
         let relationships = transactions
             .sorted { $0.id.uuidString < $1.id.uuidString }
             .map { transaction in

@@ -13,7 +13,7 @@ struct PersistenceStoreDescriptor: Equatable, Sendable {
     init(
         storeURL: URL,
         isStoredInMemoryOnly: Bool = false,
-        schemaVersion: String = "1.0.0"
+        schemaVersion: String = BudgetMateSchema.currentVersionString
     ) {
         self.storeURL = storeURL
         self.isStoredInMemoryOnly = isStoredInMemoryOnly
@@ -78,14 +78,24 @@ struct ClosurePersistenceContainerFactory: PersistenceContainerFactory {
 struct LivePersistenceContainerFactory: PersistenceContainerFactory {
     let inMemory: Bool
     let storeURL: URL?
+    let verifiedCurrencySource: (any VerifiedCurrencySource)?
 
-    init(inMemory: Bool = false, storeURL: URL? = nil) {
+    init(
+        inMemory: Bool = false,
+        storeURL: URL? = nil,
+        verifiedCurrencySource: (any VerifiedCurrencySource)? = nil
+    ) {
         self.inMemory = inMemory
         self.storeURL = storeURL
+        self.verifiedCurrencySource = verifiedCurrencySource
     }
 
     func makeSession() throws -> PersistenceSession {
-        try PersistenceController(inMemory: inMemory, storeURL: storeURL).session
+        try PersistenceController(
+            inMemory: inMemory,
+            storeURL: storeURL,
+            verifiedCurrencySource: verifiedCurrencySource
+        ).session
     }
 }
 
@@ -97,7 +107,11 @@ final class PersistenceController {
     let session: PersistenceSession
     var container: ModelContainer { session.container }
 
-    init(inMemory: Bool = false, storeURL: URL? = nil) throws {
+    init(
+        inMemory: Bool = false,
+        storeURL: URL? = nil,
+        verifiedCurrencySource: (any VerifiedCurrencySource)? = nil
+    ) throws {
         let signpostState = Self.launchSignposter.beginInterval("ModelContainer Open")
         defer {
             Self.launchSignposter.endInterval("ModelContainer Open", signpostState)
@@ -123,6 +137,13 @@ final class PersistenceController {
                 for: schema,
                 migrationPlan: BudgetMateSchemaMigrationPlan.self,
                 configurations: [configuration]
+            )
+            let backfill = try LegacyMoneyBackfillService(
+                currencySource: verifiedCurrencySource
+            ).backfill(context: container.mainContext)
+            try? LegacyMoneyAnomalyStore.save(
+                backfill.anomalyReport,
+                at: LegacyMoneyAnomalyStore.storeURL(forStoreURL: descriptor.storeURL)
             )
             session = PersistenceSession(container: container, descriptor: descriptor)
         } catch let failure as PersistenceOpenFailure {

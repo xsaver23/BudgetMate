@@ -13,6 +13,9 @@ final class SettingsStore: ObservableObject {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private let userDefaults: UserDefaults
+    private let verifiedCurrencySource: (any VerifiedCurrencySource)?
+    private let anomalyReportURL: URL?
+    private(set) var lastMoneyMigrationAnomalyReport = LegacyMoneyAnomalyReport()
     private var currentUserScopeId = "local"
     private var hasEstablishedCurrencyBaseline: Bool
     private let cloudDirtyKey = "budgetmate.settingsCloudDirty"
@@ -20,27 +23,42 @@ final class SettingsStore: ObservableObject {
     private let currencyCloudBaselineObservedKey = "budgetmate.currencyCloudBaselineObserved"
     private let financialHistoryObservedKey = "budgetmate.financialHistoryObserved"
 
-    init(userDefaults: UserDefaults = .standard) {
-        self.userDefaults = userDefaults
-        let storedSettings = Self.storedSettings(
+    init(
+        userDefaults: UserDefaults = .standard,
+        verifiedCurrencySource: (any VerifiedCurrencySource)? = nil,
+        anomalyReportURL: URL? = nil
+    ) {
+        let resolvedAnomalyReportURL = anomalyReportURL ?? LegacyMoneyAnomalyStore.settingsURL()
+        let loaded = Self.loadSettings(
             userDefaults: userDefaults,
             decoder: JSONDecoder(),
-            key: Self.settingsKey(baseKey: baseSettingsKey, userScopeId: currentUserScopeId)
+            encoder: JSONEncoder(),
+            key: Self.settingsKey(baseKey: "budgetmate.settings", userScopeId: "local"),
+            currencySource: verifiedCurrencySource,
+            anomalyReportURL: resolvedAnomalyReportURL
         )
-        settings = storedSettings ?? .default
-        hasEstablishedCurrencyBaseline = storedSettings != nil
+        self.verifiedCurrencySource = verifiedCurrencySource
+        self.anomalyReportURL = resolvedAnomalyReportURL
+        self.userDefaults = userDefaults
+        settings = loaded.settings ?? .default
+        lastMoneyMigrationAnomalyReport = loaded.report
+        hasEstablishedCurrencyBaseline = loaded.settings != nil
     }
 
     func switchUser(to userScopeId: String) {
         guard currentUserScopeId != userScopeId else { return }
         currentUserScopeId = userScopeId
-        let storedSettings = Self.storedSettings(
+        let loaded = Self.loadSettings(
             userDefaults: userDefaults,
             decoder: decoder,
-            key: Self.settingsKey(baseKey: baseSettingsKey, userScopeId: userScopeId)
+            encoder: encoder,
+            key: Self.settingsKey(baseKey: baseSettingsKey, userScopeId: userScopeId),
+            currencySource: verifiedCurrencySource,
+            anomalyReportURL: anomalyReportURL
         )
-        settings = storedSettings ?? .default
-        hasEstablishedCurrencyBaseline = storedSettings != nil
+        settings = loaded.settings ?? .default
+        lastMoneyMigrationAnomalyReport = loaded.report
+        hasEstablishedCurrencyBaseline = loaded.settings != nil
     }
 
     func updateMonthlyBudget(_ amount: Double) {
@@ -178,12 +196,18 @@ final class SettingsStore: ObservableObject {
     }
 
     func hiddenExpenseCategoryRawValues() -> Set<String> {
-        Set(
+        var hidden: Set<String> = Set(
             settings.categoryBudgets.keys.compactMap { key in
                 guard TransactionCategory.isHiddenMarkerKey(key) else { return nil }
                 return String(key.dropFirst(TransactionCategory.hiddenCategoryPrefix.count))
             }
         )
+        hidden.formUnion(
+            settings.categoryVisibility.compactMap { category, visibility in
+                visibility == .hidden ? category : nil
+            }
+        )
+        return hidden
     }
 
     func updateCategoryBudget(_ amount: Double, for category: TransactionCategory) {
@@ -219,6 +243,7 @@ final class SettingsStore: ObservableObject {
     func upsertCategory(_ category: TransactionCategory, budgetAmount: Double = 0, emoji: String? = nil) {
         settings.categoryBudgets[category.rawValue] = max(0, budgetAmount)
         settings.categoryBudgets.removeValue(forKey: TransactionCategory.hiddenMarkerKey(for: category))
+        settings.categoryVisibility[category.rawValue] = .visible
         updateCategoryEmojiInMemory(emoji, for: category)
         persist()
     }
@@ -240,13 +265,16 @@ final class SettingsStore: ObservableObject {
 
         if oldCategory.isBuiltInExpenseCategory {
             settings.categoryBudgets[TransactionCategory.hiddenMarkerKey(for: oldCategory)] = 1
+            settings.categoryVisibility[oldCategory.rawValue] = .hidden
             settings.categoryEmojis.removeValue(forKey: oldCategory.rawValue)
         } else {
             settings.categoryBudgets.removeValue(forKey: oldCategory.rawValue)
+            settings.categoryVisibility.removeValue(forKey: oldCategory.rawValue)
             settings.categoryEmojis.removeValue(forKey: oldCategory.rawValue)
         }
 
         settings.categoryBudgets.removeValue(forKey: TransactionCategory.hiddenMarkerKey(for: newCategory))
+        settings.categoryVisibility[newCategory.rawValue] = .visible
         persist()
     }
 
@@ -270,9 +298,11 @@ final class SettingsStore: ObservableObject {
         if category.isBuiltInExpenseCategory {
             settings.categoryBudgets[TransactionCategory.hiddenMarkerKey(for: category)] = 1
             settings.categoryBudgets[category.rawValue] = 0
+            settings.categoryVisibility[category.rawValue] = .hidden
             settings.categoryEmojis.removeValue(forKey: category.rawValue)
         } else {
             settings.categoryBudgets.removeValue(forKey: category.rawValue)
+            settings.categoryVisibility.removeValue(forKey: category.rawValue)
             settings.categoryEmojis.removeValue(forKey: category.rawValue)
         }
         settings.categoryBudgets.keys
@@ -294,6 +324,15 @@ final class SettingsStore: ObservableObject {
     }
 
     private func persist(markCloudDirty: Bool = true) {
+        let migration = LegacyBudgetSettingsMigrator.migrate(
+            settings,
+            currencySource: verifiedCurrencySource
+        )
+        settings = migration.settings
+        lastMoneyMigrationAnomalyReport = migration.anomalyReport
+        if let anomalyReportURL {
+            try? LegacyMoneyAnomalyStore.save(migration.anomalyReport, at: anomalyReportURL)
+        }
         guard let data = try? encoder.encode(settings) else { return }
         userDefaults.set(data, forKey: Self.settingsKey(baseKey: baseSettingsKey, userScopeId: currentUserScopeId))
         hasEstablishedCurrencyBaseline = true
@@ -333,15 +372,46 @@ final class SettingsStore: ObservableObject {
         "\(baseKey).\(userScopeId)"
     }
 
-    private static func storedSettings(
+    private struct SettingsLoad {
+        let settings: BudgetSettings?
+        let report: LegacyMoneyAnomalyReport
+    }
+
+    private static func loadSettings(
         userDefaults: UserDefaults,
         decoder: JSONDecoder,
-        key: String
-    ) -> BudgetSettings? {
-        if let data = userDefaults.data(forKey: key),
-           let decoded = try? decoder.decode(BudgetSettings.self, from: data) {
-            return decoded
+        encoder: JSONEncoder,
+        key: String,
+        currencySource: (any VerifiedCurrencySource)?,
+        anomalyReportURL: URL?
+    ) -> SettingsLoad {
+        guard let data = userDefaults.data(forKey: key) else {
+            return SettingsLoad(settings: nil, report: LegacyMoneyAnomalyReport())
         }
-        return nil
+        guard let decoded = try? decoder.decode(BudgetSettings.self, from: data) else {
+            var report = LegacyMoneyAnomalyReport()
+            report.append(
+                entity: "budgetSettings",
+                identifier: key,
+                field: "blob",
+                reason: .malformedSettingsBlob
+            )
+            if let anomalyReportURL {
+                try? LegacyMoneyAnomalyStore.save(report, at: anomalyReportURL)
+            }
+            return SettingsLoad(settings: nil, report: report)
+        }
+
+        let migration = LegacyBudgetSettingsMigrator.migrate(
+            decoded,
+            currencySource: currencySource
+        )
+        if let migratedData = try? encoder.encode(migration.settings) {
+            userDefaults.set(migratedData, forKey: key)
+        }
+        if let anomalyReportURL {
+            try? LegacyMoneyAnomalyStore.save(migration.anomalyReport, at: anomalyReportURL)
+        }
+        return SettingsLoad(settings: migration.settings, report: migration.anomalyReport)
     }
 }
