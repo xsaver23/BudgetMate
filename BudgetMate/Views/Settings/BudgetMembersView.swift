@@ -2,12 +2,6 @@ import SwiftUI
 
 struct BudgetMembersView: View {
     @EnvironmentObject private var memberViewModel: MemberViewModel
-    @EnvironmentObject private var authStore: AuthSessionStore
-    @EnvironmentObject private var cloudSyncStore: CloudSyncStore
-    @EnvironmentObject private var settingsStore: SettingsStore
-    @State private var isShowingInviteSheet = false
-    @State private var feedbackMessage: String?
-    @State private var ownedBudgets: [BudgetSummary] = []
 
     var body: some View {
         ScrollView {
@@ -40,16 +34,7 @@ struct BudgetMembersView: View {
                 }
 
                 if canManageMembers {
-                    Button {
-                        isShowingInviteSheet = true
-                    } label: {
-                        Text("Invite member")
-                            .font(.headline.weight(.black))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity, minHeight: 58)
-                            .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous))
-                    }
-                    .buttonStyle(PressableButtonStyle(scale: 0.98))
+                    unavailableActionRow(DestructiveActionGuardrails.inviteCreation)
                 }
             }
             .padding()
@@ -57,144 +42,10 @@ struct BudgetMembersView: View {
         .background(AppTheme.background)
         .navigationTitle("Budget Members")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $isShowingInviteSheet) {
-            InviteMemberView(ownedBudgets: ownedBudgets) { name, email, target in
-                Task {
-                    await inviteMember(name: name, email: email, target: target)
-                }
-            }
-        }
-        .task {
-            await loadOwnedBudgets()
-        }
-        .alert("Budget Members", isPresented: feedbackAlertBinding) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(feedbackMessage ?? "")
-        }
     }
 
     private var canManageMembers: Bool {
         memberViewModel.activeMember.role == .owner
-    }
-
-    private func inviteMember(name: String, email: String, target: InviteHouseholdTarget) async {
-        guard let invitedMember = memberViewModel.makeInvitedMember(displayName: name, email: email) else {
-            feedbackMessage = "Enter a valid name and email."
-            return
-        }
-
-        do {
-            let targetBudget: BudgetSummary
-            switch target {
-            case .createNew(let householdName):
-                targetBudget = try await cloudSyncStore.ensureSharedBudget(
-                    name: householdName,
-                    userScopeId: authStore.currentUserScopeId
-                )
-            case .existing(let budget):
-                targetBudget = budget
-            }
-
-            let existingTargetMembers = await membersForInviteTarget(targetBudgetId: targetBudget.id)
-            if let existingMember = existingMember(matching: invitedMember.email, in: existingTargetMembers),
-               existingMember.inviteStatus == .active {
-                authStore.switchBudgetScope(to: targetBudget.id.uuidString)
-                settingsStore.switchUser(to: targetBudget.id.uuidString)
-                memberViewModel.switchUser(
-                    to: authStore.currentUserScopeId,
-                    budgetScopeId: targetBudget.id.uuidString,
-                    email: authStore.userEmail
-                )
-                memberViewModel.replaceMembers(with: existingTargetMembers)
-                feedbackMessage = "\(existingMember.displayName) already uses \(email) in \(targetBudget.name)."
-                return
-            }
-
-            try await cloudSyncStore.inviteMember(
-                displayName: name,
-                email: email,
-                userScopeId: authStore.currentUserScopeId,
-                budgetId: targetBudget.id
-            )
-
-            let targetMembers = await membersForInviteTarget(
-                targetBudgetId: targetBudget.id,
-                invitedMember: invitedMember
-            )
-            authStore.switchBudgetScope(to: targetBudget.id.uuidString)
-            settingsStore.switchUser(to: targetBudget.id.uuidString)
-            memberViewModel.switchUser(
-                to: authStore.currentUserScopeId,
-                budgetScopeId: targetBudget.id.uuidString,
-                email: authStore.userEmail
-            )
-            memberViewModel.replaceMembersWithLocalChanges(targetMembers)
-            let syncToken = memberViewModel.pendingCloudSyncToken
-            cloudSyncStore.saveMembers(
-                targetMembers,
-                userScopeId: authStore.currentUserScopeId,
-                budgetScopeId: targetBudget.id.uuidString,
-                onSuccess: {
-                    if let syncToken {
-                        memberViewModel.markCloudSyncSucceeded(syncToken)
-                    }
-                }
-            )
-            await loadOwnedBudgets()
-            feedbackMessage = "Invite saved for \(name) in \(targetBudget.name). Email delivery is coming next."
-        } catch {
-            feedbackMessage = "Could not save invite: \(error.localizedDescription)"
-        }
-    }
-
-    private func membersForInviteTarget(targetBudgetId: UUID, invitedMember: BudgetMember? = nil) async -> [BudgetMember] {
-        let existingMembers = (try? await cloudSyncStore.fetchMembers(
-            userScopeId: authStore.currentUserScopeId,
-            budgetScopeId: targetBudgetId.uuidString
-        )) ?? []
-
-        var targetMembers = BudgetMember.deduplicatedForBudget(existingMembers)
-        if !targetMembers.contains(where: { member in
-            member.authUserId?.uuidString == authStore.currentUserScopeId ||
-                member.id.uuidString == authStore.currentUserScopeId
-        }) {
-            targetMembers.insert(
-                memberViewModel.makeSharedOwnerMember(
-                    userScopeId: authStore.currentUserScopeId,
-                    email: authStore.userEmail
-                ),
-                at: 0
-            )
-        }
-
-        let normalizedInviteEmail = BudgetMember.normalizedEmail(invitedMember?.email)
-        if let invitedMember,
-           !targetMembers.contains(where: { member in
-               BudgetMember.normalizedEmail(member.email) == normalizedInviteEmail
-           }) {
-            targetMembers.append(invitedMember)
-        }
-
-        return BudgetMember.deduplicatedForBudget(targetMembers)
-    }
-
-    private func existingMember(matching email: String?, in members: [BudgetMember]) -> BudgetMember? {
-        guard let normalizedEmail = BudgetMember.normalizedEmail(email) else {
-            return nil
-        }
-
-        return members.first {
-            BudgetMember.normalizedEmail($0.email) == normalizedEmail
-        }
-    }
-
-    private func loadOwnedBudgets() async {
-        do {
-            ownedBudgets = try await cloudSyncStore.fetchOwnedBudgets(userScopeId: authStore.currentUserScopeId)
-        } catch {
-            ownedBudgets = []
-        }
     }
 
     private func memberRow(_ member: BudgetMember) -> some View {
@@ -279,15 +130,29 @@ struct BudgetMembersView: View {
             .foregroundStyle(AppTheme.brand)
     }
 
-    private var feedbackAlertBinding: Binding<Bool> {
-        Binding(
-            get: { feedbackMessage != nil },
-            set: { newValue in
-                if !newValue {
-                    feedbackMessage = nil
-                }
+    private func unavailableActionRow(_ restriction: RestrictedDestructiveAction) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "lock.shield.fill")
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.danger)
+                .frame(width: 24, height: 24)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(restriction.title)
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(AppTheme.danger)
+
+                Text(restriction.message)
+                    .font(.caption)
+                    .foregroundStyle(BudgetBeaverPalette.wood)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-        )
+
+            Spacer(minLength: 8)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(restriction.title). \(restriction.message)")
+        .accessibilityIdentifier(restriction.accessibilityIdentifier)
     }
 
 }

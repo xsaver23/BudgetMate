@@ -246,6 +246,10 @@ final class CloudSyncStore: ObservableObject {
     }
 
     func ensureSharedBudget(name: String, userScopeId: String) async throws -> BudgetSummary {
+        guard GateDControlledBetaPolicy.allowsSharedBudgetInvites else {
+            throw SupabaseBudgetSyncError.sharedBudgetInvitesUnavailable
+        }
+
         // Keep ids stable across retry attempts so the atomic database function
         // is idempotent even if its response is lost after the commit.
         let budgetId = UUID()
@@ -279,6 +283,10 @@ final class CloudSyncStore: ObservableObject {
     }
 
     func inviteMember(displayName: String, email: String, userScopeId: String, budgetId: UUID) async throws {
+        guard GateDControlledBetaPolicy.allowsSharedBudgetInvites else {
+            throw SupabaseBudgetSyncError.sharedBudgetInvitesUnavailable
+        }
+
         do {
             try await runWithRetry {
                 try await self.service.createInvite(
@@ -344,6 +352,10 @@ final class CloudSyncStore: ObservableObject {
     }
 
     func leaveBudget(userScopeId: String, budgetScopeId: String) async throws {
+        guard GateDControlledBetaPolicy.allowsSharedBudgetLeave else {
+            throw SupabaseBudgetSyncError.sharedBudgetLeaveUnavailable
+        }
+
         do {
             try await runWithRetry {
                 try await self.service.leaveBudget(userScopeId: userScopeId, budgetScopeId: budgetScopeId)
@@ -890,7 +902,9 @@ final class CloudSyncStore: ObservableObject {
              .memberReferenceForbidden,
              .sharedDataMutationConflict,
              .sharedDataSafetyDisabled,
-             .unsafePendingDeletion:
+             .unsafePendingDeletion,
+             .sharedBudgetInvitesUnavailable,
+             .sharedBudgetLeaveUnavailable:
             return false
         case .missingUser,
              .notBudgetOwner,

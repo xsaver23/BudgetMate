@@ -2,36 +2,63 @@ import Foundation
 import Supabase
 
 enum SupabaseConfig {
-    static let projectURL: URL? = {
-        guard let rawValue = value(infoKey: "BUDGETMATE_SUPABASE_URL", configKey: "SUPABASE_PROJECT_URL")?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
+    private static let allowsInsecureHTTP: Bool = {
+#if DEBUG
+        return true
+#else
+        return false
+#endif
+    }()
+
+    static let projectURL: URL? = validatedProjectURL(
+        rawValue: value(infoKey: "BUDGETMATE_SUPABASE_URL", configKey: "SUPABASE_PROJECT_URL"),
+        allowHTTP: allowsInsecureHTTP
+    )
+
+    static let publishableKey: String? = validatedPublishableKey(
+        value(infoKey: "BUDGETMATE_SUPABASE_PUBLISHABLE_KEY", configKey: "SUPABASE_PUBLISHABLE_KEY")
+    )
+
+    static func validatedProjectURL(rawValue: String?, allowHTTP: Bool) -> URL? {
+        guard let rawValue = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines),
               !rawValue.isEmpty,
               !rawValue.contains("$("),
-              !rawValue.localizedCaseInsensitiveContains("your-project") else {
+              !rawValue.localizedCaseInsensitiveContains("your-project"),
+              !rawValue.localizedCaseInsensitiveContains("configuration.invalid") else {
             return nil
         }
 
         // The config stores the host without a scheme because xcconfig treats
-        // "//" as a comment, which prevented "https://" from surviving into the
-        // generated Info.plist. Add the scheme back here.
+        // "//" as a comment. Add HTTPS back for host-only values, while still
+        // rejecting explicit HTTP in Release.
         let normalized = rawValue.contains("://") ? rawValue : "https://\(rawValue)"
         guard let url = URL(string: normalized),
-              url.host != nil,
-              url.scheme == "https" || url.scheme == "http" else { return nil }
-        return url
-    }()
-
-    static let publishableKey: String? = {
-        guard let rawKey = value(infoKey: "BUDGETMATE_SUPABASE_PUBLISHABLE_KEY", configKey: "SUPABASE_PUBLISHABLE_KEY") else {
+              let host = url.host,
+              !host.isEmpty,
+              url.user == nil,
+              url.password == nil,
+              url.path == "" || url.path == "/",
+              url.query == nil,
+              url.fragment == nil,
+              url.scheme == "https" || (allowHTTP && url.scheme == "http"),
+              (!isLocalHost(host) || allowHTTP),
+              !isPlaceholderHost(host) else {
             return nil
         }
+        return url
+    }
+
+    static func validatedPublishableKey(_ rawKey: String?) -> String? {
+        guard let rawKey else { return nil }
         let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty,
               !key.contains("$("),
-              key != "your-publishable-key" else { return nil }
+              !key.localizedCaseInsensitiveContains("your-publishable-key"),
+              !key.localizedCaseInsensitiveContains("missing-publishable-key"),
+              !key.localizedCaseInsensitiveContains("placeholder") else { return nil }
 
         return key
-    }()
+    }
 
     static var isConfigured: Bool {
         projectURL != nil && publishableKey != nil
@@ -52,6 +79,22 @@ enum SupabaseConfig {
         }
 
         return bundledLocalConfig()[configKey]
+    }
+
+    private static func isLocalHost(_ host: String) -> Bool {
+        let normalizedHost = host.lowercased()
+        return normalizedHost == "localhost" ||
+            normalizedHost == "127.0.0.1" ||
+            normalizedHost == "::1" ||
+            normalizedHost == "[::1]"
+    }
+
+    private static func isPlaceholderHost(_ host: String) -> Bool {
+        let normalizedHost = host.lowercased()
+        return normalizedHost == "example.com" ||
+            normalizedHost == "example.invalid" ||
+            normalizedHost.hasSuffix(".example.com") ||
+            normalizedHost.hasSuffix(".example.invalid")
     }
 
     private static func bundledLocalConfig() -> [String: String] {
