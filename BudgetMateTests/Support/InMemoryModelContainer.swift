@@ -9,7 +9,7 @@ final class InMemoryModelContainer {
     let context: ModelContext
 
     init() {
-        persistenceController = PersistenceController(inMemory: true)
+        persistenceController = try! PersistenceController(inMemory: true)
         container = persistenceController.container
         context = container.mainContext
     }

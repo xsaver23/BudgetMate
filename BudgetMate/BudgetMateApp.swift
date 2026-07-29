@@ -3,6 +3,7 @@ import SwiftData
 import SwiftUI
 
 @main
+@MainActor
 struct BudgetMateApp: App {
     @AppStorage("budgetmate.hasSeenIntro") private var hasSeenIntro = false
     @StateObject private var settingsStore = SettingsStore()
@@ -12,6 +13,7 @@ struct BudgetMateApp: App {
     @StateObject private var authStore = AuthSessionStore()
     @StateObject private var cloudSyncStore = CloudSyncStore()
     @StateObject private var appRefreshStore = AppRefreshStore()
+    @StateObject private var persistenceStartup: PersistenceStartupCoordinator
     @Environment(\.scenePhase) private var scenePhase
     @State private var appliedUserScopeId: String?
     @State private var lastAutoSyncedAtByScope: [String: Date] = [:]
@@ -29,7 +31,6 @@ struct BudgetMateApp: App {
     private let minimumPassiveSyncInterval: TimeInterval = 60
     private let launchInteractionGracePeriod: Duration = .seconds(2)
     private let launchStartedAtUptime = ProcessInfo.processInfo.systemUptime
-    private let persistenceController = PersistenceController.shared
     private static let launchLogger = Logger(subsystem: "BudgetMate", category: "Launch")
     private static let launchSignposter = OSSignposter(subsystem: "BudgetMate", category: "Launch")
 
@@ -41,10 +42,74 @@ struct BudgetMateApp: App {
         _memberViewModel = StateObject(
             wrappedValue: MemberViewModel(repository: budgetRepository)
         )
+        _persistenceStartup = StateObject(
+            wrappedValue: PersistenceStartupCoordinator(
+                factory: Self.makePersistenceFactory()
+            )
+        )
     }
 
     var body: some Scene {
         WindowGroup {
+            persistenceGatedContent
+                .onAppear {
+                    appRefreshStore.configure { forceSync in
+                        await refreshCurrentBudget(forceSync: forceSync)
+                    }
+                }
+        }
+        .environmentObject(settingsStore)
+        .environmentObject(memberViewModel)
+        .environmentObject(transactionFlow)
+        .environmentObject(monthSelectionStore)
+        .environmentObject(authStore)
+        .environmentObject(cloudSyncStore)
+        .environmentObject(appRefreshStore)
+        .onChange(of: scenePhase) { _, phase in
+            // A rapid inactive/active transition can otherwise leave several
+            // foreground refresh callers waiting on the same retained cloud
+            // operation. Keep only the latest scene-owned caller alive.
+            foregroundRefreshTask?.cancel()
+            foregroundRefreshTask = nil
+
+            guard phase == .active,
+                  authStore.isAuthenticated,
+                  launchBootstrapPreparedScopes.contains(currentSyncKey) else {
+                return
+            }
+
+            foregroundRefreshTask = Task { @MainActor in
+                await refreshCurrentBudget(forceSync: false)
+            }
+        }
+        .onChange(of: transactionFlow.isTransactionEditorActive) { _, isActive in
+            guard !isActive,
+                  scenePhase == .active,
+                  authStore.isAuthenticated,
+                  launchBootstrapPreparedScopes.contains(currentSyncKey) else {
+                return
+            }
+
+            // If a foreground or timer refresh was deferred to keep typing
+            // responsive, catch up as soon as the editor has left the screen.
+            foregroundRefreshTask?.cancel()
+            foregroundRefreshTask = Task { @MainActor in
+                await refreshCurrentBudget(forceSync: false)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var persistenceGatedContent: some View {
+        switch persistenceStartup.state {
+        case .opening:
+            ProgressView("Opening your local data")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(AppTheme.background)
+                .accessibilityIdentifier("persistence-opening")
+        case .failed:
+            PersistenceRecoveryView(coordinator: persistenceStartup)
+        case .ready(let session):
             Group {
                 if hasSeenIntro {
                     if authStore.isLoading {
@@ -117,52 +182,23 @@ struct BudgetMateApp: App {
                     .preferredColorScheme(settingsStore.settings.appearance.colorScheme)
                 }
             }
-            .onAppear {
-                appRefreshStore.configure { forceSync in
-                    await refreshCurrentBudget(forceSync: forceSync)
-                }
+            .modelContainer(session.container)
+        }
+    }
+
+    private static func makePersistenceFactory() -> any PersistenceContainerFactory {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-ui-testing-persistence-failure") {
+            let descriptor = PersistenceController.descriptor()
+            return ClosurePersistenceContainerFactory {
+                throw PersistenceOpenFailure(
+                    descriptor: descriptor,
+                    reason: .injectedForTesting
+                )
             }
         }
-        .environmentObject(settingsStore)
-        .environmentObject(memberViewModel)
-        .environmentObject(transactionFlow)
-        .environmentObject(monthSelectionStore)
-        .environmentObject(authStore)
-        .environmentObject(cloudSyncStore)
-        .environmentObject(appRefreshStore)
-        .modelContainer(persistenceController.container)
-        .onChange(of: scenePhase) { _, phase in
-            // A rapid inactive/active transition can otherwise leave several
-            // foreground refresh callers waiting on the same retained cloud
-            // operation. Keep only the latest scene-owned caller alive.
-            foregroundRefreshTask?.cancel()
-            foregroundRefreshTask = nil
-
-            guard phase == .active,
-                  authStore.isAuthenticated,
-                  launchBootstrapPreparedScopes.contains(currentSyncKey) else {
-                return
-            }
-
-            foregroundRefreshTask = Task { @MainActor in
-                await refreshCurrentBudget(forceSync: false)
-            }
-        }
-        .onChange(of: transactionFlow.isTransactionEditorActive) { _, isActive in
-            guard !isActive,
-                  scenePhase == .active,
-                  authStore.isAuthenticated,
-                  launchBootstrapPreparedScopes.contains(currentSyncKey) else {
-                return
-            }
-
-            // If a foreground or timer refresh was deferred to keep typing
-            // responsive, catch up as soon as the editor has left the screen.
-            foregroundRefreshTask?.cancel()
-            foregroundRefreshTask = Task { @MainActor in
-                await refreshCurrentBudget(forceSync: false)
-            }
-        }
+        #endif
+        return LivePersistenceContainerFactory()
     }
 
     @ViewBuilder
@@ -320,7 +356,9 @@ struct BudgetMateApp: App {
             return
         }
 
-        let context = persistenceController.container.mainContext
+        guard let context = persistenceStartup.readySession?.container.mainContext else {
+            return
+        }
         let transactions: [Transaction]
         let settlements: [Settlement]
 
