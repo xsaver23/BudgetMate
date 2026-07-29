@@ -124,6 +124,76 @@ final class ScopedPersistenceCharacterizationTests: XCTestCase {
         XCTAssertEqual(restriction.accessibilityIdentifier, "settings.clearAllUnavailable")
     }
 
+    func testGateDSharedBudgetActionsAreUnavailable() {
+        let leaveRestriction = DestructiveActionGuardrails.leaveSharedBudget
+        XCTAssertFalse(leaveRestriction.isEnabled)
+        XCTAssertTrue(leaveRestriction.message.localizedCaseInsensitiveContains("temporarily unavailable"))
+        XCTAssertEqual(leaveRestriction.accessibilityIdentifier, "settings.leaveSharedBudgetUnavailable")
+
+        let inviteRestriction = DestructiveActionGuardrails.inviteCreation
+        XCTAssertFalse(inviteRestriction.isEnabled)
+        XCTAssertTrue(inviteRestriction.message.localizedCaseInsensitiveContains("invites"))
+        XCTAssertEqual(inviteRestriction.accessibilityIdentifier, "budgetMembers.invitesUnavailable")
+    }
+
+    func testReleaseSupabaseConfigurationRejectsUnsafeValuesButKeepsHostOnlyHTTPS() {
+        XCTAssertNil(SupabaseConfig.validatedProjectURL(rawValue: nil, allowHTTP: false))
+        XCTAssertNil(SupabaseConfig.validatedProjectURL(rawValue: "your-project.supabase.co", allowHTTP: false))
+        XCTAssertNil(SupabaseConfig.validatedProjectURL(rawValue: "http://budgetmate.supabase.co", allowHTTP: false))
+        XCTAssertNil(SupabaseConfig.validatedProjectURL(rawValue: "https://localhost", allowHTTP: false))
+        XCTAssertNil(SupabaseConfig.validatedProjectURL(rawValue: "https://127.0.0.1", allowHTTP: false))
+        XCTAssertNil(SupabaseConfig.validatedProjectURL(rawValue: "https://configuration.invalid", allowHTTP: false))
+        XCTAssertNil(SupabaseConfig.validatedProjectURL(rawValue: "https://example.com", allowHTTP: false))
+        XCTAssertEqual(
+            SupabaseConfig.validatedProjectURL(rawValue: "budgetmate.supabase.co", allowHTTP: false)?.scheme,
+            "https"
+        )
+        XCTAssertEqual(
+            SupabaseConfig.validatedProjectURL(rawValue: "http://localhost:54321", allowHTTP: true)?.scheme,
+            "http"
+        )
+        XCTAssertNil(SupabaseConfig.validatedPublishableKey("your-publishable-key"))
+        XCTAssertNil(SupabaseConfig.validatedPublishableKey("missing-publishable-key"))
+        XCTAssertNil(SupabaseConfig.validatedPublishableKey("placeholder-key"))
+        XCTAssertEqual(SupabaseConfig.validatedPublishableKey("beta-publishable-key"), "beta-publishable-key")
+    }
+
+    func testCloudSyncStoreRejectsGateDInviteAndLeaveCallsBeforeNetworkAccess() async {
+        let store = CloudSyncStore()
+
+        do {
+            _ = try await store.ensureSharedBudget(name: "Should not be created", userScopeId: "user")
+            XCTFail("Gate D must prevent shared-budget creation through the invite path.")
+        } catch SupabaseBudgetSyncError.sharedBudgetInvitesUnavailable {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected shared-budget creation error: \(error)")
+        }
+
+        do {
+            try await store.inviteMember(
+                displayName: "Should not be invited",
+                email: "blocked@example.com",
+                userScopeId: "user",
+                budgetId: UUID()
+            )
+            XCTFail("Gate D must prevent invite creation before network access.")
+        } catch SupabaseBudgetSyncError.sharedBudgetInvitesUnavailable {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected invite error: \(error)")
+        }
+
+        do {
+            try await store.leaveBudget(userScopeId: "user", budgetScopeId: UUID().uuidString)
+            XCTFail("Gate D must prevent leaving a shared budget before network access.")
+        } catch SupabaseBudgetSyncError.sharedBudgetLeaveUnavailable {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected leave-budget error: \(error)")
+        }
+    }
+
     func testAcceptedMemberRemovalGuardrailProtectsSharedTransactionHistory() {
         let restriction = DestructiveActionGuardrails.memberRemoval(for: BudgetMateTestFixtures.bob)
 

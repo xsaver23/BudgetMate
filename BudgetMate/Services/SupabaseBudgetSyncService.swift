@@ -179,9 +179,16 @@ private struct SettlementMutationPayload: Encodable {
     }
 }
 
+enum GateDControlledBetaPolicy {
+    static var allowsSharedBudgetInvites: Bool { false }
+    static var allowsSharedBudgetLeave: Bool { false }
+}
+
 enum SupabaseBudgetSyncError: LocalizedError {
     case missingUser
     case notBudgetOwner
+    case sharedBudgetInvitesUnavailable
+    case sharedBudgetLeaveUnavailable
     case invalidCloudDate(String)
     case invalidCloudMoneyContract
     case sharedDataSafetyDisabled
@@ -199,6 +206,10 @@ enum SupabaseBudgetSyncError: LocalizedError {
             return "Sign in again before syncing."
         case .notBudgetOwner:
             return "Only the household owner can invite members."
+        case .sharedBudgetInvitesUnavailable:
+            return "Household invites are temporarily unavailable in this beta."
+        case .sharedBudgetLeaveUnavailable:
+            return "Leaving a shared budget is temporarily unavailable in this beta."
         case .invalidCloudDate(let value):
             return "Cloud data has an invalid date: \(value)."
         case .invalidCloudMoneyContract:
@@ -1620,6 +1631,10 @@ final class SupabaseBudgetSyncService {
         budgetId: UUID,
         ownerMemberId: UUID
     ) async throws -> BudgetSummary {
+        guard GateDControlledBetaPolicy.allowsSharedBudgetInvites else {
+            throw SupabaseBudgetSyncError.sharedBudgetInvitesUnavailable
+        }
+
         guard let userId = UUID(uuidString: userScopeId) else {
             throw SupabaseBudgetSyncError.missingUser
         }
@@ -1653,6 +1668,10 @@ final class SupabaseBudgetSyncService {
     }
 
     func createInvite(displayName: String, email: String, userScopeId: String, budgetId: UUID) async throws {
+        guard GateDControlledBetaPolicy.allowsSharedBudgetInvites else {
+            throw SupabaseBudgetSyncError.sharedBudgetInvitesUnavailable
+        }
+
         guard let userId = UUID(uuidString: userScopeId) else {
             throw SupabaseBudgetSyncError.missingUser
         }
@@ -1781,6 +1800,10 @@ final class SupabaseBudgetSyncService {
     }
 
     func leaveBudget(userScopeId: String, budgetScopeId: String) async throws {
+        guard GateDControlledBetaPolicy.allowsSharedBudgetLeave else {
+            throw SupabaseBudgetSyncError.sharedBudgetLeaveUnavailable
+        }
+
         guard let userId = UUID(uuidString: userScopeId),
               let budgetId = UUID(uuidString: budgetScopeId),
               budgetId != userId else {

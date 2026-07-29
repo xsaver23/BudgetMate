@@ -17,7 +17,6 @@ struct SettingsView: View {
         self.budgetScopeId = budgetScopeId
     }
 
-    @State private var isShowingLeaveBudgetConfirmation = false
     @State private var isShowingProfileEditor = false
     @State private var clearFeedbackMessage: String?
     @State private var pendingInvites: [BudgetInvite] = []
@@ -207,12 +206,8 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.plain)
 
-                        if canLeaveCurrentBudget {
-                            Divider()
-                            rowButton("Leave Shared Budget", tint: AppTheme.danger) {
-                                isShowingLeaveBudgetConfirmation = true
-                            }
-                        }
+                        Divider()
+                        unavailableActionRow(DestructiveActionGuardrails.leaveSharedBudget)
 
                         if isLoadingInvites {
                             Divider()
@@ -246,6 +241,20 @@ struct SettingsView: View {
                                 recurringExpenseRow(transaction)
                             }
                         }
+                    }
+
+                    settingsSection("Privacy & Support") {
+                        Text("BudgetMate keeps local budget data on this device. Shared-budget data syncs only when cloud sync is configured. Support archives can contain budget data; review an archive before sharing it.")
+                            .font(settingsHelperFont)
+                            .foregroundStyle(BudgetBeaverPalette.wood)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("settings.privacySupportDisclosure")
+
+                        Text("Privacy policy and support contact links are not configured in this beta. Do not include sensitive data when sharing a support archive.")
+                            .font(settingsHelperFont)
+                            .foregroundStyle(AppTheme.warningText)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("settings.missingPrivacySupportLinks")
                     }
 
                     settingsSection("Sync") {
@@ -327,18 +336,6 @@ struct SettingsView: View {
                         updateProfileName(name)
                     }
                 )
-            }
-            .confirmationDialog(
-                "Leave this shared budget?",
-                isPresented: $isShowingLeaveBudgetConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button("Leave Shared Budget", role: .destructive) {
-                    leaveCurrentBudget()
-                }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                Text("You will no longer see this shared budget. The budget and its transactions will stay available for the other members.")
             }
             .alert("BudgetMate", isPresented: clearFeedbackAlertBinding) {
                 Button("OK", role: .cancel) { }
@@ -497,11 +494,6 @@ struct SettingsView: View {
         memberships.first { $0.budgetId.uuidString == authStore.currentBudgetScopeId }
     }
 
-    private var canLeaveCurrentBudget: Bool {
-        authStore.currentBudgetScopeId != authStore.currentUserScopeId &&
-        currentMembership?.role != "owner"
-    }
-
     private var activeBudgetDisplayName: String {
         currentMembership?.displayName(currentUserId: authStore.currentUserScopeId) ?? "Personal Budget"
     }
@@ -515,36 +507,6 @@ struct SettingsView: View {
         saveCurrentMembersToCloud()
         isShowingProfileEditor = false
         clearFeedbackMessage = "Profile name updated."
-    }
-
-    private func leaveCurrentBudget() {
-        let sharedBudgetScopeId = authStore.currentBudgetScopeId
-        guard canLeaveCurrentBudget else {
-            clearFeedbackMessage = "You cannot leave your personal budget."
-            return
-        }
-
-        Task {
-            do {
-                try await cloudSyncStore.leaveBudget(
-                    userScopeId: authStore.currentUserScopeId,
-                    budgetScopeId: sharedBudgetScopeId
-                )
-                memberships.removeAll { $0.budgetId.uuidString == sharedBudgetScopeId }
-                authStore.switchBudgetScope(to: authStore.currentUserScopeId)
-                settingsStore.switchUser(to: authStore.currentUserScopeId)
-                memberViewModel.switchUser(
-                    to: authStore.currentUserScopeId,
-                    budgetScopeId: authStore.currentUserScopeId,
-                    email: authStore.userEmail
-                )
-                await loadMemberships()
-                await refreshAllData(showFeedback: false, forceSync: true)
-                clearFeedbackMessage = "You left the shared budget. You are now viewing your personal budget."
-            } catch {
-                clearFeedbackMessage = "Could not leave shared budget: \(error.localizedDescription)"
-            }
-        }
     }
 
     @discardableResult

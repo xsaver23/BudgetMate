@@ -31,6 +31,18 @@ struct RestrictedDestructiveAction: Equatable {
 }
 
 enum DestructiveActionGuardrails {
+    static let leaveSharedBudget = RestrictedDestructiveAction.unavailable(
+        title: "Leave Shared Budget",
+        message: "Leaving a shared budget is temporarily unavailable in this beta while household history protections are completed.",
+        accessibilityIdentifier: "settings.leaveSharedBudgetUnavailable"
+    )
+
+    static let inviteCreation = RestrictedDestructiveAction.unavailable(
+        title: "Invite Members",
+        message: "Creating or delivering household invites is temporarily unavailable in this beta.",
+        accessibilityIdentifier: "budgetMembers.invitesUnavailable"
+    )
+
     static let clearAll = RestrictedDestructiveAction.unavailable(
         title: "Clear All Transactions",
         message: "Clear All is temporarily unavailable while BudgetMate adds an atomic, recoverable version that protects transaction and settle-up history.",
