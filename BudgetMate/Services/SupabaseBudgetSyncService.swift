@@ -53,11 +53,145 @@ enum MoneyServerBridgeRollout {
     static let isEnabled = false
 }
 
+struct SharedDataSafetyMutationResult: Decodable, Equatable {
+    let recordId: UUID
+    let rowVersion: Int64
+    let deleted: Bool
+    let replayed: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case recordId = "record_id"
+        case rowVersion = "row_version"
+        case deleted
+        case replayed
+    }
+}
+
+private struct SharedDataSafetyMutationParameters<Payload: Encodable>: Encodable {
+    let budgetId: UUID
+    let recordId: UUID
+    let expectedRowVersion: Int64
+    let clientMutationId: UUID
+    let operation: String
+    let payload: Payload
+
+    enum CodingKeys: String, CodingKey {
+        case budgetId = "p_budget_id"
+        case recordId = "p_record_id"
+        case expectedRowVersion = "p_expected_row_version"
+        case clientMutationId = "p_client_mutation_id"
+        case operation = "p_operation"
+        case payload = "p_payload"
+    }
+}
+
+private struct EmptySharedDataSafetyPayload: Encodable {}
+
+private struct TransactionMutationPayload: Encodable {
+    let title: String
+    let amount: Double
+    let amountMinorUnits: Int64?
+    let currencyCode: String?
+    let type: String
+    let category: String
+    let paymentMethod: String?
+    let createdByMemberId: UUID
+    let date: String
+    let occurredOn: String
+    let createdAt: String
+    let recurrenceRule: String?
+    let splits: [CloudTransactionSplitRow]
+    let splitsMinorUnits: [CloudTransactionSplitMoneyRow]?
+
+    enum CodingKeys: String, CodingKey {
+        case title, amount, type, category, splits
+        case amountMinorUnits = "amount_minor_units"
+        case currencyCode = "currency_code"
+        case paymentMethod = "payment_method"
+        case createdByMemberId = "created_by_member_id"
+        case date
+        case occurredOn = "occurred_on"
+        case createdAt = "created_at"
+        case recurrenceRule = "recurrence_rule"
+        case splitsMinorUnits = "splits_minor_units"
+    }
+
+    init(transaction: Transaction, memberAliases: [UUID: UUID] = [:]) {
+        title = transaction.title
+        amount = transaction.amount
+        amountMinorUnits = transaction.amountMinorUnits
+        currencyCode = transaction.currencyCode
+        type = transaction.type.rawValue
+        category = transaction.category.rawValue
+        paymentMethod = transaction.paymentMethod?.rawValue
+        createdByMemberId = CloudTransactionRow.resolvedMemberId(transaction.createdByMemberId, aliases: memberAliases)
+        date = CloudISO8601DateCodec.string(from: transaction.date)
+        occurredOn = CloudISO8601DateCodec.localDateString(from: transaction.date)
+        createdAt = CloudISO8601DateCodec.string(from: transaction.createdAt)
+        recurrenceRule = transaction.recurrenceRule
+        splits = transaction.splits.map {
+            CloudTransactionSplitRow(
+                id: $0.id,
+                memberId: CloudTransactionRow.resolvedMemberId($0.memberId, aliases: memberAliases),
+                amount: $0.amount
+            )
+        }
+        let exactSplits = transaction.splits.compactMap { split -> CloudTransactionSplitMoneyRow? in
+            guard let amountMinorUnits = split.amountMinorUnits,
+                  let currencyCode = split.currencyCode else { return nil }
+            return CloudTransactionSplitMoneyRow(
+                id: split.id,
+                memberId: CloudTransactionRow.resolvedMemberId(split.memberId, aliases: memberAliases),
+                amountMinorUnits: amountMinorUnits,
+                currencyCode: currencyCode
+            )
+        }
+        splitsMinorUnits = exactSplits.count == transaction.splits.count ? exactSplits : nil
+    }
+}
+
+private struct SettlementMutationPayload: Encodable {
+    let fromMemberId: UUID
+    let toMemberId: UUID
+    let amount: Double
+    let amountMinorUnits: Int64?
+    let currencyCode: String?
+    let date: String
+    let occurredOn: String
+
+    enum CodingKeys: String, CodingKey {
+        case amount, date
+        case fromMemberId = "from_member_id"
+        case toMemberId = "to_member_id"
+        case amountMinorUnits = "amount_minor_units"
+        case currencyCode = "currency_code"
+        case occurredOn = "occurred_on"
+    }
+
+    init(settlement: Settlement, memberAliases: [UUID: UUID] = [:]) {
+        fromMemberId = CloudTransactionRow.resolvedMemberId(settlement.fromMemberId, aliases: memberAliases)
+        toMemberId = CloudTransactionRow.resolvedMemberId(settlement.toMemberId, aliases: memberAliases)
+        amount = settlement.amount
+        amountMinorUnits = settlement.amountMinorUnits
+        currencyCode = settlement.currencyCode
+        date = CloudISO8601DateCodec.string(from: settlement.date)
+        occurredOn = CloudISO8601DateCodec.localDateString(from: settlement.date)
+    }
+}
+
 enum SupabaseBudgetSyncError: LocalizedError {
     case missingUser
     case notBudgetOwner
     case invalidCloudDate(String)
     case invalidCloudMoneyContract
+    case sharedDataSafetyDisabled
+    case sharedDataMutationConflict
+    case idempotencyMismatch
+    case remoteDeleted
+    case mutationRecordNotFound
+    case invalidMemberReference
+    case memberReferenceForbidden
+    case unsafePendingDeletion
 
     var errorDescription: String? {
         switch self {
@@ -69,6 +203,22 @@ enum SupabaseBudgetSyncError: LocalizedError {
             return "Cloud data has an invalid date: \(value)."
         case .invalidCloudMoneyContract:
             return "Cloud data has inconsistent exact-money fields."
+        case .sharedDataSafetyDisabled:
+            return "Shared-data writes are temporarily disabled while household safety is being enabled."
+        case .sharedDataMutationConflict:
+            return "This shared record changed on another device. Refresh before trying again."
+        case .idempotencyMismatch:
+            return "This cloud retry did not match the original change and was not applied. Refresh before trying again."
+        case .remoteDeleted:
+            return "This record was already deleted on another device. It was not recreated."
+        case .mutationRecordNotFound:
+            return "This shared record no longer exists. Refresh before trying again."
+        case .invalidMemberReference:
+            return "This change refers to an invalid household member. Refresh and try again."
+        case .memberReferenceForbidden:
+            return "This change refers to a member outside the active household. Refresh and try again."
+        case .unsafePendingDeletion:
+            return "A pending deletion is missing conflict metadata and was not replayed."
         }
     }
 }
@@ -561,6 +711,9 @@ struct CloudTransactionRow: Codable {
     let category: String
     let paymentMethod: String?
     let createdByMemberId: UUID
+    let createdByUserId: UUID?
+    let rowVersion: Int64?
+    let lastMutationId: UUID?
     let date: String
     var occurredOn: String?
     let createdAt: String
@@ -580,6 +733,9 @@ struct CloudTransactionRow: Codable {
         case category
         case paymentMethod = "payment_method"
         case createdByMemberId = "created_by_member_id"
+        case createdByUserId = "created_by_user_id"
+        case rowVersion = "row_version"
+        case lastMutationId = "last_mutation_id"
         case date
         case occurredOn = "occurred_on"
         case createdAt = "created_at"
@@ -620,6 +776,9 @@ struct CloudTransactionRow: Codable {
             aliases: memberAliases,
             validMemberIds: validMemberIds
         )
+        createdByUserId = transaction.createdByUserId ?? existingUserId
+        rowVersion = transaction.rowVersion
+        lastMutationId = transaction.lastMutationId
         date = Self.string(from: transaction.date)
         occurredOn = CloudISO8601DateCodec.localDateString(from: transaction.date)
         createdAt = Self.string(from: transaction.createdAt)
@@ -678,6 +837,9 @@ struct CloudTransactionRow: Codable {
             aliases: memberAliases,
             validMemberIds: validMemberIds
         )
+        transaction.createdByUserId = createdByUserId
+        transaction.rowVersion = rowVersion
+        transaction.lastMutationId = lastMutationId
         transaction.date = resolvedDate
         transaction.createdAt = CloudISO8601DateCodec.dateOrNow(from: createdAt)
         transaction.recurrenceRule = recurrenceRule
@@ -709,6 +871,9 @@ struct CloudTransactionRow: Codable {
             aliases: memberAliases,
             validMemberIds: validMemberIds
         ) &&
+        transaction.createdByUserId == createdByUserId &&
+        transaction.rowVersion == rowVersion &&
+        transaction.lastMutationId == lastMutationId &&
         matchesDate(transaction.date) &&
         CloudISO8601DateCodec.representsSameInstant(transaction.createdAt, as: createdAt) &&
         transaction.recurrenceRule == recurrenceRule &&
@@ -776,6 +941,9 @@ struct CloudTransactionRow: Codable {
                 aliases: memberAliases,
                 validMemberIds: validMemberIds
             ),
+            createdByUserId: createdByUserId,
+            rowVersion: rowVersion,
+            lastMutationId: lastMutationId,
             date: resolvedDate,
             createdAt: CloudISO8601DateCodec.dateOrNow(from: createdAt),
             recurrenceRule: recurrenceRule,
@@ -894,6 +1062,9 @@ struct CloudSettlementRow: Codable {
     let budgetId: UUID
     let fromMemberId: UUID
     let toMemberId: UUID
+    let createdByUserId: UUID?
+    let rowVersion: Int64?
+    let lastMutationId: UUID?
     let amount: Double
     let amountMinorUnits: Int64?
     let currencyCode: String?
@@ -906,6 +1077,9 @@ struct CloudSettlementRow: Codable {
         case budgetId = "budget_id"
         case fromMemberId = "from_member_id"
         case toMemberId = "to_member_id"
+        case createdByUserId = "created_by_user_id"
+        case rowVersion = "row_version"
+        case lastMutationId = "last_mutation_id"
         case amount
         case amountMinorUnits = "amount_minor_units"
         case currencyCode = "currency_code"
@@ -926,6 +1100,9 @@ struct CloudSettlementRow: Codable {
         self.budgetId = budgetId ?? userId
         fromMemberId = CloudTransactionRow.resolvedMemberId(settlement.fromMemberId, aliases: memberAliases)
         toMemberId = CloudTransactionRow.resolvedMemberId(settlement.toMemberId, aliases: memberAliases)
+        createdByUserId = settlement.createdByUserId ?? existingUserId
+        rowVersion = settlement.rowVersion
+        lastMutationId = settlement.lastMutationId
         amount = settlement.amount
         if rolloutEnabled,
            let exactMinorUnits = settlement.amountMinorUnits,
@@ -948,6 +1125,9 @@ struct CloudSettlementRow: Codable {
     ) {
         settlement.fromMemberId = CloudTransactionRow.resolvedMemberId(fromMemberId, aliases: memberAliases)
         settlement.toMemberId = CloudTransactionRow.resolvedMemberId(toMemberId, aliases: memberAliases)
+        settlement.createdByUserId = createdByUserId
+        settlement.rowVersion = rowVersion
+        settlement.lastMutationId = lastMutationId
         settlement.amount = amount
         if rolloutEnabled {
             settlement.amountMinorUnits = amountMinorUnits
@@ -967,6 +1147,9 @@ struct CloudSettlementRow: Codable {
     ) -> Bool {
         settlement.fromMemberId == CloudTransactionRow.resolvedMemberId(fromMemberId, aliases: memberAliases) &&
         settlement.toMemberId == CloudTransactionRow.resolvedMemberId(toMemberId, aliases: memberAliases) &&
+        settlement.createdByUserId == createdByUserId &&
+        settlement.rowVersion == rowVersion &&
+        settlement.lastMutationId == lastMutationId &&
         settlement.amount == amount &&
         (!rolloutEnabled || (
             settlement.amountMinorUnits == amountMinorUnits &&
@@ -988,6 +1171,9 @@ struct CloudSettlementRow: Codable {
             amount: amount,
             amountMinorUnits: rolloutEnabled ? amountMinorUnits : nil,
             currencyCode: rolloutEnabled ? currencyCode : nil,
+            createdByUserId: createdByUserId,
+            rowVersion: rowVersion,
+            lastMutationId: lastMutationId,
             date: resolvedDate,
             ownerUserId: ownerUserId
         )
@@ -1035,10 +1221,34 @@ final class SupabaseBudgetSyncService {
     private var repairedProfileScopeKeys: Set<String> = []
     /// Older deployments do not have the date-only compatibility columns.
     /// Once PostgREST reports them missing, use legacy payloads for this run.
-    private var supportsOccurredOnColumns = true
 
     init(client: SupabaseClient = SupabaseClientProvider.shared) {
         self.client = client
+    }
+
+    @discardableResult
+    static func prepareMutationIDs(
+        transactions: [Transaction],
+        settlements: [Settlement]
+    ) -> Bool {
+        var changed = false
+        for transaction in transactions where transaction.needsSync && transaction.lastMutationId == nil {
+            transaction.lastMutationId = UUID()
+            changed = true
+        }
+        for settlement in settlements where settlement.needsSync && settlement.lastMutationId == nil {
+            settlement.lastMutationId = UUID()
+            changed = true
+        }
+        return changed
+    }
+
+    static func shouldDeferFinancialWrites(
+        transactions: [Transaction],
+        settlements: [Settlement]
+    ) -> Bool {
+        !SharedDataSafetyGate.isEnabled &&
+            (transactions.contains(where: \.needsSync) || settlements.contains(where: \.needsSync))
     }
 
     func sync(
@@ -1071,6 +1281,13 @@ final class SupabaseBudgetSyncService {
         }
         try dirtyTransactions.forEach { try $0.validateForSync() }
         try dirtySettlements.forEach { try $0.validateForSync() }
+
+        // Persist IDs before the first network attempt. A legacy dirty row
+        // must not receive a new id after a crash between pull and RPC.
+        if Self.prepareMutationIDs(transactions: dirtyTransactions, settlements: dirtySettlements) {
+            try context.save()
+        }
+        let financialWritesEnabled = SharedDataSafetyGate.isEnabled
 
         try await ensurePersonalBudget(userId: userId)
         if let userEmail {
@@ -1140,7 +1357,7 @@ final class SupabaseBudgetSyncService {
             },
             by: \.id
         )
-        let pushedTransactionIDs = Set(transactionRows.map(\.id))
+        let pushedTransactionIDs = financialWritesEnabled ? Set(transactionRows.map(\.id)) : []
         let settlementRows = Self.uniqueRows(dirtySettlements
             .map {
                 CloudSettlementRow(
@@ -1153,7 +1370,7 @@ final class SupabaseBudgetSyncService {
             },
             by: \.id
         )
-        let pushedSettlementIDs = Set(settlementRows.map(\.id))
+        let pushedSettlementIDs = financialWritesEnabled ? Set(settlementRows.map(\.id)) : []
 
         let didPushSettings = existingSettings == nil || shouldPushSettings
         if didPushSettings {
@@ -1170,19 +1387,65 @@ final class SupabaseBudgetSyncService {
                 .execute()
         }
 
-        if !transactionRows.isEmpty {
-            try await upsertTransactionRows(transactionRows)
-        }
+        if financialWritesEnabled {
+          for transaction in dirtyTransactions {
+            if transaction.rowVersion == nil {
+                transaction.rowVersion = cloudTransactionsByID[transaction.id]?.rowVersion
+            }
+            let mutationId = transaction.lastMutationId ?? UUID()
+            let operation = cloudTransactionsByID[transaction.id] == nil ? "insert" : "update"
+            let result = try await mutateTransaction(
+                transaction,
+                operation: operation,
+                userScopeId: userScopeId,
+                budgetScopeId: budgetId.uuidString,
+                mutationId: mutationId,
+                memberAliases: memberAliases
+            )
+            transaction.rowVersion = result.rowVersion
+            transaction.lastMutationId = mutationId
+            transaction.needsSync = false
+          }
 
-        if !settlementRows.isEmpty {
-            try await upsertSettlementRows(settlementRows)
+          for settlement in dirtySettlements {
+            if settlement.rowVersion == nil {
+                settlement.rowVersion = cloudSettlementsByID[settlement.id]?.rowVersion
+            }
+            let mutationId = settlement.lastMutationId ?? UUID()
+            let operation = cloudSettlementsByID[settlement.id] == nil ? "insert" : "update"
+            let result = try await mutateSettlement(
+                settlement,
+                operation: operation,
+                userScopeId: userScopeId,
+                budgetScopeId: budgetId.uuidString,
+                mutationId: mutationId,
+                memberAliases: memberAliases
+            )
+            settlement.rowVersion = result.rowVersion
+            settlement.lastMutationId = mutationId
+            settlement.needsSync = false
+          }
         }
 
         // The rows just written are the authoritative values for this pass.
         // Reconcile them into the initial pull instead of issuing two more
         // full-table reads after every sync.
-        let pulledTransactions = Self.uniqueRows(cloudTransactions + transactionRows, by: \.id)
-        let pulledSettlements = Self.uniqueRows(cloudSettlements + settlementRows, by: \.id)
+        let pulledTransactions: [CloudTransactionRow] = !financialWritesEnabled || transactionRows.isEmpty
+            ? cloudTransactions
+            : try await client
+                .from("budget_transactions")
+                .select()
+                .eq("budget_id", value: budgetId)
+                .execute()
+                .value
+        let pulledSettlements: [CloudSettlementRow] = !financialWritesEnabled || settlementRows.isEmpty
+            ? cloudSettlements
+            : try await client
+                .from("budget_settlements")
+                .select()
+                .eq("budget_id", value: budgetId)
+                .execute()
+                .value
 
         pruneLocalRowsMissingFromCloud(
             localTransactions: transactions,
@@ -1209,9 +1472,9 @@ final class SupabaseBudgetSyncService {
             pushedSettings: didPushSettings,
             pushedMembers: memberRows.count,
             pulledMembers: pulledMembers.count,
-            pushedTransactions: transactionRows.count,
+            pushedTransactions: financialWritesEnabled ? transactionRows.count : 0,
             pulledTransactions: pulledTransactions.count,
-            pushedSettlements: settlementRows.count,
+            pushedSettlements: financialWritesEnabled ? settlementRows.count : 0,
             pulledSettlements: pulledSettlements.count,
             settings: didPushSettings ? settings : existingSettings,
             members: pulledMembers
@@ -1559,15 +1822,92 @@ final class SupabaseBudgetSyncService {
             .execute()
     }
 
-    func deleteTransaction(id: UUID, userScopeId: String, budgetScopeId: String? = nil) async throws {
-        guard let userId = UUID(uuidString: userScopeId) else { return }
+    func deleteTransaction(
+        id: UUID,
+        expectedRowVersion: Int64? = nil,
+        userScopeId: String,
+        budgetScopeId: String? = nil,
+        mutationId: UUID = UUID()
+    ) async throws {
+        guard let expectedRowVersion else {
+            throw SupabaseBudgetSyncError.unsafePendingDeletion
+        }
+        _ = try await deleteTransactionSafely(
+            id: id,
+            expectedRowVersion: expectedRowVersion,
+            userScopeId: userScopeId,
+            budgetScopeId: budgetScopeId,
+            mutationId: mutationId
+        )
+    }
+
+    func mutateTransaction(
+        _ transaction: Transaction,
+        operation: String,
+        userScopeId: String,
+        budgetScopeId: String? = nil,
+        mutationId: UUID = UUID(),
+        memberAliases: [UUID: UUID] = [:]
+    ) async throws -> SharedDataSafetyMutationResult {
+        guard SharedDataSafetyGate.isEnabled else {
+            throw SupabaseBudgetSyncError.sharedDataSafetyDisabled
+        }
+        guard let userId = UUID(uuidString: userScopeId) else {
+            throw SupabaseBudgetSyncError.missingUser
+        }
         let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
-        try await client
-            .from("budget_transactions")
-            .delete()
-            .eq("id", value: id)
-            .eq("budget_id", value: budgetId)
-            .execute()
+        try transaction.validateForSync()
+        let params = SharedDataSafetyMutationParameters(
+            budgetId: budgetId,
+            recordId: transaction.id,
+            expectedRowVersion: transaction.rowVersion ?? 0,
+            clientMutationId: mutationId,
+            operation: operation,
+            payload: TransactionMutationPayload(transaction: transaction, memberAliases: memberAliases)
+        )
+        do {
+            return try await client
+                .rpc("mutate_budget_transaction", params: params)
+                .execute()
+                .value
+        } catch {
+            throw Self.mapMutationError(error)
+        }
+    }
+
+    func deleteTransactionSafely(
+        id: UUID,
+        expectedRowVersion: Int64?,
+        userScopeId: String,
+        budgetScopeId: String? = nil,
+        mutationId: UUID
+    ) async throws -> SharedDataSafetyMutationResult {
+        guard SharedDataSafetyGate.isEnabled else {
+            throw SupabaseBudgetSyncError.sharedDataSafetyDisabled
+        }
+        guard let userId = UUID(uuidString: userScopeId) else {
+            throw SupabaseBudgetSyncError.missingUser
+        }
+        let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
+        guard let expectedRowVersion else {
+            throw SupabaseBudgetSyncError.unsafePendingDeletion
+        }
+        let params = SharedDataSafetyMutationParameters(
+            budgetId: budgetId,
+            recordId: id,
+            expectedRowVersion: expectedRowVersion,
+            clientMutationId: mutationId,
+            operation: "delete",
+            payload: EmptySharedDataSafetyPayload()
+        )
+        do {
+            return try await client
+                .rpc("mutate_budget_transaction", params: params)
+                .execute()
+                .value
+        } catch {
+            throw Self.mapMutationError(error)
+        }
     }
 
     func upsertTransaction(_ transaction: Transaction, userScopeId: String, budgetScopeId: String? = nil) async throws {
@@ -1584,74 +1924,148 @@ final class SupabaseBudgetSyncService {
         budgetScopeId: String? = nil
     ) async throws {
         guard !transactions.isEmpty else { return }
-        guard let userId = UUID(uuidString: userScopeId) else {
-            throw SupabaseBudgetSyncError.missingUser
+        guard SharedDataSafetyGate.isEnabled else {
+            throw SupabaseBudgetSyncError.sharedDataSafetyDisabled
         }
-        let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
-
-        try await ensurePersonalBudget(userId: userId)
-        try transactions.forEach { try $0.validateForSync() }
-
-        let existingRows = try await budgetMemberRows(budgetId: budgetId)
-        let memberAliases = self.memberAliases(
-            candidateRows: [],
-            existingRows: existingRows,
-            userId: userId,
-            userEmail: nil
-        )
-        let validMemberIds = Self.validMemberIds(
-            candidateRows: [],
-            existingRows: existingRows,
-            aliases: memberAliases
-        )
-        let rows = Self.uniqueRows(
-            transactions.map {
-                CloudTransactionRow(
-                    transaction: $0,
-                    userId: userId,
-                    budgetId: budgetId,
-                    memberAliases: memberAliases,
-                    validMemberIds: validMemberIds
-                )
-            },
-            by: \.id
-        )
-        try await upsertTransactionRows(rows)
+        for transaction in transactions {
+            let mutationId = transaction.lastMutationId ?? UUID()
+            let result = try await mutateTransaction(
+                transaction,
+                operation: transaction.rowVersion == nil ? "insert" : "update",
+                userScopeId: userScopeId,
+                budgetScopeId: budgetScopeId,
+                mutationId: mutationId
+            )
+            transaction.rowVersion = result.rowVersion
+            transaction.lastMutationId = mutationId
+        }
     }
 
     func upsertSettlement(_ settlement: Settlement, userScopeId: String, budgetScopeId: String? = nil) async throws {
+        guard SharedDataSafetyGate.isEnabled else {
+            throw SupabaseBudgetSyncError.sharedDataSafetyDisabled
+        }
+        let mutationId = settlement.lastMutationId ?? UUID()
+        let result = try await mutateSettlement(
+            settlement,
+            operation: settlement.rowVersion == nil ? "insert" : "update",
+            userScopeId: userScopeId,
+            budgetScopeId: budgetScopeId,
+            mutationId: mutationId
+        )
+        settlement.rowVersion = result.rowVersion
+        settlement.lastMutationId = mutationId
+    }
+
+    func deleteSettlement(
+        id: UUID,
+        expectedRowVersion: Int64? = nil,
+        userScopeId: String,
+        budgetScopeId: String? = nil,
+        mutationId: UUID = UUID()
+    ) async throws {
+        guard let expectedRowVersion else {
+            throw SupabaseBudgetSyncError.unsafePendingDeletion
+        }
+        _ = try await deleteSettlementSafely(
+            id: id,
+            expectedRowVersion: expectedRowVersion,
+            userScopeId: userScopeId,
+            budgetScopeId: budgetScopeId,
+            mutationId: mutationId
+        )
+    }
+
+    func mutateSettlement(
+        _ settlement: Settlement,
+        operation: String,
+        userScopeId: String,
+        budgetScopeId: String? = nil,
+        mutationId: UUID = UUID(),
+        memberAliases: [UUID: UUID] = [:]
+    ) async throws -> SharedDataSafetyMutationResult {
+        guard SharedDataSafetyGate.isEnabled else {
+            throw SupabaseBudgetSyncError.sharedDataSafetyDisabled
+        }
         guard let userId = UUID(uuidString: userScopeId) else {
             throw SupabaseBudgetSyncError.missingUser
         }
         let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
-
-        try await ensurePersonalBudget(userId: userId)
         try settlement.validateForSync()
-
-        let memberAliases = self.memberAliases(
-            candidateRows: [],
-            existingRows: try await budgetMemberRows(budgetId: budgetId),
-            userId: userId,
-            userEmail: nil
-        )
-        let row = CloudSettlementRow(
-            settlement: settlement,
-            userId: userId,
+        let params = SharedDataSafetyMutationParameters(
             budgetId: budgetId,
-            memberAliases: memberAliases
+            recordId: settlement.id,
+            expectedRowVersion: settlement.rowVersion ?? 0,
+            clientMutationId: mutationId,
+            operation: operation,
+            payload: SettlementMutationPayload(settlement: settlement, memberAliases: memberAliases)
         )
-        try await upsertSettlementRows([row])
+        do {
+            return try await client
+                .rpc("mutate_budget_settlement", params: params)
+                .execute()
+                .value
+        } catch {
+            throw Self.mapMutationError(error)
+        }
     }
 
-    func deleteSettlement(id: UUID, userScopeId: String, budgetScopeId: String? = nil) async throws {
-        guard let userId = UUID(uuidString: userScopeId) else { return }
+    func deleteSettlementSafely(
+        id: UUID,
+        expectedRowVersion: Int64?,
+        userScopeId: String,
+        budgetScopeId: String? = nil,
+        mutationId: UUID
+    ) async throws -> SharedDataSafetyMutationResult {
+        guard SharedDataSafetyGate.isEnabled else {
+            throw SupabaseBudgetSyncError.sharedDataSafetyDisabled
+        }
+        guard let userId = UUID(uuidString: userScopeId) else {
+            throw SupabaseBudgetSyncError.missingUser
+        }
         let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
-        try await client
-            .from("budget_settlements")
-            .delete()
-            .eq("id", value: id)
-            .eq("budget_id", value: budgetId)
-            .execute()
+        guard let expectedRowVersion else {
+            throw SupabaseBudgetSyncError.unsafePendingDeletion
+        }
+        let params = SharedDataSafetyMutationParameters(
+            budgetId: budgetId,
+            recordId: id,
+            expectedRowVersion: expectedRowVersion,
+            clientMutationId: mutationId,
+            operation: "delete",
+            payload: EmptySharedDataSafetyPayload()
+        )
+        do {
+            return try await client
+                .rpc("mutate_budget_settlement", params: params)
+                .execute()
+                .value
+        } catch {
+            throw Self.mapMutationError(error)
+        }
+    }
+
+    private static func mapMutationError(_ error: Error) -> Error {
+        let message = error.localizedDescription.lowercased()
+        if message.contains("idempotency_mismatch") {
+            return SupabaseBudgetSyncError.idempotencyMismatch
+        }
+        if message.contains("remote_deleted") {
+            return SupabaseBudgetSyncError.remoteDeleted
+        }
+        if message.contains("record_not_found") {
+            return SupabaseBudgetSyncError.mutationRecordNotFound
+        }
+        if message.contains("invalid_member_reference") {
+            return SupabaseBudgetSyncError.invalidMemberReference
+        }
+        if message.contains("member_reference_forbidden") {
+            return SupabaseBudgetSyncError.memberReferenceForbidden
+        }
+        if message.contains("changed on another device") {
+            return SupabaseBudgetSyncError.sharedDataMutationConflict
+        }
+        return error
     }
 
     func deleteAllBudgetData(userScopeId: String, budgetScopeId: String? = nil) async throws {
@@ -2050,62 +2464,6 @@ final class SupabaseBudgetSyncService {
         }
 
         return orderedIds.compactMap { rowsById[$0] }
-    }
-
-    private func upsertTransactionRows(_ rows: [CloudTransactionRow]) async throws {
-        do {
-            try await client
-                .from("budget_transactions")
-                .upsert(transactionPayload(rows), onConflict: "id")
-                .execute()
-        } catch {
-            guard supportsOccurredOnColumns, Self.isMissingOccurredOnColumn(error) else { throw error }
-            supportsOccurredOnColumns = false
-            try await client
-                .from("budget_transactions")
-                .upsert(transactionPayload(rows), onConflict: "id")
-                .execute()
-        }
-    }
-
-    private func upsertSettlementRows(_ rows: [CloudSettlementRow]) async throws {
-        do {
-            try await client
-                .from("budget_settlements")
-                .upsert(settlementPayload(rows), onConflict: "id")
-                .execute()
-        } catch {
-            guard supportsOccurredOnColumns, Self.isMissingOccurredOnColumn(error) else { throw error }
-            supportsOccurredOnColumns = false
-            try await client
-                .from("budget_settlements")
-                .upsert(settlementPayload(rows), onConflict: "id")
-                .execute()
-        }
-    }
-
-    private func transactionPayload(_ rows: [CloudTransactionRow]) -> [CloudTransactionRow] {
-        guard !supportsOccurredOnColumns else { return rows }
-        return rows.map { row in
-            var legacyRow = row
-            legacyRow.occurredOn = nil
-            return legacyRow
-        }
-    }
-
-    private func settlementPayload(_ rows: [CloudSettlementRow]) -> [CloudSettlementRow] {
-        guard !supportsOccurredOnColumns else { return rows }
-        return rows.map { row in
-            var legacyRow = row
-            legacyRow.occurredOn = nil
-            return legacyRow
-        }
-    }
-
-    private static func isMissingOccurredOnColumn(_ error: Error) -> Bool {
-        let message = error.localizedDescription.lowercased()
-        return message.contains("occurred_on") &&
-            (message.contains("schema cache") || message.contains("column"))
     }
 
     private static func isMissingFunction(_ error: Error, named functionName: String) -> Bool {

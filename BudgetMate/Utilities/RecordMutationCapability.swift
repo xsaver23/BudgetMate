@@ -1,21 +1,39 @@
 import Foundation
 
+/// Gate C is intentionally compiled off until the additive server migration
+/// has been applied, verified, and all participating clients have been
+/// upgraded. Shared-data UI must remain read-only while it is false.
+enum SharedDataSafetyGate {
+    static let isEnabled = false
+    static let readOnlyMessage = "Shared-data editing is temporarily unavailable while household safety is being enabled."
+}
+
 struct RecordMutationDecision: Equatable {
     enum Reason: Equatable {
         case personalBudget
         case householdOwner
+        case householdCreator
         case restrictedSharedMember
+        case sharedDataSafetyDisabled
     }
 
     let reason: Reason
 
     var isAllowed: Bool {
-        reason != .restrictedSharedMember
+        switch reason {
+        case .personalBudget, .householdOwner, .householdCreator:
+            return true
+        case .restrictedSharedMember, .sharedDataSafetyDisabled:
+            return false
+        }
     }
 
     var readOnlyMessage: String? {
         guard !isAllowed else { return nil }
-        return "Only the household owner can edit or delete shared records right now."
+        if reason == .sharedDataSafetyDisabled {
+            return SharedDataSafetyGate.readOnlyMessage
+        }
+        return "Only the household owner or the authenticated record creator can edit or delete shared records right now."
     }
 }
 
@@ -24,7 +42,9 @@ enum SharedRecordMutationCapability {
         currentUserScopeId: String,
         activeBudgetScopeId: String,
         recordBudgetScopeId: String,
-        members: [BudgetMember]
+        members: [BudgetMember],
+        recordCreatorUserId: UUID? = nil,
+        serverGateEnabled: Bool = SharedDataSafetyGate.isEnabled
     ) -> RecordMutationDecision {
         guard activeBudgetScopeId == recordBudgetScopeId else {
             return RecordMutationDecision(reason: .restrictedSharedMember)
@@ -32,6 +52,10 @@ enum SharedRecordMutationCapability {
 
         guard recordBudgetScopeId != currentUserScopeId else {
             return RecordMutationDecision(reason: .personalBudget)
+        }
+
+        guard serverGateEnabled else {
+            return RecordMutationDecision(reason: .sharedDataSafetyDisabled)
         }
 
         guard let userId = UUID(uuidString: currentUserScopeId) else {
@@ -43,11 +67,16 @@ enum SharedRecordMutationCapability {
         }
         guard authenticatedMembers.count == 1,
               let authenticatedMember = authenticatedMembers.first,
-              authenticatedMember.role == .owner,
               authenticatedMember.inviteStatus == .active else {
             return RecordMutationDecision(reason: .restrictedSharedMember)
         }
 
-        return RecordMutationDecision(reason: .householdOwner)
+        if authenticatedMember.role == .owner {
+            return RecordMutationDecision(reason: .householdOwner)
+        }
+        if recordCreatorUserId == userId {
+            return RecordMutationDecision(reason: .householdCreator)
+        }
+        return RecordMutationDecision(reason: .restrictedSharedMember)
     }
 }

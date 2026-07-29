@@ -291,7 +291,8 @@ private struct SettlementDetailView: View {
             currentUserScopeId: authStore.currentUserScopeId,
             activeBudgetScopeId: authStore.currentBudgetScopeId,
             recordBudgetScopeId: settlement.ownerUserId,
-            members: members
+            members: members,
+            recordCreatorUserId: settlement.createdByUserId
         )
     }
 

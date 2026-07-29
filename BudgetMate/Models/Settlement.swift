@@ -1,6 +1,6 @@
 import Foundation
 
-extension BudgetMateSchemaV2.Settlement {
+extension BudgetMateSchemaV3.Settlement {
     func validateForSync() throws {
         guard amount > 0, amount.isFinite else {
             throw BudgetDataValidationError.invalidSettlementAmount

@@ -13,12 +13,12 @@ final class SwiftDataSchemaCompatibilityTests: XCTestCase {
             LegacyUnversionedStoreFixture.shippingSchemaContract
         )
         XCTAssertEqual(versionedSchema.version, Schema.Version(1, 0, 0))
-        XCTAssertEqual(BudgetMateSchemaMigrationPlan.schemas.count, 2)
+        XCTAssertEqual(BudgetMateSchemaMigrationPlan.schemas.count, 3)
         XCTAssertEqual(
             ObjectIdentifier(BudgetMateSchemaMigrationPlan.schemas[0]),
             ObjectIdentifier(BudgetMateSchemaV1.self)
         )
-        XCTAssertEqual(BudgetMateSchemaMigrationPlan.stages.count, 1)
+        XCTAssertEqual(BudgetMateSchemaMigrationPlan.stages.count, 2)
 
         let transaction = try XCTUnwrap(versionedSchema.entitiesByName["Transaction"])
         let splits = try XCTUnwrap(transaction.relationshipsByName["splits"])
@@ -46,7 +46,11 @@ final class SwiftDataSchemaCompatibilityTests: XCTestCase {
         )
         XCTAssertEqual(
             Set(BudgetMateSchemaMigrationPlan.schemas.map { $0.versionIdentifier }),
-            [Schema.Version(1, 0, 0), Schema.Version(2, 0, 0)]
+            [
+                Schema.Version(1, 0, 0),
+                Schema.Version(2, 0, 0),
+                Schema.Version(3, 0, 0)
+            ]
         )
 
         for entityName in ["Transaction", "TransactionSplit", "Settlement"] {
@@ -80,12 +84,102 @@ final class SwiftDataSchemaCompatibilityTests: XCTestCase {
         XCTAssertEqual(settlement.attributesByName["currencyCode"]?.isOptional, true)
     }
 
+    func testVersionedV3AddsOptionalCreatorAndConflictMetadata() throws {
+        let v2 = Schema(versionedSchema: BudgetMateSchemaV2.self)
+        let v3 = Schema(versionedSchema: BudgetMateSchemaV3.self)
+
+        XCTAssertEqual(v3.version, Schema.Version(3, 0, 0))
+        XCTAssertEqual(
+            Set(BudgetMateSchemaMigrationPlan.schemas.map { $0.versionIdentifier }),
+            [
+                Schema.Version(1, 0, 0),
+                Schema.Version(2, 0, 0),
+                Schema.Version(3, 0, 0)
+            ]
+        )
+
+        for entityName in ["Transaction", "TransactionSplit", "Settlement"] {
+            let oldEntity = try XCTUnwrap(v2.entitiesByName[entityName])
+            let newEntity = try XCTUnwrap(v3.entitiesByName[entityName])
+            XCTAssertTrue(
+                Set(oldEntity.properties.map(\.name)).isSubset(of: Set(newEntity.properties.map(\.name))),
+                "V3 removed a V2 property from \(entityName)"
+            )
+        }
+
+        let transaction = try XCTUnwrap(v3.entitiesByName["Transaction"])
+        XCTAssertEqual(transaction.attributesByName["createdByUserId"]?.isOptional, true)
+        XCTAssertEqual(transaction.attributesByName["rowVersion"]?.isOptional, true)
+        XCTAssertEqual(transaction.attributesByName["lastMutationId"]?.isOptional, true)
+
+        let settlement = try XCTUnwrap(v3.entitiesByName["Settlement"])
+        XCTAssertEqual(settlement.attributesByName["createdByUserId"]?.isOptional, true)
+        XCTAssertEqual(settlement.attributesByName["rowVersion"]?.isOptional, true)
+        XCTAssertEqual(settlement.attributesByName["lastMutationId"]?.isOptional, true)
+    }
+
+    func testVersionedV2StoreMigratesToV3WithoutInventingIdentityOrVersion() throws {
+        let location = try makeStoreLocation()
+        defer { try? FileManager.default.removeItem(at: location.directory) }
+
+        let v2Schema = Schema(versionedSchema: BudgetMateSchemaV2.self)
+        let v2Configuration = ModelConfiguration(
+            "BudgetMateV2GateCFixture",
+            schema: v2Schema,
+            url: location.storeURL,
+            cloudKitDatabase: .none
+        )
+        let v2Container = try ModelContainer(
+            for: v2Schema,
+            configurations: [v2Configuration]
+        )
+        let transaction = BudgetMateSchemaV2.Transaction(
+            title: "V2 transaction",
+            amount: 12.34,
+            amountMinorUnits: 1234,
+            currencyCode: "CAD",
+            type: .expense,
+            category: .food,
+            createdByMemberId: LegacyUnversionedStoreFixture.firstMemberID,
+            ownerUserId: LegacyUnversionedStoreFixture.ownerUserID
+        )
+        let settlement = BudgetMateSchemaV2.Settlement(
+            fromMemberId: LegacyUnversionedStoreFixture.secondMemberID,
+            toMemberId: LegacyUnversionedStoreFixture.firstMemberID,
+            amount: 2.50,
+            amountMinorUnits: 250,
+            currencyCode: "CAD",
+            ownerUserId: LegacyUnversionedStoreFixture.ownerUserID
+        )
+        v2Container.mainContext.insert(transaction)
+        v2Container.mainContext.insert(settlement)
+        try v2Container.mainContext.save()
+
+        try withVersionedStore(at: location.storeURL) { context in
+            let migratedTransaction = try XCTUnwrap(
+                try context.fetch(FetchDescriptor<Transaction>()).first
+            )
+            let migratedSettlement = try XCTUnwrap(
+                try context.fetch(FetchDescriptor<Settlement>()).first
+            )
+            XCTAssertEqual(migratedTransaction.title, "V2 transaction")
+            XCTAssertEqual(migratedTransaction.amountMinorUnits, 1234)
+            XCTAssertEqual(migratedTransaction.currencyCode, "CAD")
+            XCTAssertNil(migratedTransaction.createdByUserId)
+            XCTAssertNil(migratedTransaction.rowVersion)
+            XCTAssertNil(migratedTransaction.lastMutationId)
+            XCTAssertNil(migratedSettlement.createdByUserId)
+            XCTAssertNil(migratedSettlement.rowVersion)
+            XCTAssertNil(migratedSettlement.lastMutationId)
+        }
+    }
+
     func testFreshVersionedFileBackedStoreSavesAndReopens() throws {
         let location = try makeStoreLocation()
         defer { try? FileManager.default.removeItem(at: location.directory) }
 
         try withVersionedStore(at: location.storeURL) { context in
-            let transaction = BudgetMateSchemaV2.Transaction(
+            let transaction = Transaction(
                 id: LegacyUnversionedStoreFixture.expenseID,
                 title: "Fresh transaction",
                 amount: 42.25,

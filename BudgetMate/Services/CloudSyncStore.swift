@@ -33,7 +33,7 @@ final class CloudSyncStore: ObservableObject {
     // reaching into a live Supabase client or exposing a public API.
     static let pendingCloudDeletionsKey = "budgetmate.pendingCloudDeletions"
     static let pendingCloudDeletionSafetyVersionKey = "budgetmate.pendingCloudDeletions.safetyVersion"
-    static let currentPendingCloudDeletionSafetyVersion = 1
+    static let currentPendingCloudDeletionSafetyVersion = 2
     private var activeFullSync: ActiveFullSync?
     private var pendingMutationTask: Task<Void, Never>?
     private var pendingMutationToken: UUID?
@@ -193,7 +193,17 @@ final class CloudSyncStore: ObservableObject {
                 markFailed(error, context: "Saving merged cloud data")
                 throw error
             }
-            markSynced()
+            if SupabaseBudgetSyncService.shouldDeferFinancialWrites(
+                transactions: request.transactions,
+                settlements: request.settlements
+            ) {
+                markFailed(
+                    SupabaseBudgetSyncError.sharedDataSafetyDisabled,
+                    context: "Shared-data changes remain local while safety is disabled"
+                )
+            } else {
+                markSynced()
+            }
             return summary
         } catch {
             markFailed(error, context: "Full sync")
@@ -464,17 +474,30 @@ final class CloudSyncStore: ObservableObject {
             entity: .transaction,
             recordId: transactionId,
             userScopeId: userScopeId,
-            budgetScopeId: budgetScopeId ?? userScopeId
+            budgetScopeId: budgetScopeId ?? userScopeId,
+            expectedRowVersion: transaction.rowVersion,
+            mutationId: UUID()
         )
         transactionSaveRevisions[transactionId, default: 0] += 1
         recordPendingCloudDeletion(deletion)
+        guard SharedDataSafetyGate.isEnabled else {
+            markFailed(SupabaseBudgetSyncError.sharedDataSafetyDisabled, context: "Deleting transaction in the cloud")
+            return
+        }
         enqueueSave(
             operation: {
-                try await self.service.deleteTransaction(
-                    id: transactionId,
-                    userScopeId: userScopeId,
-                    budgetScopeId: budgetScopeId
-                )
+                do {
+                    _ = try await self.service.deleteTransactionSafely(
+                        id: transactionId,
+                        expectedRowVersion: deletion.expectedRowVersion,
+                        userScopeId: userScopeId,
+                        budgetScopeId: budgetScopeId,
+                        mutationId: deletion.mutationId ?? UUID()
+                    )
+                } catch SupabaseBudgetSyncError.remoteDeleted {
+                    self.clearPendingCloudDeletion(deletion)
+                    throw SupabaseBudgetSyncError.remoteDeleted
+                }
             },
             onSuccess: { [weak self] in self?.clearPendingCloudDeletion(deletion) }
         )
@@ -491,20 +514,42 @@ final class CloudSyncStore: ObservableObject {
     ) {
         guard !transactions.isEmpty else { return }
 
-        let revisions = transactions.map { transaction -> (transaction: Transaction, id: UUID, revision: Int) in
+        guard SharedDataSafetyGate.isEnabled else {
+            transactions.forEach { $0.needsSync = true }
+            markFailed(SupabaseBudgetSyncError.sharedDataSafetyDisabled, context: "Saving transactions to the cloud")
+            return
+        }
+
+        let revisions = transactions.map { transaction -> (transaction: Transaction, id: UUID, revision: Int, mutationId: UUID) in
             transaction.needsSync = true
             let transactionId = transaction.id
             let revision = transactionSaveRevisions[transactionId, default: 0] + 1
             transactionSaveRevisions[transactionId] = revision
-            return (transaction, transactionId, revision)
+            let mutationId = UUID()
+            transaction.lastMutationId = mutationId
+            return (transaction, transactionId, revision, mutationId)
         }
         enqueueSave(
             operation: {
-                try await self.service.upsertTransactions(
-                    transactions,
-                    userScopeId: userScopeId,
-                    budgetScopeId: budgetScopeId
-                )
+                do {
+                    for transaction in transactions {
+                        let result = try await self.service.mutateTransaction(
+                            transaction,
+                            operation: transaction.rowVersion == nil ? "insert" : "update",
+                            userScopeId: userScopeId,
+                            budgetScopeId: budgetScopeId,
+                            mutationId: revisions.first(where: { $0.id == transaction.id })?.mutationId ?? UUID()
+                        )
+                        transaction.rowVersion = result.rowVersion
+                    }
+                } catch SupabaseBudgetSyncError.remoteDeleted {
+                    for entry in revisions
+                    where self.transactionSaveRevisions[entry.id] == entry.revision {
+                        entry.transaction.needsSync = false
+                        self.transactionSaveRevisions.removeValue(forKey: entry.id)
+                    }
+                    throw SupabaseBudgetSyncError.remoteDeleted
+                }
             },
             onSuccess: { [weak self] in
                 guard let self else { return }
@@ -518,13 +563,36 @@ final class CloudSyncStore: ObservableObject {
     }
 
     func saveSettlement(_ settlement: Settlement, userScopeId: String, budgetScopeId: String? = nil) {
+        guard SharedDataSafetyGate.isEnabled else {
+            settlement.needsSync = true
+            markFailed(SupabaseBudgetSyncError.sharedDataSafetyDisabled, context: "Saving settlement to the cloud")
+            return
+        }
         settlement.needsSync = true
         let settlementId = settlement.id
         let revision = settlementSaveRevisions[settlementId, default: 0] + 1
         settlementSaveRevisions[settlementId] = revision
+        let mutationId = UUID()
+        settlement.lastMutationId = mutationId
         enqueueSave(
             operation: {
-                try await self.service.upsertSettlement(settlement, userScopeId: userScopeId, budgetScopeId: budgetScopeId)
+                do {
+                    let result = try await self.service.mutateSettlement(
+                        settlement,
+                        operation: settlement.rowVersion == nil ? "insert" : "update",
+                        userScopeId: userScopeId,
+                        budgetScopeId: budgetScopeId,
+                        mutationId: mutationId
+                    )
+                    settlement.rowVersion = result.rowVersion
+                    settlement.lastMutationId = mutationId
+                } catch SupabaseBudgetSyncError.remoteDeleted {
+                    if self.settlementSaveRevisions[settlementId] == revision {
+                        settlement.needsSync = false
+                        self.settlementSaveRevisions.removeValue(forKey: settlementId)
+                    }
+                    throw SupabaseBudgetSyncError.remoteDeleted
+                }
             },
             onSuccess: { [weak self, weak settlement] in
                 guard let self,
@@ -542,17 +610,30 @@ final class CloudSyncStore: ObservableObject {
             entity: .settlement,
             recordId: settlementId,
             userScopeId: userScopeId,
-            budgetScopeId: budgetScopeId ?? userScopeId
+            budgetScopeId: budgetScopeId ?? userScopeId,
+            expectedRowVersion: settlement.rowVersion,
+            mutationId: UUID()
         )
         settlementSaveRevisions[settlementId, default: 0] += 1
         recordPendingCloudDeletion(deletion)
+        guard SharedDataSafetyGate.isEnabled else {
+            markFailed(SupabaseBudgetSyncError.sharedDataSafetyDisabled, context: "Deleting settlement in the cloud")
+            return
+        }
         enqueueSave(
             operation: {
-                try await self.service.deleteSettlement(
-                    id: settlementId,
-                    userScopeId: userScopeId,
-                    budgetScopeId: budgetScopeId
-                )
+                do {
+                    _ = try await self.service.deleteSettlementSafely(
+                        id: settlementId,
+                        expectedRowVersion: deletion.expectedRowVersion,
+                        userScopeId: userScopeId,
+                        budgetScopeId: budgetScopeId,
+                        mutationId: deletion.mutationId ?? UUID()
+                    )
+                } catch SupabaseBudgetSyncError.remoteDeleted {
+                    self.clearPendingCloudDeletion(deletion)
+                    throw SupabaseBudgetSyncError.remoteDeleted
+                }
             },
             onSuccess: { [weak self] in self?.clearPendingCloudDeletion(deletion) }
         )
@@ -637,6 +718,7 @@ final class CloudSyncStore: ObservableObject {
     }
 
     private func flushPendingCloudDeletions(for userScopeId: String) async throws {
+        guard SharedDataSafetyGate.isEnabled else { return }
         let deletions = pendingCloudDeletions.filter { $0.userScopeId == userScopeId }
         for deletion in deletions {
             switch deletion.entity {
@@ -653,17 +735,39 @@ final class CloudSyncStore: ObservableObject {
                     budgetScopeId: deletion.budgetScopeId
                 )
             case .transaction:
-                try await service.deleteTransaction(
-                    id: deletion.recordId,
-                    userScopeId: deletion.userScopeId,
-                    budgetScopeId: deletion.budgetScopeId
-                )
+                guard let expectedRowVersion = deletion.expectedRowVersion,
+                      let mutationId = deletion.mutationId else {
+                    throw SupabaseBudgetSyncError.unsafePendingDeletion
+                }
+                do {
+                    _ = try await service.deleteTransactionSafely(
+                        id: deletion.recordId,
+                        expectedRowVersion: expectedRowVersion,
+                        userScopeId: deletion.userScopeId,
+                        budgetScopeId: deletion.budgetScopeId,
+                        mutationId: mutationId
+                    )
+                } catch SupabaseBudgetSyncError.remoteDeleted {
+                    clearPendingCloudDeletion(deletion)
+                    throw SupabaseBudgetSyncError.remoteDeleted
+                }
             case .settlement:
-                try await service.deleteSettlement(
-                    id: deletion.recordId,
-                    userScopeId: deletion.userScopeId,
-                    budgetScopeId: deletion.budgetScopeId
-                )
+                guard let expectedRowVersion = deletion.expectedRowVersion,
+                      let mutationId = deletion.mutationId else {
+                    throw SupabaseBudgetSyncError.unsafePendingDeletion
+                }
+                do {
+                    _ = try await service.deleteSettlementSafely(
+                        id: deletion.recordId,
+                        expectedRowVersion: expectedRowVersion,
+                        userScopeId: deletion.userScopeId,
+                        budgetScopeId: deletion.budgetScopeId,
+                        mutationId: mutationId
+                    )
+                } catch SupabaseBudgetSyncError.remoteDeleted {
+                    clearPendingCloudDeletion(deletion)
+                    throw SupabaseBudgetSyncError.remoteDeleted
+                }
             }
             clearPendingCloudDeletion(deletion)
         }
@@ -765,7 +869,7 @@ final class CloudSyncStore: ObservableObject {
             do {
                 return try await operation()
             } catch {
-                if error is CancellationError || attempt >= maxRetryAttempts {
+                if error is CancellationError || !Self.isRetryable(error) || attempt >= maxRetryAttempts {
                     throw error
                 }
 
@@ -773,6 +877,26 @@ final class CloudSyncStore: ObservableObject {
                 try await Task.sleep(nanoseconds: delayNanoseconds)
                 attempt += 1
             }
+        }
+    }
+
+    private static func isRetryable(_ error: Error) -> Bool {
+        guard let error = error as? SupabaseBudgetSyncError else { return true }
+        switch error {
+        case .idempotencyMismatch,
+             .remoteDeleted,
+             .mutationRecordNotFound,
+             .invalidMemberReference,
+             .memberReferenceForbidden,
+             .sharedDataMutationConflict,
+             .sharedDataSafetyDisabled,
+             .unsafePendingDeletion:
+            return false
+        case .missingUser,
+             .notBudgetOwner,
+             .invalidCloudDate,
+             .invalidCloudMoneyContract:
+            return true
         }
     }
 
@@ -798,6 +922,27 @@ final class CloudSyncStore: ObservableObject {
         if message.localizedCaseInsensitiveContains("cancelled") ||
             message.localizedCaseInsensitiveContains("canceled") {
             return "Sync was stopped before it finished. Try again when you are ready."
+        }
+
+        if message.localizedCaseInsensitiveContains("changed on another device") {
+            return "This shared record changed on another device. Refresh before trying again."
+        }
+
+        if message.localizedCaseInsensitiveContains("remote_deleted") ||
+            message.localizedCaseInsensitiveContains("already deleted on another device") {
+            return "This record was already deleted on another device. It was not recreated."
+        }
+
+        if message.localizedCaseInsensitiveContains("idempotency_mismatch") {
+            return "This cloud retry did not match the original change and was not applied. Refresh before trying again."
+        }
+
+        if message.localizedCaseInsensitiveContains("shared-data safety writes") {
+            return SharedDataSafetyGate.readOnlyMessage
+        }
+
+        if message.localizedCaseInsensitiveContains("pending deletion") {
+            return "A pending deletion was held until its conflict metadata can be verified."
         }
 
         if message.localizedCaseInsensitiveContains("row-level security") {
@@ -858,6 +1003,24 @@ struct PendingCloudDeletion: Codable, Hashable {
     let recordId: UUID
     let userScopeId: String
     let budgetScopeId: String
+    let expectedRowVersion: Int64?
+    let mutationId: UUID?
+
+    init(
+        entity: Entity,
+        recordId: UUID,
+        userScopeId: String,
+        budgetScopeId: String,
+        expectedRowVersion: Int64? = nil,
+        mutationId: UUID? = nil
+    ) {
+        self.entity = entity
+        self.recordId = recordId
+        self.userScopeId = userScopeId
+        self.budgetScopeId = budgetScopeId
+        self.expectedRowVersion = expectedRowVersion
+        self.mutationId = mutationId
+    }
 
     fileprivate var scopeKey: String {
         "\(userScopeId)|\(budgetScopeId)"

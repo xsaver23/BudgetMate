@@ -56,7 +56,8 @@ struct TransactionDetailView: View {
             currentUserScopeId: authStore.currentUserScopeId,
             activeBudgetScopeId: authStore.currentBudgetScopeId,
             recordBudgetScopeId: transaction.ownerUserId,
-            members: members
+            members: members,
+            recordCreatorUserId: transaction.createdByUserId
         )
     }
 

@@ -100,6 +100,68 @@ final class CloudPersistenceCharacterizationTests: XCTestCase {
         XCTAssertEqual(restored, [expected])
     }
 
+    func testGateCPendingDeletionPreservesExpectedVersionAndMutationID() throws {
+        let mutationId = UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa0010")!
+        let expected = PendingCloudDeletion(
+            entity: .settlement,
+            recordId: BudgetMateTestFixtures.settlementID,
+            userScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+            budgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            expectedRowVersion: 7,
+            mutationId: mutationId
+        )
+        let defaults = BudgetMateTestFixtures.isolatedDefaults()
+        defaults.set(
+            CloudSyncStore.currentPendingCloudDeletionSafetyVersion,
+            forKey: CloudSyncStore.pendingCloudDeletionSafetyVersionKey
+        )
+        defaults.set(
+            try JSONEncoder().encode([expected]),
+            forKey: CloudSyncStore.pendingCloudDeletionsKey
+        )
+
+        let restored = CloudSyncStore.loadPendingCloudDeletions(
+            from: defaults,
+            key: CloudSyncStore.pendingCloudDeletionsKey
+        )
+        XCTAssertEqual(restored, [expected])
+        XCTAssertEqual(restored.first?.expectedRowVersion, 7)
+        XCTAssertEqual(restored.first?.mutationId, mutationId)
+    }
+
+    func testLegacyDirtyRowsReceiveStableMutationIDsBeforeAnyRPC() {
+        let transaction = BudgetMateTestFixtures.expense()
+        let settlement = BudgetMateTestFixtures.settlement()
+        transaction.needsSync = true
+        settlement.needsSync = true
+
+        XCTAssertTrue(
+            SupabaseBudgetSyncService.shouldDeferFinancialWrites(
+                transactions: [transaction],
+                settlements: [settlement]
+            )
+        )
+        XCTAssertTrue(
+            SupabaseBudgetSyncService.prepareMutationIDs(
+                transactions: [transaction],
+                settlements: [settlement]
+            )
+        )
+        let transactionMutationID = transaction.lastMutationId
+        let settlementMutationID = settlement.lastMutationId
+        XCTAssertNotNil(transactionMutationID)
+        XCTAssertNotNil(settlementMutationID)
+
+        XCTAssertFalse(
+            SupabaseBudgetSyncService.prepareMutationIDs(
+                transactions: [transaction],
+                settlements: [settlement]
+            )
+        )
+        XCTAssertEqual(transaction.lastMutationId, transactionMutationID)
+        XCTAssertEqual(settlement.lastMutationId, settlementMutationID)
+    }
+
     func testCorruptPendingCloudDeletionDataRestoresAsEmpty() {
         let defaults = BudgetMateTestFixtures.isolatedDefaults()
         defaults.set(

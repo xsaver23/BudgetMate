@@ -51,6 +51,8 @@ jobs:
           migration="supabase/migrations/20260729000100_money_server_bridge.sql"
           uuid_case_fix="supabase/migrations/20260729000200_money_server_bridge_uuid_case_fix.sql"
           contract="supabase/tests/02c_money_server_bridge_contract.sql"
+          shared_data_safety_migration="supabase/migrations/20260729000300_shared_data_safety.sql"
+          shared_data_safety_contract="supabase/tests/03_shared_data_safety_contract.sql"
           rollback_dump="${RUNNER_TEMP}/budgetmate-02c-legacy.dump"
           postgres_container="${{ job.services.postgres.id }}"
 
@@ -68,6 +70,10 @@ jobs:
           psql --dbname budgetmate_02c --file "${uuid_case_fix}"
           psql --dbname budgetmate_02c --file "${uuid_case_fix}"
           psql --dbname budgetmate_02c --file "${contract}"
+          psql --dbname budgetmate_02c --file "${shared_data_safety_migration}"
+          psql --dbname budgetmate_02c --file "${shared_data_safety_migration}"
+          psql --dbname budgetmate_02c --file "${shared_data_safety_contract}"
+          bash supabase/tests/03_shared_data_safety_concurrency.sh
 
           dropdb budgetmate_02c
           createdb budgetmate_02c

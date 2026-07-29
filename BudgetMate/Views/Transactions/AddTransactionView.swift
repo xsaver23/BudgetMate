@@ -86,7 +86,8 @@ struct AddTransactionView: View {
             currentUserScopeId: authStore.currentUserScopeId,
             activeBudgetScopeId: authStore.currentBudgetScopeId,
             recordBudgetScopeId: transactionToEdit?.ownerUserId ?? authStore.currentBudgetScopeId,
-            members: memberViewModel.members
+            members: memberViewModel.members,
+            recordCreatorUserId: transactionToEdit?.createdByUserId
         )
     }
 
@@ -490,11 +491,11 @@ struct AddTransactionView: View {
         focusedInput = nil
         saveErrorMessage = nil
         let member = memberViewModel.members.first(where: { $0.id == selectedMemberId }) ?? defaultTransactionMember
+        guard recordMutationDecision.isAllowed else {
+            saveErrorMessage = recordMutationDecision.readOnlyMessage
+            return
+        }
         if let transactionToEdit {
-            guard recordMutationDecision.isAllowed else {
-                saveErrorMessage = recordMutationDecision.readOnlyMessage
-                return
-            }
             viewModel.applyChanges(
                 to: transactionToEdit,
                 paidBy: member,

@@ -1,6 +1,6 @@
 import Foundation
 
-extension BudgetMateSchemaV2.TransactionSplit {
+extension BudgetMateSchemaV3.TransactionSplit {
     func validateForSync() throws {
         guard amount > 0, amount.isFinite else {
             throw BudgetDataValidationError.invalidSplitAmount

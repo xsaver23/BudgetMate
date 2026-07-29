@@ -1,6 +1,6 @@
 import Foundation
 
-extension BudgetMateSchemaV2.Transaction {
+extension BudgetMateSchemaV3.Transaction {
     static func normalizedTitle(_ title: String) -> String {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Untitled" : trimmed
