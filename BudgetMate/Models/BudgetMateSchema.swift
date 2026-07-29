@@ -229,14 +229,155 @@ enum BudgetMateSchemaV2: VersionedSchema {
     }
 }
 
+/// Gate C local transition. The legacy fields remain the compatibility
+/// payload; creator/version metadata is optional so an older local store can
+/// be opened without inventing an authenticated identity.
+enum BudgetMateSchemaV3: VersionedSchema {
+    static let versionIdentifier = Schema.Version(3, 0, 0)
+
+    static var models: [any PersistentModel.Type] {
+        [Transaction.self, TransactionSplit.self, Settlement.self]
+    }
+
+    @Model
+    final class Transaction {
+        var id: UUID
+        var title: String
+        var amount: Double
+        var amountMinorUnits: Int64?
+        var currencyCode: String?
+        var type: TransactionType
+        var category: TransactionCategory
+        var paymentMethod: PaymentMethod?
+        var createdByMemberId: UUID
+        var createdByUserId: UUID?
+        var rowVersion: Int64?
+        var lastMutationId: UUID?
+        var date: Date
+        var createdAt: Date
+        var recurrenceRule: String?
+        var ownerUserId: String
+        var needsSync: Bool = false
+        @Transient var recurringSourceId: UUID?
+
+        @Relationship(deleteRule: .cascade, inverse: \TransactionSplit.transaction)
+        var splits: [TransactionSplit] = []
+
+        init(
+            id: UUID = UUID(),
+            title: String,
+            amount: Double,
+            amountMinorUnits: Int64? = nil,
+            currencyCode: String? = nil,
+            type: TransactionType,
+            category: TransactionCategory,
+            paymentMethod: PaymentMethod? = nil,
+            createdByMemberId: UUID,
+            createdByUserId: UUID? = nil,
+            rowVersion: Int64? = nil,
+            lastMutationId: UUID? = nil,
+            date: Date = .now,
+            createdAt: Date = .now,
+            recurrenceRule: String? = nil,
+            ownerUserId: String = "local"
+        ) {
+            self.id = id
+            let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.title = trimmedTitle.isEmpty ? "Untitled" : trimmedTitle
+            self.amount = max(0, amount)
+            self.amountMinorUnits = amountMinorUnits
+            self.currencyCode = currencyCode
+            self.type = type
+            self.category = category
+            self.paymentMethod = paymentMethod
+            self.createdByMemberId = createdByMemberId
+            self.createdByUserId = createdByUserId
+            self.rowVersion = rowVersion
+            self.lastMutationId = lastMutationId
+            self.date = date
+            self.createdAt = createdAt
+            self.recurrenceRule = recurrenceRule
+            self.ownerUserId = ownerUserId
+        }
+    }
+
+    @Model
+    final class TransactionSplit {
+        var id: UUID
+        var memberId: UUID
+        var amount: Double
+        var amountMinorUnits: Int64?
+        var currencyCode: String?
+        var transaction: BudgetMateSchemaV3.Transaction?
+
+        init(
+            id: UUID = UUID(),
+            memberId: UUID,
+            amount: Double,
+            amountMinorUnits: Int64? = nil,
+            currencyCode: String? = nil,
+            transaction: BudgetMateSchemaV3.Transaction? = nil
+        ) {
+            self.id = id
+            self.memberId = memberId
+            self.amount = max(0, amount)
+            self.amountMinorUnits = amountMinorUnits
+            self.currencyCode = currencyCode
+            self.transaction = transaction
+        }
+    }
+
+    @Model
+    final class Settlement {
+        var id: UUID
+        var fromMemberId: UUID
+        var toMemberId: UUID
+        var amount: Double
+        var amountMinorUnits: Int64?
+        var currencyCode: String?
+        var createdByUserId: UUID?
+        var rowVersion: Int64?
+        var lastMutationId: UUID?
+        var date: Date
+        var ownerUserId: String
+        var needsSync: Bool = false
+
+        init(
+            id: UUID = UUID(),
+            fromMemberId: UUID,
+            toMemberId: UUID,
+            amount: Double,
+            amountMinorUnits: Int64? = nil,
+            currencyCode: String? = nil,
+            createdByUserId: UUID? = nil,
+            rowVersion: Int64? = nil,
+            lastMutationId: UUID? = nil,
+            date: Date = .now,
+            ownerUserId: String = "local"
+        ) {
+            self.id = id
+            self.fromMemberId = fromMemberId
+            self.toMemberId = toMemberId
+            self.amount = max(0, amount)
+            self.amountMinorUnits = amountMinorUnits
+            self.currencyCode = currencyCode
+            self.createdByUserId = createdByUserId
+            self.rowVersion = rowVersion
+            self.lastMutationId = lastMutationId
+            self.date = date
+            self.ownerUserId = ownerUserId
+        }
+    }
+}
+
 /// App-facing aliases intentionally resolve only to the current schema.
-typealias Transaction = BudgetMateSchemaV2.Transaction
-typealias TransactionSplit = BudgetMateSchemaV2.TransactionSplit
-typealias Settlement = BudgetMateSchemaV2.Settlement
+typealias Transaction = BudgetMateSchemaV3.Transaction
+typealias TransactionSplit = BudgetMateSchemaV3.TransactionSplit
+typealias Settlement = BudgetMateSchemaV3.Settlement
 
 enum BudgetMateSchemaMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
-        [BudgetMateSchemaV1.self, BudgetMateSchemaV2.self]
+        [BudgetMateSchemaV1.self, BudgetMateSchemaV2.self, BudgetMateSchemaV3.self]
     }
 
     static var stages: [MigrationStage] {
@@ -244,16 +385,20 @@ enum BudgetMateSchemaMigrationPlan: SchemaMigrationPlan {
             .lightweight(
                 fromVersion: BudgetMateSchemaV1.self,
                 toVersion: BudgetMateSchemaV2.self
+            ),
+            .lightweight(
+                fromVersion: BudgetMateSchemaV2.self,
+                toVersion: BudgetMateSchemaV3.self
             )
         ]
     }
 }
 
 enum BudgetMateSchema {
-    static let currentVersion = Schema.Version(2, 0, 0)
-    static let currentVersionString = "2.0.0"
+    static let currentVersion = Schema.Version(3, 0, 0)
+    static let currentVersionString = "3.0.0"
 
     static var current: Schema {
-        Schema(versionedSchema: BudgetMateSchemaV2.self)
+        Schema(versionedSchema: BudgetMateSchemaV3.self)
     }
 }

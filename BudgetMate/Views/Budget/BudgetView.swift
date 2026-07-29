@@ -83,7 +83,10 @@ struct BudgetView: View {
             currentUserScopeId: authStore.currentUserScopeId,
             activeBudgetScopeId: authStore.currentBudgetScopeId,
             recordBudgetScopeId: budgetScopeId,
-            members: memberViewModel.members
+            members: memberViewModel.members,
+            // Gate C governs transaction/settlement mutation only; preserve
+            // the existing owner-only settings capability during rollout.
+            serverGateEnabled: true
         )
     }
 

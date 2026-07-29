@@ -259,7 +259,13 @@ struct TransactionsView: View {
                 .contextMenu {
                     if transaction.isGeneratedRecurringOccurrence {
                         Text("Recurring occurrence")
-                    } else if mutationDecision.isAllowed {
+                    } else if SharedRecordMutationCapability.decision(
+                        currentUserScopeId: authStore.currentUserScopeId,
+                        activeBudgetScopeId: authStore.currentBudgetScopeId,
+                        recordBudgetScopeId: transaction.ownerUserId,
+                        members: memberViewModel.members,
+                        recordCreatorUserId: transaction.createdByUserId
+                    ).isAllowed {
                         Button(role: .destructive) {
                             delete(transaction)
                         } label: {
@@ -304,7 +310,13 @@ struct TransactionsView: View {
     }
 
     private func delete(_ transaction: Transaction) {
-        guard mutationDecision.isAllowed else { return }
+        guard SharedRecordMutationCapability.decision(
+            currentUserScopeId: authStore.currentUserScopeId,
+            activeBudgetScopeId: authStore.currentBudgetScopeId,
+            recordBudgetScopeId: transaction.ownerUserId,
+            members: memberViewModel.members,
+            recordCreatorUserId: transaction.createdByUserId
+        ).isAllowed else { return }
         guard transaction.ownerUserId == authStore.currentBudgetScopeId else { return }
         cloudSyncStore.deleteTransaction(
             transaction,

@@ -189,7 +189,8 @@ final class ScopedPersistenceCharacterizationTests: XCTestCase {
             currentUserScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
             activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
             recordBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
-            members: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob]
+            members: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob],
+            serverGateEnabled: true
         )
 
         XCTAssertTrue(decision.isAllowed)
@@ -201,15 +202,29 @@ final class ScopedPersistenceCharacterizationTests: XCTestCase {
             currentUserScopeId: BudgetMateTestFixtures.bobUserID.uuidString,
             activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
             recordBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
-            members: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob]
+            members: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob],
+            serverGateEnabled: true
         )
 
         XCTAssertFalse(decision.isAllowed)
         XCTAssertEqual(decision.reason, .restrictedSharedMember)
         XCTAssertEqual(
             decision.readOnlyMessage,
-            "Only the household owner can edit or delete shared records right now."
+            "Only the household owner or the authenticated record creator can edit or delete shared records right now."
         )
+    }
+
+    func testSharedDataSafetyGateFailsClosedBeforeServerActivation() {
+        let decision = SharedRecordMutationCapability.decision(
+            currentUserScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+            activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            recordBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            members: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob]
+        )
+
+        XCTAssertFalse(decision.isAllowed)
+        XCTAssertEqual(decision.reason, .sharedDataSafetyDisabled)
+        XCTAssertEqual(decision.readOnlyMessage, SharedDataSafetyGate.readOnlyMessage)
     }
 
     func testUnverifiedOwnerDisplayRoleDoesNotGrantSharedMutationAuthority() {
@@ -226,7 +241,8 @@ final class ScopedPersistenceCharacterizationTests: XCTestCase {
             currentUserScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
             activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
             recordBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
-            members: [unmatchedOwner]
+            members: [unmatchedOwner],
+            serverGateEnabled: true
         )
 
         XCTAssertFalse(decision.isAllowed)
@@ -248,7 +264,8 @@ final class ScopedPersistenceCharacterizationTests: XCTestCase {
             currentUserScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
             activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
             recordBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
-            members: [BudgetMateTestFixtures.alice, legacyAlias]
+            members: [BudgetMateTestFixtures.alice, legacyAlias],
+            serverGateEnabled: true
         )
 
         XCTAssertFalse(decision.isAllowed)

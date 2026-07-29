@@ -203,6 +203,20 @@ struct DashboardView: View {
     }
 
     private func settle(_ settlement: SettlementSuggestion) {
+        let mutationDecision = SharedRecordMutationCapability.decision(
+            currentUserScopeId: authStore.currentUserScopeId,
+            activeBudgetScopeId: authStore.currentBudgetScopeId,
+            recordBudgetScopeId: authStore.currentBudgetScopeId,
+            members: memberViewModel.members
+        )
+        guard mutationDecision.isAllowed else {
+            cloudSyncStore.recordSyncIssue(
+                SupabaseBudgetSyncError.sharedDataSafetyDisabled,
+                context: "Creating settle-up record"
+            )
+            clearPendingSettlement()
+            return
+        }
         let record = Settlement(
             fromMemberId: settlement.from.id,
             toMemberId: settlement.to.id,

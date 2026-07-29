@@ -3,6 +3,27 @@
 drop schema if exists public cascade;
 create schema public;
 
+create schema auth;
+
+create table auth.users (
+  id uuid primary key,
+  email text not null
+);
+
+insert into auth.users (id, email)
+values
+  ('90000000-0000-0000-0000-000000000001', 'alice@example.com'),
+  ('90000000-0000-0000-0000-000000000002', 'bob@example.com'),
+  ('90000000-0000-0000-0000-000000000003', 'carol@example.com');
+
+create or replace function auth.uid()
+returns uuid
+language sql
+stable
+as $$
+  select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid
+$$;
+
 do $$
 begin
   if not exists (select 1 from pg_roles where rolname = 'anon') then
@@ -40,6 +61,32 @@ create table public.budget_settings (
   category_emojis jsonb not null default '{}'::jsonb,
   owner_user_id uuid not null,
   row_version bigint not null default 1
+);
+
+create table public.budget_memberships (
+  budget_id uuid not null references public.budgets(id),
+  user_id uuid not null references auth.users(id),
+  role text not null,
+  status text not null,
+  primary key (budget_id, user_id)
+);
+
+create table public.budget_members (
+  id uuid primary key,
+  user_id uuid not null references auth.users(id),
+  budget_id uuid not null references public.budgets(id),
+  auth_user_id uuid references auth.users(id),
+  invite_status text not null
+);
+
+create table public.budget_sync_tombstones (
+  entity_type text not null,
+  budget_id uuid not null references public.budgets(id),
+  record_id uuid not null,
+  deleted_row_version bigint not null,
+  deleted_at timestamptz not null default now(),
+  deleted_by_user_id uuid references auth.users(id) on delete set null,
+  primary key (entity_type, budget_id, record_id)
 );
 
 create table public.budget_transactions (
@@ -175,6 +222,18 @@ values
     '10000000-0000-0000-0000-000000000003',
     '90000000-0000-0000-0000-000000000003'
   );
+
+insert into public.budget_memberships (budget_id, user_id, role, status)
+values
+  ('10000000-0000-0000-0000-000000000001', '90000000-0000-0000-0000-000000000001', 'owner', 'active'),
+  ('10000000-0000-0000-0000-000000000002', '90000000-0000-0000-0000-000000000002', 'owner', 'active'),
+  ('10000000-0000-0000-0000-000000000003', '90000000-0000-0000-0000-000000000003', 'owner', 'active');
+
+insert into public.budget_members (id, user_id, budget_id, auth_user_id, invite_status)
+values
+  ('80000000-0000-0000-0000-000000000001', '90000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '90000000-0000-0000-0000-000000000001', 'active'),
+  ('80000000-0000-0000-0000-000000000002', '90000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', '90000000-0000-0000-0000-000000000002', 'active'),
+  ('80000000-0000-0000-0000-000000000003', '90000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000002', '90000000-0000-0000-0000-000000000003', 'active');
 
 insert into public.budget_transactions (
   id,
