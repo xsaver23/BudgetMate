@@ -76,8 +76,8 @@ jobs:
           psql --dbname budgetmate_02c --file "${shared_data_safety_migration}"
           psql --dbname budgetmate_02c --file "${shared_data_safety_contract}"
           bash supabase/tests/03_shared_data_safety_concurrency.sh
-          psql --dbname budgetmate_02c --file "${trigger_permission_fix}"
-          psql --dbname budgetmate_02c --file "${trigger_permission_fix}"
+          psql --set ON_ERROR_STOP=1 --dbname budgetmate_02c --file "${trigger_permission_fix}"
+          psql --set ON_ERROR_STOP=1 --dbname budgetmate_02c --file "${trigger_permission_fix}"
           psql --dbname budgetmate_02c --file "${trigger_permission_contract}"
 
           dropdb budgetmate_02c
