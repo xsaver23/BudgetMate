@@ -1,5 +1,3 @@
-\set ON_ERROR_STOP on
-
 begin;
 
 -- The budgets trigger executes for authenticated personal-budget bootstrap.
