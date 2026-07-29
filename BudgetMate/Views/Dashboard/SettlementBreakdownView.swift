@@ -79,7 +79,7 @@ struct SettlementBreakdownView: View {
                     .foregroundStyle(BudgetBeaverPalette.wood)
                     .multilineTextAlignment(.center)
 
-                Text(amount(suggestion.amount))
+                Text(suggestionAmount)
                     .font(.roundedBold(40))
                     .foregroundStyle(AppTheme.danger)
                     .lineLimit(1)
@@ -88,7 +88,7 @@ struct SettlementBreakdownView: View {
             .frame(maxWidth: .infinity)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(suggestion.from.displayName) owes \(suggestion.to.displayName)")
-            .accessibilityValue(amount(suggestion.amount))
+            .accessibilityValue(suggestionAmount)
         }
     }
 
@@ -210,7 +210,7 @@ struct SettlementBreakdownView: View {
             onSettle()
             dismiss()
         } label: {
-            Text("Settle Up · \(amount(suggestion.amount))")
+            Text("Settle Up · \(suggestionAmount)")
                 .font(.headline.weight(.black))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
@@ -220,7 +220,7 @@ struct SettlementBreakdownView: View {
         .buttonStyle(.plain)
         .buttonStyle(PressableButtonStyle(scale: 0.98))
         .accessibilityLabel("Settle up")
-        .accessibilityValue(amount(suggestion.amount))
+        .accessibilityValue(suggestionAmount)
     }
 
     // MARK: - Helpers
@@ -236,7 +236,18 @@ struct SettlementBreakdownView: View {
     }
 
     private func amount(_ value: Double) -> String {
-        CurrencyFormatter.amountString(value, symbol: currencySymbol)
+        CurrencyFormatter.amountString(
+            value,
+            symbol: currencySymbol,
+            currencyCode: suggestion.currencyCode
+        )
+    }
+
+    private var suggestionAmount: String {
+        CurrencyFormatter.amountString(
+            suggestion.amountMinorUnits,
+            currencyCode: suggestion.currencyCode
+        )
     }
 
     private func firstName(_ member: BudgetMember) -> String {
@@ -459,7 +470,11 @@ private struct SettlementDetailView: View {
     }
 
     private func amount(_ value: Double) -> String {
-        CurrencyFormatter.amountString(value, symbol: currencySymbol)
+        CurrencyFormatter.amountString(
+            value,
+            symbol: currencySymbol,
+            currencyCode: settlement.currencyCode ?? CurrencyOption.usd.code
+        )
     }
 
     private func firstName(_ member: BudgetMember) -> String {

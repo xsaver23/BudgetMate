@@ -63,6 +63,24 @@ struct AddTransactionView: View {
         settingsStore.settings.currencySymbol
     }
 
+    private var amountCurrencyAffix: CurrencyFormatter.CurrencyAffix {
+        CurrencyFormatter.currencyAffix(currencyCode: settingsStore.settings.currencyCode)
+    }
+
+    private var amountCurrencyName: String {
+        CurrencyOption(rawValue: CurrencyOption.normalizedCode(settingsStore.settings.currencyCode))?.displayName
+            ?? settingsStore.settings.currencyCode
+    }
+
+    private var amountCurrencyAffixView: some View {
+        Text(amountCurrencyAffix.symbol)
+            .font(.roundedBold(34))
+            .foregroundStyle(AppTheme.textSecondary)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .accessibilityHidden(true)
+    }
+
     private var recordMutationDecision: RecordMutationDecision {
         SharedRecordMutationCapability.decision(
             currentUserScopeId: authStore.currentUserScopeId,
@@ -79,7 +97,7 @@ struct AddTransactionView: View {
     private var amountBinding: Binding<String> {
         Binding(
             get: { viewModel.amountText },
-            set: { viewModel.updateAmountText($0) }
+            set: { viewModel.updateAmountText($0, currencyCode: settingsStore.settings.currencyCode) }
         )
     }
 
@@ -175,6 +193,7 @@ struct AddTransactionView: View {
             .onAppear {
                 editorAppearedAtUptime = ProcessInfo.processInfo.systemUptime
                 Self.interactionSignposter.emitEvent("Transaction Editor Appeared")
+                viewModel.normalizeInput(currencyCode: settingsStore.settings.currencyCode)
                 if !hasInitialSettings {
                     viewModel.updateAvailableExpenseCategories(from: settingsStore.settings)
                 }
@@ -228,7 +247,7 @@ struct AddTransactionView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     TransactionSaveToolbarButton(
                         title: transactionToEdit == nil ? "Save" : "Update",
-                        isEnabled: viewModel.canSave && !isEditingRestrictedSharedRecord
+                        isEnabled: viewModel.canSave(currencyCode: settingsStore.settings.currencyCode) && !isEditingRestrictedSharedRecord
                     ) { cloudSyncStore in
                         saveTransaction(using: cloudSyncStore)
                     }
@@ -276,11 +295,9 @@ struct AddTransactionView: View {
             .padding(.horizontal, 20)
 
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(currencySymbol)
-                    .font(.roundedBold(34))
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
+                if amountCurrencyAffix.placement == .leading {
+                    amountCurrencyAffixView
+                }
 
                 TextField("0", text: amountBinding)
                     .keyboardType(.decimalPad)
@@ -298,7 +315,11 @@ struct AddTransactionView: View {
                     // simultaneous focus transfer on physical devices.
                     .frame(width: 230, alignment: .leading)
                     .focused($focusedInput, equals: .amount)
-                    .accessibilityLabel("Amount")
+                    .accessibilityLabel("Amount in \(amountCurrencyName)")
+
+                if amountCurrencyAffix.placement == .trailing {
+                    amountCurrencyAffixView
+                }
             }
             .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
@@ -368,13 +389,16 @@ struct AddTransactionView: View {
                         Text("Entered")
                             .foregroundStyle(AppTheme.textSecondary)
                         Spacer()
-                        Text(CurrencyFormatter.amountString(viewModel.customSplitTotal, symbol: currencySymbol))
+                        Text(CurrencyFormatter.amountString(
+                            viewModel.customSplitTotal(currencyCode: settingsStore.settings.currencyCode),
+                            currencyCode: settingsStore.settings.currencyCode
+                        ))
                             .font(.roundedBold(15))
-                            .foregroundStyle(viewModel.isSplitValid ? AppTheme.income : AppTheme.expense)
+                            .foregroundStyle(viewModel.isSplitValid(currencyCode: settingsStore.settings.currencyCode) ? AppTheme.income : AppTheme.expense)
                     }
                 }
 
-                if let message = viewModel.splitValidationMessage {
+                if let message = viewModel.splitValidationMessage(currencyCode: settingsStore.settings.currencyCode) {
                     Text(message)
                         .font(.caption)
                         .foregroundStyle(AppTheme.expense)
@@ -414,11 +438,20 @@ struct AddTransactionView: View {
             if isIncluded {
                 switch viewModel.splitMethod {
                 case .equally:
-                    Text(CurrencyFormatter.amountString(equalSharesByMember[member.id] ?? 0, symbol: currencySymbol))
+                    Text(CurrencyFormatter.amountString(
+                        equalSharesByMember[member.id] ?? 0,
+                        currencyCode: settingsStore.settings.currencyCode
+                    ))
                         .font(.roundedBold(15))
                         .foregroundStyle(AppTheme.textPrimary)
                 case .custom:
-                    TextField("0.00", text: customBinding(member.id))
+                        TextField(
+                            CurrencyFormatter.numberString(
+                                0,
+                                currencyCode: settingsStore.settings.currencyCode
+                            ),
+                            text: customBinding(member.id)
+                        )
                         .keyboardType(.decimalPad)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 90)
@@ -431,7 +464,10 @@ struct AddTransactionView: View {
     }
 
     private func equalSharesByMember() -> [UUID: Double] {
-        guard let resolved = viewModel.resolvedSplits(payerId: payerId) else { return [:] }
+        guard let resolved = viewModel.resolvedSplits(
+            payerId: payerId,
+            currencyCode: settingsStore.settings.currencyCode
+        ) else { return [:] }
         return Dictionary(resolved, uniquingKeysWith: { first, _ in first })
     }
 
@@ -446,7 +482,7 @@ struct AddTransactionView: View {
     private func customBinding(_ id: UUID) -> Binding<String> {
         Binding(
             get: { viewModel.customAmountText(for: id) },
-            set: { viewModel.updateCustomAmount($0, for: id) }
+            set: { viewModel.updateCustomAmount($0, for: id, currencyCode: settingsStore.settings.currencyCode) }
         )
     }
 
@@ -459,7 +495,11 @@ struct AddTransactionView: View {
                 saveErrorMessage = recordMutationDecision.readOnlyMessage
                 return
             }
-            viewModel.applyChanges(to: transactionToEdit, paidBy: member)
+            viewModel.applyChanges(
+                to: transactionToEdit,
+                paidBy: member,
+                currencyCode: settingsStore.settings.currencyCode
+            )
             transactionToEdit.ownerUserId = authStore.currentBudgetScopeId
             replaceSplits(for: transactionToEdit, paidBy: member)
             do {
@@ -479,7 +519,10 @@ struct AddTransactionView: View {
             return
         }
 
-        guard let transaction = viewModel.buildTransaction(addedBy: member) else { return }
+        guard let transaction = viewModel.buildTransaction(
+            addedBy: member,
+            currencyCode: settingsStore.settings.currencyCode
+        ) else { return }
         transaction.ownerUserId = authStore.currentBudgetScopeId
         modelContext.insert(transaction)
         insertSplits(for: transaction, paidBy: member)
@@ -509,11 +552,17 @@ struct AddTransactionView: View {
     }
 
     private func insertSplits(for transaction: Transaction, paidBy member: BudgetMember) {
-        guard let splits = viewModel.resolvedSplits(payerId: member.id) else { return }
-        for entry in splits where entry.amount > 0 {
+        guard let splits = viewModel.resolvedMoneySplits(
+            payerId: member.id,
+            currencyCode: settingsStore.settings.currencyCode
+        ) else { return }
+        for entry in splits where entry.money.minorUnits > 0 {
+            let amount = MoneyAccounting.doubleValue(of: entry.money)
             let split = TransactionSplit(
                 memberId: entry.memberId,
-                amount: entry.amount,
+                amount: amount,
+                amountMinorUnits: entry.money.minorUnits,
+                currencyCode: entry.money.currencyCode,
                 transaction: transaction
             )
             modelContext.insert(split)

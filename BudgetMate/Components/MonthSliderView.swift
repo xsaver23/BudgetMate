@@ -5,7 +5,7 @@ import SwiftUI
 struct MonthSliderView: View {
     @EnvironmentObject private var monthSelectionStore: MonthSelectionStore
 
-    private var selectedIndex: Int { monthSelectionStore.selectedMonthIndex }
+    private var selectedMonthKey: String { monthSelectionStore.selectedMonthKey }
 
     var body: some View {
         CardContainer {
@@ -17,16 +17,16 @@ struct MonthSliderView: View {
                     Text(monthSelectionStore.selectedMonthTitle)
                         .font(.roundedBold(22))
                         .foregroundStyle(BudgetBeaverPalette.ink)
-                        .animation(.easeOut(duration: 0.16), value: selectedIndex)
+                        .animation(.easeOut(duration: 0.16), value: selectedMonthKey)
                 }
 
                 Spacer()
 
-                stepper(systemImage: "chevron.left", enabled: selectedIndex > 0) {
-                    monthSelectionStore.updateMonthIndex(selectedIndex - 1)
+                stepper(systemImage: "chevron.left", enabled: true) {
+                    monthSelectionStore.moveMonth(by: -1)
                 }
-                stepper(systemImage: "chevron.right", enabled: selectedIndex < 11) {
-                    monthSelectionStore.updateMonthIndex(selectedIndex + 1)
+                stepper(systemImage: "chevron.right", enabled: true) {
+                    monthSelectionStore.moveMonth(by: 1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

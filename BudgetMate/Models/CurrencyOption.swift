@@ -36,6 +36,13 @@ enum CurrencyOption: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Ordinary amount displays use the unambiguous symbol only where the
+    /// product contract requires it. The stored and picker-facing code/symbol
+    /// remain unchanged.
+    var displaySymbol: String {
+        self == .cad ? "$" : symbol
+    }
+
     var pickerLabel: String {
         "\(code) - \(displayName) (\(symbol))"
     }
@@ -47,6 +54,10 @@ enum CurrencyOption: String, CaseIterable, Identifiable {
 
     static func symbol(for code: String) -> String {
         CurrencyOption(rawValue: normalizedCode(code))?.symbol ?? CurrencyOption.usd.symbol
+    }
+
+    static func displaySymbol(for code: String) -> String {
+        CurrencyOption(rawValue: normalizedCode(code))?.displaySymbol ?? CurrencyOption.usd.displaySymbol
     }
 
     static func code(forLegacySymbol symbol: String?) -> String {

@@ -58,7 +58,7 @@ struct BudgetView: View {
             transactions: scopedTransactions,
             settlements: scopedSettlementRecords
         )
-        return "\(dataHash)-\(monthSelectionStore.selectedMonthIndex)-\(authStore.currentBudgetScopeId)"
+        return "\(dataHash)-\(monthSelectionStore.selectedMonthKey)-\(authStore.currentBudgetScopeId)"
     }
 
     private var categories: [TransactionCategory] {
@@ -102,6 +102,12 @@ struct BudgetView: View {
 
                     VStack(spacing: 16) {
                         MonthSliderView()
+                        if !tabMetrics.anomalies.isEmpty {
+                            Label("Some money records need attention", systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(BudgetBeaverPalette.amountRed)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                         monthlyBudgetCard
                         monthlySpentCard
                         categoryBudgetsCard
@@ -271,7 +277,11 @@ struct BudgetView: View {
                 }
 
                 ForEach(Array(categories.enumerated()), id: \.offset) { index, category in
-                    categoryBudgetRow(for: category)
+                    if isEditingCategories {
+                        categoryBudgetRow(for: category)
+                    } else {
+                        categoryNavigationRow(for: category)
+                    }
 
                     if index < categories.count - 1 {
                         Divider()
@@ -346,7 +356,13 @@ struct BudgetView: View {
                 }
 
                 if isEditingCategories {
-                    TextField("0.00", text: budgetBinding(for: category))
+                    TextField(
+                        CurrencyFormatter.numberString(
+                            0,
+                            currencyCode: settingsStore.settings.currencyCode
+                        ),
+                        text: budgetBinding(for: category)
+                    )
                         .keyboardType(.decimalPad)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 96)
@@ -377,6 +393,36 @@ struct BudgetView: View {
                 .accessibilityValue(categoryProgressAccessibilityValue(for: category))
         }
         .padding(.vertical, 4)
+    }
+
+    private func categoryNavigationRow(for category: TransactionCategory) -> some View {
+        NavigationLink {
+            BudgetCategoryTransactionListView(
+                categoryRawValue: category.rawValue,
+                budgetScopeId: budgetScopeId,
+                selectedMonthKey: monthSelectionStore.selectedMonthKey,
+                selectedMonthTitle: monthSelectionStore.selectedMonthTitle,
+                emoji: settingsStore.categoryEmoji(for: category),
+                breakdown: tabMetrics.categoryBreakdown(
+                    for: category,
+                    budgetScopeId: budgetScopeId,
+                    currencyCode: settingsStore.settings.currencyCode
+                ),
+                currencyCode: settingsStore.settings.currencyCode
+            )
+        } label: {
+            categoryBudgetRow(for: category)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(category.displayName) budget category")
+        .accessibilityValue(
+            "\(formattedAmount(monthlySpent(for: category))) spent, " +
+                "\(formattedAmount(configuredBudget(for: category))) budget"
+        )
+        .accessibilityHint(
+            "Double-tap to view \(category.displayName.lowercased()) expenses for " +
+                "\(monthSelectionStore.selectedMonthTitle.lowercased())"
+        )
     }
 
     private var memberSpendingCard: some View {
@@ -487,18 +533,24 @@ struct BudgetView: View {
             transactions: scopedTransactions,
             settlements: scopedSettlementRecords,
             members: memberViewModel.members,
-            monthInterval: monthSelectionStore.monthInterval()
+            monthInterval: monthSelectionStore.monthInterval(),
+            currencyCode: settingsStore.settings.currencyCode,
+            budgetScopeId: budgetScopeId,
+            calendar: monthSelectionStore.selectionCalendar
         )
     }
 
     private func balanceCaption(for member: BudgetMember) -> (text: String, color: Color)? {
-        let cents = tabMetrics.netBalances[member.id] ?? 0
-        guard cents != 0 else { return nil }
-        let value = Double(abs(cents)) / 100
-        if cents > 0 {
-            return ("owed \(formattedAmount(value))", BudgetBeaverPalette.forest)
+        let minorUnits = tabMetrics.netBalances[member.id] ?? 0
+        guard minorUnits != 0 else { return nil }
+        let value = MoneyAccounting.formatted(
+            minorUnits: minorUnits == Int64.min ? Int64.max : abs(minorUnits),
+            currencyCode: settingsStore.settings.currencyCode
+        ) ?? formattedAmount(0)
+        if minorUnits > 0 {
+            return ("owed \(value)", BudgetBeaverPalette.forest)
         } else {
-            return ("owes \(formattedAmount(value))", BudgetBeaverPalette.amountRed)
+            return ("owes \(value)", BudgetBeaverPalette.amountRed)
         }
     }
 
@@ -506,7 +558,13 @@ struct BudgetView: View {
         var values: [String: String] = [:]
         for category in categories {
             let budget = configuredBudget(for: category)
-            values[category.rawValue] = budget > 0 ? String(format: "%.2f", budget) : ""
+            values[category.rawValue] = budget > 0
+                ? CurrencyFormatter.numberString(
+                    budget,
+                    currencyCode: settingsStore.settings.currencyCode,
+                    locale: Locale(identifier: "en_US_POSIX")
+                )
+                : ""
         }
         categoryBudgetInputs = values
     }
@@ -633,11 +691,17 @@ struct BudgetView: View {
     private func budgetBinding(for category: TransactionCategory) -> Binding<String> {
         Binding(
             get: { categoryBudgetInputs[category.rawValue] ?? "" },
-            set: { categoryBudgetInputs[category.rawValue] = Self.sanitizedMoneyText($0) }
+            set: {
+                categoryBudgetInputs[category.rawValue] = Self.sanitizedMoneyText(
+                    $0,
+                    currencyCode: settingsStore.settings.currencyCode
+                )
+            }
         )
     }
 
-    private static func sanitizedMoneyText(_ text: String) -> String {
+    private static func sanitizedMoneyText(_ text: String, currencyCode: String) -> String {
+        let maximumFractionDigits = (try? CurrencyMetadata(code: currencyCode))?.fractionDigits ?? 2
         var result = ""
         var hasDecimalSeparator = false
         var fractionalDigitCount = 0
@@ -645,11 +709,16 @@ struct BudgetView: View {
         for character in text {
             if character.isNumber {
                 if hasDecimalSeparator {
-                    guard fractionalDigitCount < 2 else { continue }
+                    guard maximumFractionDigits > 0,
+                          fractionalDigitCount < maximumFractionDigits else { continue }
                     fractionalDigitCount += 1
                 }
                 result.append(character)
             } else if character == "." || character == "," {
+                if maximumFractionDigits == 0 {
+                    hasDecimalSeparator = true
+                    continue
+                }
                 guard !hasDecimalSeparator else { continue }
                 hasDecimalSeparator = true
                 result.append(".")
@@ -660,7 +729,10 @@ struct BudgetView: View {
     }
 
     private func budgetDisplayValue(for category: TransactionCategory) -> String {
-        String(format: "%.2f", configuredBudget(for: category))
+        CurrencyFormatter.numberString(
+            configuredBudget(for: category),
+            currencyCode: settingsStore.settings.currencyCode
+        )
     }
 
     private func monthlySpent(for category: TransactionCategory) -> Double {
@@ -690,7 +762,10 @@ struct BudgetView: View {
     }
 
     private func formattedAmount(_ amount: Double) -> String {
-        CurrencyFormatter.amountString(amount, symbol: settingsStore.settings.currencySymbol)
+        CurrencyFormatter.amountString(
+            amount,
+            currencyCode: settingsStore.settings.currencyCode
+        )
     }
 
     private var saveAlertBinding: Binding<Bool> {
@@ -914,5 +989,142 @@ private struct CategoryEditorView: View {
             return
         }
         onSave(name, trimmedEmoji.isEmpty ? nil : trimmedEmoji)
+    }
+}
+
+struct BudgetCategoryTransactionListView: View {
+    let categoryRawValue: String
+    let budgetScopeId: String
+    let selectedMonthKey: String
+    let selectedMonthTitle: String
+    let emoji: String?
+    let breakdown: BudgetCategoryTransactionBreakdown
+    let currencyCode: String
+
+    private var category: TransactionCategory { TransactionCategory(rawValue: categoryRawValue) }
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                if !breakdown.anomalies.isEmpty {
+                    Label(
+                        "Some category money records need attention",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(BudgetBeaverPalette.amountRed)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityLabel("Some category money records need attention")
+                }
+                summaryCard
+                if breakdown.transactions.isEmpty { emptyCard } else { transactionCard }
+            }
+            .padding()
+        }
+        .background(AppTheme.background)
+        .navigationTitle("\(category.displayName) Expenses")
+        .navigationBarTitleDisplayMode(.inline)
+        .accessibilityIdentifier(
+            "budget-category-transaction-list-\(categoryRawValue)-\(selectedMonthKey)"
+        )
+    }
+
+    private var summaryCard: some View {
+        CardContainer(showsShadow: false) {
+            HStack(spacing: 14) {
+                CategoryIconView(category: category, emoji: emoji, size: 44)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(selectedMonthTitle)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(BudgetBeaverPalette.wood)
+                    Text("Spent")
+                        .font(.roundedBold(24))
+                        .foregroundStyle(BudgetBeaverPalette.ink)
+                    Text("\(breakdown.transactions.count) expense\(breakdown.transactions.count == 1 ? "" : "s")")
+                        .font(.subheadline)
+                        .foregroundStyle(BudgetBeaverPalette.wood)
+                }
+                Spacer(minLength: 8)
+                Text(formattedAmount(breakdown.total))
+                    .font(.roundedBold(26))
+                    .monospacedDigit()
+                    .foregroundStyle(BudgetBeaverPalette.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(category.displayName) spending for \(selectedMonthTitle)")
+        .accessibilityValue(
+            "\(breakdown.transactions.count) expenses, \(formattedAmount(breakdown.total)) spent"
+        )
+    }
+
+    private var transactionCard: some View {
+        CardContainer(showsShadow: false) {
+            VStack(spacing: 0) {
+                ForEach(Array(breakdown.transactions.enumerated()), id: \.element.id) { index, transaction in
+                    HStack(spacing: 12) {
+                        CategoryIconView(category: category, emoji: emoji, size: 34)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(transaction.title)
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(BudgetBeaverPalette.ink)
+                                .lineLimit(2)
+                            Text(transaction.date.formatted(.dateTime.month(.abbreviated).day().year()))
+                                .font(.subheadline)
+                                .foregroundStyle(BudgetBeaverPalette.wood)
+                        }
+                        Spacer(minLength: 8)
+                        Text(formattedAmount(transaction))
+                            .font(.roundedBold(19))
+                            .monospacedDigit()
+                            .foregroundStyle(BudgetBeaverPalette.amountDark)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.65)
+                    }
+                    .padding(.vertical, 15)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(
+                        "\(transaction.title), \(transaction.date.formatted(.dateTime.month(.wide).day().year())), " +
+                            "\(formattedAmount(transaction))"
+                    )
+                    .accessibilityIdentifier("budget-category-transaction-\(transaction.id.uuidString)")
+                    if index < breakdown.transactions.count - 1 {
+                        Divider().padding(.leading, 46)
+                    }
+                }
+            }
+        }
+    }
+
+    private var emptyCard: some View {
+        CardContainer(showsShadow: false) {
+            VStack(spacing: 10) {
+                Image(systemName: "tray")
+                    .font(.system(size: 32, weight: .semibold))
+                    .foregroundStyle(CategoryColor.color(for: category))
+                Text("No \(category.displayName.lowercased()) expenses")
+                    .font(.roundedBold(19))
+                    .foregroundStyle(BudgetBeaverPalette.ink)
+                Text("There are no expenses in this category for \(selectedMonthTitle.lowercased()).")
+                    .font(.subheadline)
+                    .foregroundStyle(BudgetBeaverPalette.wood)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 20)
+        }
+    }
+
+    private func formattedAmount(_ amount: Double) -> String {
+        CurrencyFormatter.amountString(amount, currencyCode: currencyCode)
+    }
+
+    private func formattedAmount(_ transaction: Transaction) -> String {
+        if let money = MoneyAccounting.amount(for: transaction, fallbackCurrencyCode: currencyCode) {
+            return CurrencyFormatter.amountString(money)
+        }
+        return formattedAmount(transaction.amount)
     }
 }

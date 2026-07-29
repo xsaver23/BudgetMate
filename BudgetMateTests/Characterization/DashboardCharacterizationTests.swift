@@ -103,6 +103,95 @@ final class DashboardCharacterizationTests: XCTestCase {
         XCTAssertEqual(resolved.reduce(0) { $0 + $1.amount }, 10.01, accuracy: 0.001)
     }
 
+    func testExactMoneyLocalTransactionAndSplitMaterialization() throws {
+        let viewModel = AddTransactionViewModel()
+        viewModel.title = "CAD groceries"
+        viewModel.amountText = "10.01"
+        viewModel.isSplit = true
+        viewModel.splitMethod = .equally
+        viewModel.participants = [
+            BudgetMateTestFixtures.aliceMemberID,
+            BudgetMateTestFixtures.bobMemberID,
+            BudgetMateTestFixtures.carolMemberID
+        ]
+
+        let transaction = try XCTUnwrap(
+            viewModel.buildTransaction(
+                addedBy: BudgetMateTestFixtures.alice,
+                currencyCode: "CAD"
+            )
+        )
+        XCTAssertEqual(transaction.amountMinorUnits, 1001)
+        XCTAssertEqual(transaction.currencyCode, "CAD")
+
+        let shares = try XCTUnwrap(
+            viewModel.resolvedSplits(
+                payerId: BudgetMateTestFixtures.aliceMemberID,
+                currencyCode: "CAD"
+            )
+        )
+        XCTAssertEqual(shares[0].amount, 3.34, accuracy: 0.0001)
+        XCTAssertEqual(shares[1].amount, 3.34, accuracy: 0.0001)
+        XCTAssertEqual(shares[2].amount, 3.33, accuracy: 0.0001)
+    }
+
+    func testCategoryBreakdownIsReadOnlyScopedToExpenseMonthAndBudget() throws {
+        let scope = BudgetMateTestFixtures.sharedBudgetID.uuidString
+        let january = BudgetMateTestFixtures.makeDate(year: 2025, month: 1, day: 15)
+        let interval = try XCTUnwrap(BudgetMateTestFixtures.utcCalendar.dateInterval(of: .month, for: january))
+        let inScope = BudgetMateTestFixtures.expense(
+            title: "Groceries",
+            amount: 12.34,
+            category: .groceries,
+            date: january
+        )
+        let income = BudgetMateTestFixtures.income(amount: 999)
+        let otherScope = BudgetMateTestFixtures.expense(
+            title: "Other household",
+            amount: 88,
+            category: .groceries,
+            date: january
+        )
+        otherScope.ownerUserId = BudgetMateTestFixtures.personalBudgetID.uuidString
+
+        let metrics = BudgetTabMetrics.compute(
+            transactions: [inScope, income, otherScope],
+            settlements: [],
+            members: [],
+            monthInterval: interval,
+            currencyCode: "CAD",
+            budgetScopeId: scope
+        )
+        let breakdown = metrics.categoryBreakdown(
+            for: .groceries,
+            budgetScopeId: scope,
+            currencyCode: "CAD"
+        )
+
+        XCTAssertEqual(breakdown.transactions.map(\.id), [inScope.id])
+        XCTAssertEqual(breakdown.total, 12.34, accuracy: 0.001)
+    }
+
+    func testMonthSelectionMovesAcrossYearBoundaryUsingItsCalendarTimeZone() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Pacific/Kiritimati"))
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        let referenceDate = try XCTUnwrap(
+            calendar.date(from: DateComponents(year: 2024, month: 12, day: 15, hour: 12))
+        )
+        let store = MonthSelectionStore(calendar: calendar, referenceDate: referenceDate)
+
+        XCTAssertEqual(store.selectedMonthKey, "2024-12")
+        store.moveMonth(by: 1)
+        XCTAssertEqual(store.selectedMonthKey, "2025-01")
+        XCTAssertEqual(store.selectedYear, 2025)
+        XCTAssertEqual(store.selectedMonthIndex, 0)
+
+        store.moveMonth(by: -1)
+        XCTAssertEqual(store.selectedMonthKey, "2024-12")
+        XCTAssertEqual(store.selectedMonthTitle, "December 2024")
+    }
+
     func testCustomSplitValidationRequiresTheEnteredSharesToMatchTotal() {
         let viewModel = AddTransactionViewModel()
         viewModel.isSplit = true
@@ -119,7 +208,10 @@ final class DashboardCharacterizationTests: XCTestCase {
 
         viewModel.updateCustomAmount("59.98", for: BudgetMateTestFixtures.bobMemberID)
         XCTAssertFalse(viewModel.isSplitValid)
-        XCTAssertEqual(viewModel.splitValidationMessage, "Add 0.02 more to match the total.")
+        XCTAssertEqual(
+            viewModel.splitValidationMessage(currencyCode: "CAD", locale: Locale(identifier: "en_CA")),
+            "Add $0.02 more to match the total."
+        )
     }
 
     func testSettlementSuggestionsNetOpposingSplitBills() {
@@ -167,5 +259,164 @@ final class DashboardCharacterizationTests: XCTestCase {
         XCTAssertEqual(result.count, 1)
         XCTAssertEqual(result.first?.id, first.id)
         XCTAssertEqual(try XCTUnwrap(result.first?.amount), 25, accuracy: 0.001)
+    }
+
+    func testJPYInputNormalizesFractionalTextAndPreservesExactShares() throws {
+        let viewModel = AddTransactionViewModel()
+        viewModel.title = "Yen dinner"
+        viewModel.amountText = "100.5"
+        viewModel.isSplit = true
+        viewModel.splitMethod = .equally
+        viewModel.participants = [BudgetMateTestFixtures.aliceMemberID, BudgetMateTestFixtures.bobMemberID]
+        viewModel.updateAmountText("100.5", currencyCode: "JPY")
+
+        XCTAssertEqual(viewModel.amountText, "100")
+        XCTAssertEqual(viewModel.parsedAmount(currencyCode: "JPY"), 100)
+        let shares = try XCTUnwrap(viewModel.resolvedSplits(
+            payerId: BudgetMateTestFixtures.aliceMemberID,
+            currencyCode: "JPY"
+        ))
+        XCTAssertEqual(shares.map(\.amount).reduce(0, +), 100, accuracy: 0.001)
+        let exactShares = try XCTUnwrap(viewModel.resolvedMoneySplits(
+            payerId: BudgetMateTestFixtures.aliceMemberID,
+            currencyCode: "JPY"
+        ))
+        XCTAssertEqual(exactShares.map(\.money.minorUnits).reduce(0, +), 100)
+    }
+
+    func testJPYProgrammaticFractionalCustomSplitIsRejectedWithoutDoubleTolerance() {
+        let viewModel = AddTransactionViewModel()
+        viewModel.title = "Yen split"
+        viewModel.amountText = "100"
+        viewModel.isSplit = true
+        viewModel.splitMethod = .custom
+        viewModel.participants = [BudgetMateTestFixtures.aliceMemberID, BudgetMateTestFixtures.bobMemberID]
+        viewModel.customAmounts = [
+            BudgetMateTestFixtures.aliceMemberID: "50.5",
+            BudgetMateTestFixtures.bobMemberID: "49.5"
+        ]
+
+        XCTAssertFalse(viewModel.isSplitValid(currencyCode: "JPY"))
+        XCTAssertNil(viewModel.resolvedMoneySplits(
+            payerId: BudgetMateTestFixtures.aliceMemberID,
+            currencyCode: "JPY"
+        ))
+    }
+
+    func testBudgetAggregateOverflowIsAnomalyAndNotAnOrdinaryZero() throws {
+        let first = BudgetMateTestFixtures.expense(amount: 1, date: BudgetMateTestFixtures.referenceDate)
+        let second = BudgetMateTestFixtures.expense(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000115")!,
+            amount: 1,
+            date: BudgetMateTestFixtures.referenceDate
+        )
+        first.amountMinorUnits = Int64.max
+        first.currencyCode = "USD"
+        second.amountMinorUnits = 1
+        second.currencyCode = "USD"
+        let interval = try XCTUnwrap(
+            BudgetMateTestFixtures.utcCalendar.dateInterval(of: .month, for: BudgetMateTestFixtures.referenceDate)
+        )
+
+        let metrics = BudgetTabMetrics.compute(
+            transactions: [first, second],
+            settlements: [],
+            members: [BudgetMateTestFixtures.alice],
+            monthInterval: interval,
+            currencyCode: "USD",
+            budgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            calendar: BudgetMateTestFixtures.utcCalendar
+        )
+
+        XCTAssertEqual(metrics.totalExpenses, 0, accuracy: 0.001)
+        XCTAssertTrue(metrics.anomalies.contains {
+            $0.sourceID == "budget-total" && $0.reason == .arithmeticOverflow
+        })
+    }
+
+    func testBudgetCategoryBreakdownCarriesAggregateAnomalyForDrillDownNotice() {
+        let first = BudgetMateTestFixtures.expense(amount: 1, category: .groceries)
+        let second = BudgetMateTestFixtures.expense(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000116")!,
+            amount: 1,
+            category: .groceries
+        )
+        first.amountMinorUnits = Int64.max
+        first.currencyCode = "USD"
+        second.amountMinorUnits = 1
+        second.currencyCode = "USD"
+
+        let breakdown = BudgetCategoryTransactionBreakdown(
+            categoryRawValue: TransactionCategory.groceries.rawValue,
+            budgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            sourceTransactions: [first, second],
+            currencyCode: "USD"
+        )
+
+        XCTAssertEqual(breakdown.total, 0, accuracy: 0.001)
+        XCTAssertTrue(breakdown.anomalies.contains {
+            $0.sourceID == "category-groceries" && $0.reason == .arithmeticOverflow
+        })
+    }
+
+    func testExactCurrencyMismatchIsSurfacedAndExcludedFromTotals() {
+        let transaction = BudgetMateTestFixtures.expense(amount: 10)
+        transaction.amountMinorUnits = 1_000
+        transaction.currencyCode = "JPY"
+
+        let totals = DashboardViewModel.totals(
+            transactions: [transaction],
+            monthlyBudget: 100,
+            currencyCode: "USD"
+        )
+
+        XCTAssertEqual(totals.totalExpenses, 0, accuracy: 0.001)
+        XCTAssertEqual(totals.anomalies.first?.reason, .currencyMismatch)
+        XCTAssertFalse(totals.anomalies.isEmpty)
+    }
+
+    func testJPYSettlementSuggestionCarriesMinorUnitsWithoutCentsConversion() {
+        let expense = BudgetMateTestFixtures.equalSplitExpense(amount: 100, payerId: BudgetMateTestFixtures.aliceMemberID)
+        for split in expense.splits {
+            split.amountMinorUnits = 50
+            split.currencyCode = "JPY"
+        }
+        expense.amountMinorUnits = 100
+        expense.currencyCode = "JPY"
+
+        let result = DashboardViewModel.settlementsResult(
+            splitExpenses: [expense],
+            members: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob],
+            currencyCode: "JPY"
+        )
+
+        XCTAssertEqual(result.suggestions.first?.amountMinorUnits, 50)
+        XCTAssertEqual(result.suggestions.first?.currencyCode, "JPY")
+        XCTAssertEqual(result.suggestions.first?.amount ?? 0, 50, accuracy: 0.001)
+        XCTAssertTrue(result.anomalies.isEmpty)
+    }
+
+    func testUTCMinusTwelveMonthSelectionMovesAcrossYearBoundary() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: -12 * 60 * 60))
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        let referenceDate = try XCTUnwrap(calendar.date(from: DateComponents(year: 2024, month: 12, day: 31, hour: 23)))
+        let store = MonthSelectionStore(calendar: calendar, referenceDate: referenceDate)
+
+        XCTAssertEqual(store.selectedMonthKey, "2024-12")
+        store.moveMonth(by: 1)
+        XCTAssertEqual(store.selectedMonthKey, "2025-01")
+        store.moveMonth(by: -1)
+        XCTAssertEqual(store.selectedMonthKey, "2024-12")
+    }
+
+    func testFinancialFingerprintChangesWhenExactMoneyFieldsChange() {
+        let transaction = BudgetMateTestFixtures.expense(amount: 10)
+        let initial = FinancialDataFingerprint.hash(transactions: [transaction], settlements: [])
+        transaction.amountMinorUnits = 1_000
+        transaction.currencyCode = "CAD"
+        let changed = FinancialDataFingerprint.hash(transactions: [transaction], settlements: [])
+
+        XCTAssertNotEqual(initial, changed)
     }
 }

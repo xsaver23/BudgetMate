@@ -5,6 +5,21 @@ struct DashboardTotals {
     let totalIncome: Double
     let totalExpenses: Double
     let remainingBudget: Double
+    let anomalies: [MoneyAccounting.ComputationAnomaly]
+
+    init(
+        currentBalance: Double,
+        totalIncome: Double,
+        totalExpenses: Double,
+        remainingBudget: Double,
+        anomalies: [MoneyAccounting.ComputationAnomaly] = []
+    ) {
+        self.currentBalance = currentBalance
+        self.totalIncome = totalIncome
+        self.totalExpenses = totalExpenses
+        self.remainingBudget = remainingBudget
+        self.anomalies = anomalies
+    }
 }
 
 struct ExpenseCategoryBreakdown: Identifiable {
@@ -14,11 +29,22 @@ struct ExpenseCategoryBreakdown: Identifiable {
     var id: String { category.rawValue }
 }
 
+struct ExpenseBreakdownComputation {
+    let breakdown: [ExpenseCategoryBreakdown]
+    let anomalies: [MoneyAccounting.ComputationAnomaly]
+}
+
 /// A simplified "X pays Y" suggestion to clear split-bill debts.
 struct SettlementSuggestion: Identifiable {
     let from: BudgetMember
     let to: BudgetMember
-    let amount: Double
+    let amountMinorUnits: Int64
+    let currencyCode: String
+
+    var amount: Double {
+        guard let money = try? Money(minorUnits: amountMinorUnits, currencyCode: currencyCode) else { return 0 }
+        return MoneyAccounting.doubleValue(of: money)
+    }
 
     var id: String { "\(from.id)-\(to.id)" }
 }
@@ -26,6 +52,16 @@ struct SettlementSuggestion: Identifiable {
 private struct DirectionalBalanceKey: Hashable {
     let from: UUID
     let to: UUID
+}
+
+struct NetBalanceComputation {
+    let balances: [UUID: Int64]
+    let anomalies: [MoneyAccounting.ComputationAnomaly]
+}
+
+struct SettlementSuggestionsComputation {
+    let suggestions: [SettlementSuggestion]
+    let anomalies: [MoneyAccounting.ComputationAnomaly]
 }
 
 /// One contributing line in a pairwise balance breakdown between two members.
@@ -57,67 +93,153 @@ enum DashboardViewModel {
     static func totals(
         transactions: [Transaction],
         monthlyBudget: Double,
-        forMember memberId: UUID? = nil
+        forMember memberId: UUID? = nil,
+        currencyCode: String = CurrencyOption.usd.code
     ) -> DashboardTotals {
-        let totalIncome = transactions
-            .filter { $0.type == .income }
-            .reduce(0.0) { partial, transaction in
-                if let memberId {
-                    return partial + (transaction.createdByMemberId == memberId ? transaction.amount : 0)
-                }
-                return partial + transaction.amount
+        var anomalies: [MoneyAccounting.ComputationAnomaly] = []
+        let incomeValues = transactions.compactMap { transaction -> Money? in
+            guard transaction.type == .income,
+                  memberId == nil || transaction.createdByMemberId == memberId else { return nil }
+            switch MoneyAccounting.checkedAmount(for: transaction, fallbackCurrencyCode: currencyCode) {
+            case .success(let money): return money
+            case .failure(let anomaly): anomalies.append(anomaly); return nil
             }
+        }
+        let totalIncome: Double
+        switch MoneyAccounting.sumChecked(incomeValues, currencyCode: currencyCode) {
+        case .success(let total): totalIncome = MoneyAccounting.doubleValue(of: total)
+        case .failure(let anomaly):
+            anomalies.append(anomaly)
+            totalIncome = 0
+        }
 
-        let totalExpenses = transactions
-            .filter { $0.type == .expense }
-            .reduce(0.0) { partial, transaction in
-                if let memberId {
-                    return partial + transaction.consumedExpense(for: memberId)
-                }
-                return partial + transaction.amount
+        let expenseValues = transactions.filter { transaction in
+            guard transaction.type == .expense else { return false }
+            if let memberId {
+                return transaction.involves(memberId: memberId)
             }
+            return true
+        }.flatMap { transaction -> [Money] in
+            if let memberId {
+                if transaction.isSplit {
+                    return transaction.splits
+                        .filter { $0.memberId == memberId }
+                        .compactMap {
+                            switch MoneyAccounting.checkedAmount(for: $0, fallbackCurrencyCode: currencyCode) {
+                            case .success(let money): return money
+                            case .failure(let anomaly): anomalies.append(anomaly); return nil
+                            }
+                        }
+                }
+                guard transaction.createdByMemberId == memberId else { return [] }
+                guard case .success(let money) = MoneyAccounting.checkedAmount(
+                    for: transaction,
+                    fallbackCurrencyCode: currencyCode
+                ) else {
+                    if case .failure(let anomaly) = MoneyAccounting.checkedAmount(for: transaction, fallbackCurrencyCode: currencyCode) {
+                        anomalies.append(anomaly)
+                    }
+                    return []
+                }
+                return [money]
+            }
+            switch MoneyAccounting.checkedAmount(for: transaction, fallbackCurrencyCode: currencyCode) {
+            case .success(let money): return [money]
+            case .failure(let anomaly): anomalies.append(anomaly); return []
+            }
+        }
+        let totalExpenses: Double
+        switch MoneyAccounting.sumChecked(expenseValues, currencyCode: currencyCode) {
+        case .success(let total): totalExpenses = MoneyAccounting.doubleValue(of: total)
+        case .failure(let anomaly):
+            anomalies.append(anomaly)
+            totalExpenses = 0
+        }
 
         return DashboardTotals(
             currentBalance: totalIncome - totalExpenses,
             totalIncome: totalIncome,
             totalExpenses: totalExpenses,
-            remainingBudget: monthlyBudget - totalExpenses
+            remainingBudget: monthlyBudget - totalExpenses,
+            anomalies: Array(Set(anomalies))
         )
     }
 
-    /// Net position per member from split bills (minus recorded settlements), in cents.
+    /// Net position per member from split bills (minus recorded settlements), in currency minor units.
     /// Positive = the member is owed money; negative = the member owes money.
     static func netBalances(
         transactions: [Transaction],
-        settlements: [Settlement] = []
-    ) -> [UUID: Int] {
+        settlements: [Settlement] = [],
+        currencyCode: String = CurrencyOption.usd.code
+    ) -> [UUID: Int64] {
         let splitExpenses = transactions.filter { $0.type == .expense && !$0.splits.isEmpty }
-        return netBalances(splitExpenses: splitExpenses, settlements: settlements)
+        return netBalances(
+            splitExpenses: splitExpenses,
+            settlements: settlements,
+            currencyCode: currencyCode
+        )
     }
 
     static func netBalances(
         splitExpenses: [Transaction],
-        settlements: [Settlement] = []
-    ) -> [UUID: Int] {
-        var netCents: [UUID: Int] = [:]
+        settlements: [Settlement] = [],
+        currencyCode: String = CurrencyOption.usd.code
+    ) -> [UUID: Int64] {
+        netBalancesResult(
+            splitExpenses: splitExpenses,
+            settlements: settlements,
+            currencyCode: currencyCode
+        ).balances
+    }
+
+    static func netBalancesResult(
+        splitExpenses: [Transaction],
+        settlements: [Settlement] = [],
+        currencyCode: String = CurrencyOption.usd.code
+    ) -> NetBalanceComputation {
+        var balances: [UUID: Int64] = [:]
+        var anomalies: [MoneyAccounting.ComputationAnomaly] = []
 
         for transaction in splitExpenses {
-            var sharedCents = 0
+            var shared: Int64 = 0
             for split in transaction.splits {
-                let cents = Int((split.amount * 100).rounded())
-                netCents[split.memberId, default: 0] -= cents
-                sharedCents += cents
+                guard case .success(let money) = MoneyAccounting.checkedAmount(for: split, fallbackCurrencyCode: currencyCode) else {
+                    if case .failure(let anomaly) = MoneyAccounting.checkedAmount(for: split, fallbackCurrencyCode: currencyCode) { anomalies.append(anomaly) }
+                    continue
+                }
+                let memberResult = balances[split.memberId, default: 0].subtractingReportingOverflow(money.minorUnits)
+                let sharedResult = shared.addingReportingOverflow(money.minorUnits)
+                guard !memberResult.overflow, !sharedResult.overflow else {
+                    anomalies.append(.init(sourceID: transaction.id.uuidString, reason: .arithmeticOverflow))
+                    continue
+                }
+                balances[split.memberId] = memberResult.partialValue
+                shared = sharedResult.partialValue
             }
-            netCents[transaction.createdByMemberId, default: 0] += sharedCents
+            let payerResult = balances[transaction.createdByMemberId, default: 0].addingReportingOverflow(shared)
+            if payerResult.overflow {
+                anomalies.append(.init(sourceID: transaction.id.uuidString, reason: .arithmeticOverflow))
+            } else {
+                balances[transaction.createdByMemberId] = payerResult.partialValue
+            }
         }
 
         for settlement in settlements {
-            let cents = Int((settlement.amount * 100).rounded())
-            netCents[settlement.fromMemberId, default: 0] += cents
-            netCents[settlement.toMemberId, default: 0] -= cents
+            guard case .success(let money) = MoneyAccounting.checkedAmount(for: settlement, fallbackCurrencyCode: currencyCode) else {
+                if case .failure(let anomaly) = MoneyAccounting.checkedAmount(for: settlement, fallbackCurrencyCode: currencyCode) { anomalies.append(anomaly) }
+                continue
+            }
+            let fromResult = balances[settlement.fromMemberId, default: 0].addingReportingOverflow(money.minorUnits)
+            let toResult = balances[settlement.toMemberId, default: 0].subtractingReportingOverflow(money.minorUnits)
+            guard !fromResult.overflow, !toResult.overflow else {
+                anomalies.append(.init(sourceID: settlement.id.uuidString, reason: .arithmeticOverflow))
+                continue
+            }
+            balances[settlement.fromMemberId] = fromResult.partialValue
+            balances[settlement.toMemberId] = toResult.partialValue
         }
 
-        return netCents
+        return NetBalanceComputation(balances: balances, anomalies: Array(Set(anomalies)))
     }
 
     /// Pairwise "who owes whom" balances. This favors clarity over minimizing
@@ -125,68 +247,119 @@ enum DashboardViewModel {
     static func settlements(
         transactions: [Transaction],
         settlementRecords: [Settlement] = [],
-        members: [BudgetMember]
+        members: [BudgetMember],
+        currencyCode: String = CurrencyOption.usd.code
     ) -> [SettlementSuggestion] {
         let splitExpenses = transactions.filter { $0.type == .expense && !$0.splits.isEmpty }
         return settlements(
             splitExpenses: splitExpenses,
             settlementRecords: settlementRecords,
-            members: members
+            members: members,
+            currencyCode: currencyCode
         )
     }
 
     static func settlements(
         splitExpenses: [Transaction],
         settlementRecords: [Settlement] = [],
-        members: [BudgetMember]
+        members: [BudgetMember],
+        currencyCode: String = CurrencyOption.usd.code
     ) -> [SettlementSuggestion] {
-        guard members.count > 1 else { return [] }
+        return settlementsResult(
+            splitExpenses: splitExpenses,
+            settlementRecords: settlementRecords,
+            members: members,
+            currencyCode: currencyCode
+        ).suggestions
+    }
+
+    static func settlementsResult(
+        splitExpenses: [Transaction],
+        settlementRecords: [Settlement] = [],
+        members: [BudgetMember],
+        currencyCode: String = CurrencyOption.usd.code
+    ) -> SettlementSuggestionsComputation {
+        guard members.count > 1 else { return .init(suggestions: [], anomalies: []) }
 
         let membersById = Dictionary(members.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var directionalCents: [DirectionalBalanceKey: Int] = [:]
+        var directionalMinorUnits: [DirectionalBalanceKey: Int64] = [:]
+        var anomalies: [MoneyAccounting.ComputationAnomaly] = []
 
         for transaction in splitExpenses {
             let payerId = transaction.createdByMemberId
             for split in transaction.splits where split.memberId != payerId {
-                let cents = Int((split.amount * 100).rounded())
-                guard cents > 0 else { continue }
-                directionalCents[DirectionalBalanceKey(from: split.memberId, to: payerId), default: 0] += cents
+                guard case .success(let money) = MoneyAccounting.checkedAmount(for: split, fallbackCurrencyCode: currencyCode) else {
+                    if case .failure(let anomaly) = MoneyAccounting.checkedAmount(for: split, fallbackCurrencyCode: currencyCode) { anomalies.append(anomaly) }
+                    continue
+                }
+                guard money.minorUnits > 0 else { continue }
+                let key = DirectionalBalanceKey(from: split.memberId, to: payerId)
+                let result = directionalMinorUnits[key, default: 0].addingReportingOverflow(money.minorUnits)
+                guard !result.overflow else {
+                    anomalies.append(.init(sourceID: transaction.id.uuidString, reason: .arithmeticOverflow))
+                    continue
+                }
+                directionalMinorUnits[key] = result.partialValue
             }
         }
 
         for settlement in settlementRecords {
-            let cents = Int((settlement.amount * 100).rounded())
-            guard cents > 0 else { continue }
-            directionalCents[DirectionalBalanceKey(from: settlement.fromMemberId, to: settlement.toMemberId), default: 0] -= cents
+            guard case .success(let money) = MoneyAccounting.checkedAmount(for: settlement, fallbackCurrencyCode: currencyCode) else {
+                if case .failure(let anomaly) = MoneyAccounting.checkedAmount(for: settlement, fallbackCurrencyCode: currencyCode) { anomalies.append(anomaly) }
+                continue
+            }
+            guard money.minorUnits > 0 else { continue }
+            let key = DirectionalBalanceKey(from: settlement.fromMemberId, to: settlement.toMemberId)
+            let result = directionalMinorUnits[key, default: 0].subtractingReportingOverflow(money.minorUnits)
+            guard !result.overflow else {
+                anomalies.append(.init(sourceID: settlement.id.uuidString, reason: .arithmeticOverflow))
+                continue
+            }
+            directionalMinorUnits[key] = result.partialValue
         }
 
         var processedPairs = Set<Set<UUID>>()
         var suggestions: [SettlementSuggestion] = []
 
-        for (key, cents) in directionalCents {
+        for (key, minorUnits) in directionalMinorUnits {
             let pair = Set([key.from, key.to])
             guard !processedPairs.contains(pair) else { continue }
             processedPairs.insert(pair)
 
             let reverseKey = DirectionalBalanceKey(from: key.to, to: key.from)
-            let netCents = cents - directionalCents[reverseKey, default: 0]
-            guard netCents != 0 else { continue }
+            let netResult = minorUnits.subtractingReportingOverflow(directionalMinorUnits[reverseKey, default: 0])
+            guard !netResult.overflow else {
+                anomalies.append(.init(sourceID: "pair-\(key.from)-\(key.to)", reason: .arithmeticOverflow))
+                continue
+            }
+            let netMinorUnits = netResult.partialValue
+            guard netMinorUnits != 0 else { continue }
 
-            let fromId = netCents > 0 ? key.from : key.to
-            let toId = netCents > 0 ? key.to : key.from
-            let amount = Double(abs(netCents)) / 100
+            let fromId = netMinorUnits > 0 ? key.from : key.to
+            let toId = netMinorUnits > 0 ? key.to : key.from
+            guard netMinorUnits != Int64.min else {
+                anomalies.append(.init(sourceID: "pair-\(key.from)-\(key.to)", reason: .arithmeticOverflow))
+                continue
+            }
+            let amountMinorUnits = abs(netMinorUnits)
 
             if let from = membersById[fromId], let to = membersById[toId] {
-                suggestions.append(SettlementSuggestion(from: from, to: to, amount: amount))
+                suggestions.append(SettlementSuggestion(
+                    from: from,
+                    to: to,
+                    amountMinorUnits: amountMinorUnits,
+                    currencyCode: currencyCode
+                ))
             }
         }
 
-        return suggestions.sorted {
-            if $0.amount == $1.amount {
+        let sortedSuggestions = suggestions.sorted {
+            if $0.amountMinorUnits == $1.amountMinorUnits {
                 return $0.from.displayName < $1.from.displayName
             }
-            return $0.amount > $1.amount
+            return $0.amountMinorUnits > $1.amountMinorUnits
         }
+        return SettlementSuggestionsComputation(suggestions: sortedSuggestions, anomalies: Array(Set(anomalies)))
     }
 
     /// Itemized explanation of the net balance between a debtor (`from`) and a
@@ -299,20 +472,76 @@ enum DashboardViewModel {
 
     static func expenseBreakdown(
         transactions: [Transaction],
-        forMember memberId: UUID? = nil
+        forMember memberId: UUID? = nil,
+        currencyCode: String = CurrencyOption.usd.code
     ) -> [ExpenseCategoryBreakdown] {
-        var totalsByCategory: [TransactionCategory: Double] = [:]
+        expenseBreakdownResult(
+            transactions: transactions,
+            forMember: memberId,
+            currencyCode: currencyCode
+        ).breakdown
+    }
+
+    static func expenseBreakdownResult(
+        transactions: [Transaction],
+        forMember memberId: UUID? = nil,
+        currencyCode: String = CurrencyOption.usd.code
+    ) -> ExpenseBreakdownComputation {
+        var totalsByCategory: [TransactionCategory: [Money]] = [:]
+        var anomalies: [MoneyAccounting.ComputationAnomaly] = []
 
         for transaction in transactions where transaction.type == .expense {
-            let amount = memberId != nil
-                ? transaction.consumedExpense(for: memberId!)
-                : transaction.amount
-            guard amount > 0 else { continue }
-            totalsByCategory[transaction.category, default: 0] += amount
+            let amounts: [Money]
+            if let memberId {
+                if transaction.isSplit {
+                    amounts = transaction.splits
+                        .filter { $0.memberId == memberId }
+                        .compactMap {
+                            switch MoneyAccounting.checkedAmount(for: $0, fallbackCurrencyCode: currencyCode) {
+                            case .success(let money): return money
+                            case .failure(let anomaly): anomalies.append(anomaly); return nil
+                            }
+                        }
+                } else if transaction.createdByMemberId == memberId,
+                          case .success(let money) = MoneyAccounting.checkedAmount(
+                            for: transaction,
+                            fallbackCurrencyCode: currencyCode
+                          ) {
+                    amounts = [money]
+                } else {
+                    if transaction.createdByMemberId == memberId,
+                       case .failure(let anomaly) = MoneyAccounting.checkedAmount(for: transaction, fallbackCurrencyCode: currencyCode) {
+                        anomalies.append(anomaly)
+                    }
+                    amounts = []
+                }
+            } else {
+                switch MoneyAccounting.checkedAmount(for: transaction, fallbackCurrencyCode: currencyCode) {
+                case .success(let money): amounts = [money]
+                case .failure(let anomaly): anomalies.append(anomaly); amounts = []
+                }
+            }
+            guard !amounts.isEmpty else { continue }
+            totalsByCategory[transaction.category, default: []].append(contentsOf: amounts)
         }
 
-        return totalsByCategory
-            .map { ExpenseCategoryBreakdown(category: $0.key, amount: $0.value) }
-            .sorted { $0.amount > $1.amount }
+        var breakdown: [ExpenseCategoryBreakdown] = []
+        for (category, values) in totalsByCategory {
+            switch MoneyAccounting.aggregateValue(
+                values,
+                currencyCode: currencyCode,
+                sourceID: "dashboard-category-\(category.rawValue)"
+            ) {
+            case .success(let amount):
+                breakdown.append(ExpenseCategoryBreakdown(category: category, amount: amount))
+            case .failure(let anomaly):
+                anomalies.append(anomaly)
+                breakdown.append(ExpenseCategoryBreakdown(category: category, amount: 0))
+            }
+        }
+        return ExpenseBreakdownComputation(
+            breakdown: breakdown.sorted { $0.amount > $1.amount },
+            anomalies: Array(Set(anomalies))
+        )
     }
 }

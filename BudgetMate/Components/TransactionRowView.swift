@@ -12,7 +12,7 @@ struct TransactionRowView: View {
 
     private var signedAmount: String {
         let sign = transaction.type == .income ? "+" : "-"
-        return "\(sign)\(CurrencyFormatter.numberString(transaction.amount))"
+        return "\(sign)\(CurrencyFormatter.amountString(transaction.amount, symbol: currencySymbol))"
     }
 
     private var createdByMember: BudgetMember? {
@@ -87,7 +87,7 @@ struct CompactTransactionRow: View {
 
     private var signedAmount: String {
         let sign = transaction.type == .income ? "+" : "-"
-        return "\(sign)\(CurrencyFormatter.numberString(transaction.amount))"
+        return "\(sign)\(CurrencyFormatter.amountString(transaction.amount, symbol: currencySymbol))"
     }
 
     private var categoryLine: String {

@@ -3,6 +3,7 @@ import SwiftUI
 struct SettlementListView: View {
     let suggestions: [SettlementSuggestion]
     let currencySymbol: String
+    let currencyCode: String
     let onClose: () -> Void
     let onBreakdown: (SettlementSuggestion) -> Void
     let onSettle: (SettlementSuggestion) -> Void
@@ -79,7 +80,10 @@ struct SettlementListView: View {
 
                     Spacer(minLength: 8)
 
-                    Text(amount(settlement.amount))
+                        Text(CurrencyFormatter.amountString(
+                            settlement.amountMinorUnits,
+                            currencyCode: settlement.currencyCode
+                        ))
                         .font(.title3.weight(.black))
                         .foregroundStyle(BudgetBeaverPalette.amountRed)
                         .lineLimit(1)
