@@ -10,6 +10,9 @@
 		01A000000000000000000002 /* BudgetMateSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A000000000000000000001 /* BudgetMateSchema.swift */; };
 		01A000000000000000000004 /* LegacyUnversionedStoreFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A000000000000000000003 /* LegacyUnversionedStoreFixture.swift */; };
 		01A000000000000000000006 /* SwiftDataSchemaCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A000000000000000000005 /* SwiftDataSchemaCompatibilityTests.swift */; };
+		02A000000000000000000011 /* Money.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02A000000000000000000001 /* Money.swift */; };
+		02A000000000000000000012 /* CurrencyMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02A000000000000000000002 /* CurrencyMetadata.swift */; };
+		02A000000000000000000013 /* MoneyDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02A000000000000000000003 /* MoneyDomainTests.swift */; };
 		01B000000000000000000011 /* PersistenceStartupCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000001 /* PersistenceStartupCoordinator.swift */; };
 		01B000000000000000000012 /* PersistenceRecoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000002 /* PersistenceRecoveryService.swift */; };
 		01B000000000000000000013 /* PersistenceRecoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000003 /* PersistenceRecoveryView.swift */; };
@@ -120,6 +123,9 @@
 		01A000000000000000000001 /* BudgetMateSchema.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BudgetMateSchema.swift; path = Models/BudgetMateSchema.swift; sourceTree = "<group>"; };
 		01A000000000000000000003 /* LegacyUnversionedStoreFixture.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LegacyUnversionedStoreFixture.swift; path = Support/LegacyUnversionedStoreFixture.swift; sourceTree = "<group>"; };
 		01A000000000000000000005 /* SwiftDataSchemaCompatibilityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SwiftDataSchemaCompatibilityTests.swift; path = Characterization/SwiftDataSchemaCompatibilityTests.swift; sourceTree = "<group>"; };
+		02A000000000000000000001 /* Money.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Money.swift; path = Models/Money.swift; sourceTree = "<group>"; };
+		02A000000000000000000002 /* CurrencyMetadata.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CurrencyMetadata.swift; path = Models/CurrencyMetadata.swift; sourceTree = "<group>"; };
+		02A000000000000000000003 /* MoneyDomainTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MoneyDomainTests.swift; path = Characterization/MoneyDomainTests.swift; sourceTree = "<group>"; };
 		01B000000000000000000001 /* PersistenceStartupCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PersistenceStartupCoordinator.swift; path = Services/PersistenceStartupCoordinator.swift; sourceTree = "<group>"; };
 		01B000000000000000000002 /* PersistenceRecoveryService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PersistenceRecoveryService.swift; path = Services/PersistenceRecoveryService.swift; sourceTree = "<group>"; };
 		01B000000000000000000003 /* PersistenceRecoveryView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PersistenceRecoveryView.swift; path = Views/PersistenceRecoveryView.swift; sourceTree = "<group>"; };
@@ -280,6 +286,8 @@
 				8BCF11CF07DBEC8EEDD50EF2 /* PaymentMethod.swift */,
 				CD715E500CB9F75AFFE3B578 /* PreviewTransactions.swift */,
 				01A000000000000000000001 /* BudgetMateSchema.swift */,
+				02A000000000000000000001 /* Money.swift */,
+				02A000000000000000000002 /* CurrencyMetadata.swift */,
 				01B000000000000000000001 /* PersistenceStartupCoordinator.swift */,
 				01B000000000000000000002 /* PersistenceRecoveryService.swift */,
 				01B000000000000000000003 /* PersistenceRecoveryView.swift */,
@@ -383,6 +391,7 @@
 				33090E5DD6565F0DFEDB8B21 /* RecurrenceCharacterizationTests.swift */,
 				D1BD77D94BEAE12A19893BAC /* ScopedPersistenceCharacterizationTests.swift */,
 				01A000000000000000000005 /* SwiftDataSchemaCompatibilityTests.swift */,
+				02A000000000000000000003 /* MoneyDomainTests.swift */,
 				01B000000000000000000004 /* PersistenceRecoveryTests.swift */,
 				8569D45A70F4DCD59339642A /* BudgetMateTestFixtures.swift */,
 				9130988E592742604752C25B /* InMemoryModelContainer.swift */,
@@ -596,6 +605,7 @@
 				C19289060D0F527D20B739DA /* RecurrenceCharacterizationTests.swift in Sources */,
 				F552E53F2F4AB336C954081E /* ScopedPersistenceCharacterizationTests.swift in Sources */,
 				01A000000000000000000006 /* SwiftDataSchemaCompatibilityTests.swift in Sources */,
+				02A000000000000000000013 /* MoneyDomainTests.swift in Sources */,
 				01B000000000000000000014 /* PersistenceRecoveryTests.swift in Sources */,
 				DEAF3D6DF2BFED43F9DD840A /* BudgetMateTestFixtures.swift in Sources */,
 				12A92812F47D366ECF02568A /* InMemoryModelContainer.swift in Sources */,
@@ -625,6 +635,8 @@
 				6CBD951781CEAAC59C6C49EA /* PaymentMethod.swift in Sources */,
 				ADB6CCA5855221C181A662EA /* PreviewTransactions.swift in Sources */,
 				01A000000000000000000002 /* BudgetMateSchema.swift in Sources */,
+				02A000000000000000000011 /* Money.swift in Sources */,
+				02A000000000000000000012 /* CurrencyMetadata.swift in Sources */,
 				01B000000000000000000011 /* PersistenceStartupCoordinator.swift in Sources */,
 				01B000000000000000000012 /* PersistenceRecoveryService.swift in Sources */,
 				01B000000000000000000013 /* PersistenceRecoveryView.swift in Sources */,
