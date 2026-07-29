@@ -75,7 +75,7 @@ $$;
 update public.budget_transactions
 set
   amount = 13.00,
-  splits = '[{"id":"30000000-0000-0000-0000-000000000001","member_id":"80000000-0000-0000-0000-000000000001","amount":6.50},{"id":"30000000-0000-0000-0000-000000000002","member_id":"80000000-0000-0000-0000-000000000002","amount":6.50}]'
+  splits = '[{"id":"AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAA1","member_id":"80000000-0000-0000-0000-000000000001","amount":6.50},{"id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBB2","member_id":"80000000-0000-0000-0000-000000000002","amount":6.50}]'
 where id = '20000000-0000-0000-0000-000000000001';
 
 update public.budget_settlements
@@ -116,6 +116,9 @@ values (
 do $$
 begin
   if (select amount_minor_units from public.budget_transactions where id = '20000000-0000-0000-0000-000000000001') <> 1300
+     or (select splits_minor_units -> 0 ->> 'id'
+         from public.budget_transactions
+         where id = '20000000-0000-0000-0000-000000000001') <> 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'
      or (select amount_minor_units from public.budget_settlements where id = '40000000-0000-0000-0000-000000000001') <> 2600
      or (select category_budgets_minor_units ->> 'food'
          from public.budget_settings
