@@ -86,6 +86,8 @@ enum RecurringTransactionResolver {
             id: transaction.id,
             title: transaction.title,
             amount: transaction.amount,
+            amountMinorUnits: transaction.amountMinorUnits,
+            currencyCode: transaction.currencyCode,
             type: transaction.type,
             category: transaction.category,
             paymentMethod: transaction.paymentMethod,
@@ -102,6 +104,8 @@ enum RecurringTransactionResolver {
                 id: split.id,
                 memberId: split.memberId,
                 amount: split.amount,
+                amountMinorUnits: split.amountMinorUnits,
+                currencyCode: split.currencyCode,
                 transaction: copy
             )
             copy.splits.append(splitCopy)

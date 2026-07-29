@@ -25,7 +25,7 @@ struct BudgetSettings: Codable, Equatable {
     }
 
     var currencySymbol: String {
-        CurrencyOption.symbol(for: currencyCode)
+        CurrencyOption.displaySymbol(for: currencyCode)
     }
 
     /// Compatibility aliases keep the Codable payload's meaning explicit to

@@ -75,7 +75,7 @@ struct DashboardView: View {
 
         var hasher = Hasher()
         hasher.combine(dataRevision)
-        hasher.combine(monthSelectionStore.selectedMonthIndex)
+        hasher.combine(monthSelectionStore.selectedMonthKey)
         hasher.combine(selectedMemberId)
         hasher.combine(monthlyBudget)
         hasher.combine(authStore.currentBudgetScopeId)
@@ -93,6 +93,9 @@ struct DashboardView: View {
 
                     VStack(spacing: 16) {
                         MonthSliderView()
+                        if !derivedMetrics.anomalies.isEmpty {
+                            moneyAnomalyNotice
+                        }
                         if shouldShowMemberFilter {
                             memberFilterCard
                         }
@@ -141,6 +144,7 @@ struct DashboardView: View {
                 SettlementListView(
                     suggestions: derivedMetrics.settlementCache.suggestions,
                     currencySymbol: currencySymbol,
+                    currencyCode: settingsStore.settings.currencyCode,
                     onClose: { isShowingSettlementList = false },
                     onBreakdown: { settlement in
                         isShowingSettlementList = false
@@ -161,6 +165,14 @@ struct DashboardView: View {
         }
     }
 
+    private var moneyAnomalyNotice: some View {
+        Label("Some money records need attention", systemImage: "exclamationmark.triangle.fill")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(BudgetBeaverPalette.amountRed)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("Some money records need attention")
+    }
+
     @MainActor
     private func refreshDerivedMetrics() async {
         let signpostID = OSSignpostID(log: dashboardMetricsLog)
@@ -177,6 +189,8 @@ struct DashboardView: View {
                 monthInterval: monthSelectionStore.monthInterval(),
                 selectedMemberId: selectedMemberId,
                 monthlyBudget: monthlyBudget,
+                currencyCode: settingsStore.settings.currencyCode,
+                calendar: monthSelectionStore.selectionCalendar,
                 computeSettlements: memberViewModel.members.count > 1
             )
             try Task.checkCancellation()
@@ -193,6 +207,8 @@ struct DashboardView: View {
             fromMemberId: settlement.from.id,
             toMemberId: settlement.to.id,
             amount: settlement.amount,
+            amountMinorUnits: settlement.amountMinorUnits,
+            currencyCode: settlement.currencyCode,
             ownerUserId: authStore.currentBudgetScopeId
         )
         record.needsSync = true
@@ -363,10 +379,9 @@ struct DashboardView: View {
     }
 
     private var netScopeLabel: String {
-        let calendar = Calendar.current
-        return calendar.isDate(monthSelectionStore.selectedMonthDate, equalTo: .now, toGranularity: .month)
+        return monthSelectionStore.isCurrentMonth
             ? "Net this month"
-            : "Net for \(monthSelectionStore.selectedMonthDate.formatted(.dateTime.month(.wide).year()))"
+            : "Net for \(monthSelectionStore.selectedMonthTitle)"
     }
 
     private var damBarSummary: some View {

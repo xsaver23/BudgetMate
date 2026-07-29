@@ -189,6 +189,71 @@ final class MoneyDomainTests: XCTestCase {
         }
     }
 
+    func testCADDisplaySymbolIsPlainDollarWhileStoredAndPickerSymbolStayExplicit() {
+        XCTAssertEqual(CurrencyOption.symbol(for: "CAD"), "CA$")
+        XCTAssertEqual(CurrencyOption.displaySymbol(for: "CAD"), "$")
+        XCTAssertTrue(CurrencyOption.cad.pickerLabel.contains("CA$"))
+        XCTAssertEqual(
+            BudgetSettings(monthlyBudget: 0, currencyCode: "CAD", categoryBudgets: [:]).currencySymbol,
+            "$"
+        )
+        XCTAssertEqual(
+            CurrencyFormatter.amountString(
+                1_234.5,
+                currencyCode: "CAD",
+                locale: Locale(identifier: "en_CA")
+            ),
+            "$1,234.50"
+        )
+        XCTAssertEqual(
+            CurrencyFormatter.currencyAffix(
+                currencyCode: "CAD",
+                locale: Locale(identifier: "en_CA")
+            ),
+            .init(symbol: "$", placement: .leading)
+        )
+        XCTAssertEqual(
+            CurrencyFormatter.currencyAffix(
+                currencyCode: "CAD",
+                locale: Locale(identifier: "fr_CA")
+            ),
+            .init(symbol: "$", placement: .trailing)
+        )
+    }
+
+    func testComputationAnomalyIDsIncludeDistinctSourceAndReason() {
+        let mismatch = MoneyAccounting.ComputationAnomaly(
+            sourceID: "record-1",
+            reason: .currencyMismatch
+        )
+        let overflow = MoneyAccounting.ComputationAnomaly(
+            sourceID: "record-1",
+            reason: .arithmeticOverflow
+        )
+
+        XCTAssertEqual(mismatch.id, "record-1-currencyMismatch")
+        XCTAssertEqual(overflow.id, "record-1-arithmeticOverflow")
+        XCTAssertNotEqual(mismatch.id, overflow.id)
+    }
+
+    func testOrdinaryCurrencyFormattingUsesFractionDigitsForJPYAndCAD() {
+        XCTAssertEqual(
+            CurrencyFormatter.amountString(123, symbol: "¥", locale: Locale(identifier: "en_US")),
+            "¥123"
+        )
+        XCTAssertEqual(
+            CurrencyFormatter.amountString(123, symbol: "¥", currencyCode: "JPY", locale: Locale(identifier: "en_US")),
+            "¥123"
+        )
+        XCTAssertEqual(
+            CurrencyFormatter.numberString(123, currencyCode: "JPY", locale: Locale(identifier: "en_US")),
+            "123"
+        )
+        let cad = CurrencyFormatter.amountString(123.45, symbol: "$", currencyCode: "CAD", locale: Locale(identifier: "en_CA"))
+        XCTAssertEqual(cad, "$123.45")
+        XCTAssertFalse(cad.contains("CA$"))
+    }
+
     func testParserRejectsMalformedUnsupportedExcessPrecisionAndOverflowValues() throws {
         XCTAssertThrowsError(
             try MoneyParser.parse("$1.2.3", currencyCode: "USD", locale: Locale(identifier: "en_US"))

@@ -53,7 +53,7 @@ struct TransactionsView: View {
     // filters change, not on every body evaluation (see DashboardView).
     private var metricsRefreshToken: String {
         let dataHash = FinancialDataFingerprint.hash(transactions: transactions, settlements: [])
-        return "\(dataHash)-\(monthSelectionStore.selectedMonthIndex)-\(selectedMemberId?.uuidString ?? "all")-\(monthlyBudget)-\(authStore.currentBudgetScopeId)"
+        return "\(dataHash)-\(monthSelectionStore.selectedMonthKey)-\(selectedMemberId?.uuidString ?? "all")-\(monthlyBudget)-\(authStore.currentBudgetScopeId)"
     }
 
     private func refreshDerivedMetrics() {
@@ -61,7 +61,9 @@ struct TransactionsView: View {
             transactions: transactions,
             monthInterval: monthSelectionStore.monthInterval(),
             selectedMemberId: selectedMemberId,
-            monthlyBudget: monthlyBudget
+            monthlyBudget: monthlyBudget,
+            currencyCode: settingsStore.settings.currencyCode,
+            calendar: monthSelectionStore.selectionCalendar
         )
     }
 
@@ -76,6 +78,12 @@ struct TransactionsView: View {
 
                     VStack(spacing: 16) {
                         MonthSliderView()
+                        if !derivedMetrics.summaryTotals.anomalies.isEmpty {
+                            Label("Some money records need attention", systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(BudgetBeaverPalette.amountRed)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                         if shouldShowMemberFilter {
                             memberFilterCard
                         }

@@ -520,3 +520,211 @@ enum MoneyParser {
         return lhs.lexicographicallyPrecedes(rhs) ? .orderedAscending : .orderedDescending
     }
 }
+
+/// Exact-money seams used by local client features. The legacy Double is only
+/// accepted as a compatibility fallback; all resolved arithmetic is performed
+/// on Money minor units.
+enum MoneyAccounting {
+    struct ComputationAnomaly: Error, Equatable, Hashable, Identifiable, Sendable {
+        enum Reason: String, Equatable, Sendable {
+            case invalidExactRecord
+            case currencyMismatch
+            case unsupportedCurrency
+            case invalidLegacyAmount
+            case arithmeticOverflow
+        }
+
+        let sourceID: String
+        let reason: Reason
+
+        var id: String { "\(sourceID)-\(reason.rawValue)" }
+    }
+
+    private static func failure(
+        _ reason: ComputationAnomaly.Reason,
+        sourceID: String
+    ) -> Result<Money, ComputationAnomaly> {
+        .failure(ComputationAnomaly(sourceID: sourceID, reason: reason))
+    }
+
+    static func resolveChecked(
+        legacyAmount: Double,
+        minorUnits: Int64?,
+        storedCurrencyCode: String?,
+        fallbackCurrencyCode: String,
+        sourceID: String = "unknown"
+    ) -> Result<Money, ComputationAnomaly> {
+        let hasMinorUnits = minorUnits != nil
+        let hasCurrencyCode = storedCurrencyCode != nil
+        if hasMinorUnits != hasCurrencyCode {
+            return failure(.invalidExactRecord, sourceID: sourceID)
+        }
+
+        if let minorUnits, let storedCurrencyCode {
+            guard let exact = try? Money(minorUnits: minorUnits, currencyCode: storedCurrencyCode) else {
+                return failure(.unsupportedCurrency, sourceID: sourceID)
+            }
+            guard exact.currencyCode == CurrencyMetadata.normalize(fallbackCurrencyCode) else {
+                return failure(.currencyMismatch, sourceID: sourceID)
+            }
+            return .success(exact)
+        }
+
+        guard let metadata = try? CurrencyMetadata(code: fallbackCurrencyCode),
+              case .success(let converted) = LegacyDoubleMoneyConverter.convert(
+                  legacyAmount,
+                  metadata: metadata
+              ),
+              let money = try? Money(minorUnits: converted, currencyCode: metadata.code) else {
+            return failure(.invalidLegacyAmount, sourceID: sourceID)
+        }
+        return .success(money)
+    }
+
+    static func resolve(
+        legacyAmount: Double,
+        minorUnits: Int64?,
+        storedCurrencyCode: String?,
+        fallbackCurrencyCode: String
+    ) -> Money? {
+        try? resolveChecked(
+            legacyAmount: legacyAmount,
+            minorUnits: minorUnits,
+            storedCurrencyCode: storedCurrencyCode,
+            fallbackCurrencyCode: fallbackCurrencyCode
+        ).get()
+    }
+
+    static func amount(
+        for transaction: Transaction,
+        fallbackCurrencyCode: String
+    ) -> Money? {
+        resolve(
+            legacyAmount: transaction.amount,
+            minorUnits: transaction.amountMinorUnits,
+            storedCurrencyCode: transaction.currencyCode,
+            fallbackCurrencyCode: fallbackCurrencyCode
+        )
+    }
+
+    static func checkedAmount(
+        for transaction: Transaction,
+        fallbackCurrencyCode: String
+    ) -> Result<Money, ComputationAnomaly> {
+        resolveChecked(
+            legacyAmount: transaction.amount,
+            minorUnits: transaction.amountMinorUnits,
+            storedCurrencyCode: transaction.currencyCode,
+            fallbackCurrencyCode: fallbackCurrencyCode,
+            sourceID: transaction.id.uuidString
+        )
+    }
+
+    static func amount(
+        for split: TransactionSplit,
+        fallbackCurrencyCode: String
+    ) -> Money? {
+        resolve(
+            legacyAmount: split.amount,
+            minorUnits: split.amountMinorUnits,
+            storedCurrencyCode: split.currencyCode,
+            fallbackCurrencyCode: fallbackCurrencyCode
+        )
+    }
+
+    static func checkedAmount(
+        for split: TransactionSplit,
+        fallbackCurrencyCode: String
+    ) -> Result<Money, ComputationAnomaly> {
+        resolveChecked(
+            legacyAmount: split.amount,
+            minorUnits: split.amountMinorUnits,
+            storedCurrencyCode: split.currencyCode,
+            fallbackCurrencyCode: fallbackCurrencyCode,
+            sourceID: split.id.uuidString
+        )
+    }
+
+    static func amount(
+        for settlement: Settlement,
+        fallbackCurrencyCode: String
+    ) -> Money? {
+        resolve(
+            legacyAmount: settlement.amount,
+            minorUnits: settlement.amountMinorUnits,
+            storedCurrencyCode: settlement.currencyCode,
+            fallbackCurrencyCode: fallbackCurrencyCode
+        )
+    }
+
+    static func checkedAmount(
+        for settlement: Settlement,
+        fallbackCurrencyCode: String
+    ) -> Result<Money, ComputationAnomaly> {
+        resolveChecked(
+            legacyAmount: settlement.amount,
+            minorUnits: settlement.amountMinorUnits,
+            storedCurrencyCode: settlement.currencyCode,
+            fallbackCurrencyCode: fallbackCurrencyCode,
+            sourceID: settlement.id.uuidString
+        )
+    }
+
+    static func sum(_ values: [Money], currencyCode: String) -> Money? {
+        try? sumChecked(values, currencyCode: currencyCode, sourceID: "aggregate").get()
+    }
+
+    static func sumChecked(
+        _ values: [Money],
+        currencyCode: String,
+        sourceID: String = "aggregate"
+    ) -> Result<Money, ComputationAnomaly> {
+        guard var total = try? Money(minorUnits: 0, currencyCode: currencyCode) else {
+            return failure(.unsupportedCurrency, sourceID: sourceID)
+        }
+        do {
+            for value in values {
+                total = try total.adding(value)
+            }
+            return .success(total)
+        } catch MoneyDomainError.currencyMismatch {
+            return failure(.currencyMismatch, sourceID: sourceID)
+        } catch {
+            return failure(.arithmeticOverflow, sourceID: sourceID)
+        }
+    }
+
+    static func aggregateValue(
+        _ values: [Money],
+        currencyCode: String,
+        sourceID: String = "aggregate"
+    ) -> Result<Double, ComputationAnomaly> {
+        sumChecked(values, currencyCode: currencyCode, sourceID: sourceID)
+            .map { doubleValue(of: $0) }
+    }
+
+    static func doubleValue(of money: Money) -> Double {
+        (try? CurrencyMetadata(code: money.currencyCode)).map { metadata in
+            let decimal = MoneyFormatter.decimalNumber(for: money, metadata: metadata)
+            return decimal.doubleValue
+        } ?? 0
+    }
+
+    static func formatted(minorUnits: Int64, currencyCode: String, locale: Locale = .current) -> String? {
+        guard let money = try? Money(minorUnits: minorUnits, currencyCode: currencyCode) else { return nil }
+        return try? money.formatted(locale: locale)
+    }
+
+    static func materialize(
+        legacyAmount: Double,
+        currencyCode: String
+    ) -> (minorUnits: Int64, currencyCode: String)? {
+        guard let money = resolve(
+            legacyAmount: legacyAmount,
+            minorUnits: nil,
+            storedCurrencyCode: nil,
+            fallbackCurrencyCode: currencyCode
+        ) else { return nil }
+        return (money.minorUnits, money.currencyCode)
+    }
+}

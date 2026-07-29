@@ -8,6 +8,7 @@ struct SettlementComputationCache {
     let allSettlements: [Settlement]
     let transactionById: [UUID: Transaction]
     let settlementById: [UUID: Settlement]
+    let anomalies: [MoneyAccounting.ComputationAnomaly]
 
     static let empty = SettlementComputationCache(
         suggestions: [],
@@ -15,13 +16,15 @@ struct SettlementComputationCache {
         allSettlements: [],
         transactionById: [:],
         settlementById: [:]
+        , anomalies: []
     )
 
     @MainActor
     static func build(
         transactions: [Transaction],
         settlements: [Settlement],
-        members: [BudgetMember]
+        members: [BudgetMember],
+        currencyCode: String = CurrencyOption.usd.code
     ) async throws -> SettlementComputationCache {
         // DashboardDerivedMetrics normalizes these arrays once before calling
         // us. Build the relationship-backed portion cooperatively so presenting
@@ -55,19 +58,21 @@ struct SettlementComputationCache {
 
         try Task.checkCancellation()
         await Task.yield()
-        let suggestions = DashboardViewModel.settlements(
+        let suggestionComputation = DashboardViewModel.settlementsResult(
             splitExpenses: splitExpenses,
             settlementRecords: settlements,
-            members: members
+            members: members,
+            currencyCode: currencyCode
         )
         try Task.checkCancellation()
 
         return SettlementComputationCache(
-            suggestions: suggestions,
+            suggestions: suggestionComputation.suggestions,
             splitExpenses: splitExpenses,
             allSettlements: settlements,
             transactionById: transactionById,
-            settlementById: settlementById
+            settlementById: settlementById,
+            anomalies: suggestionComputation.anomalies
         )
     }
 
@@ -122,15 +127,23 @@ enum FinancialDataFingerprint {
         for transaction in transactions {
             hasher.combine(transaction.id)
             hasher.combine(transaction.amount)
+            hasher.combine(transaction.amountMinorUnits)
+            hasher.combine(transaction.currencyCode)
             hasher.combine(transaction.date)
             hasher.combine(transaction.recurrenceRule)
             if includeSplitCounts {
                 hasher.combine(transaction.splits.count)
+                for split in transaction.splits {
+                    hasher.combine(split.amountMinorUnits)
+                    hasher.combine(split.currencyCode)
+                }
             }
         }
         for settlement in settlements {
             hasher.combine(settlement.id)
             hasher.combine(settlement.amount)
+            hasher.combine(settlement.amountMinorUnits)
+            hasher.combine(settlement.currencyCode)
             hasher.combine(settlement.date)
         }
         return UInt64(bitPattern: Int64(hasher.finalize()))
@@ -155,6 +168,8 @@ enum FinancialDataFingerprint {
             hasher.combine(transaction.id)
             hasher.combine(transaction.title)
             hasher.combine(transaction.amount)
+            hasher.combine(transaction.amountMinorUnits)
+            hasher.combine(transaction.currencyCode)
             hasher.combine(transaction.type.rawValue)
             hasher.combine(transaction.category.rawValue)
             hasher.combine(transaction.paymentMethod?.rawValue)
@@ -171,6 +186,8 @@ enum FinancialDataFingerprint {
             hasher.combine(settlement.fromMemberId)
             hasher.combine(settlement.toMemberId)
             hasher.combine(settlement.amount)
+            hasher.combine(settlement.amountMinorUnits)
+            hasher.combine(settlement.currencyCode)
             hasher.combine(settlement.date)
             hasher.combine(settlement.ownerUserId)
             hasher.combine(settlement.needsSync)
@@ -205,6 +222,7 @@ struct DashboardDerivedMetrics {
         remainingBudget: 0
     )
     var expenseBreakdown: [ExpenseCategoryBreakdown] = []
+    var anomalies: [MoneyAccounting.ComputationAnomaly] = []
 
     @MainActor
     static func compute(
@@ -214,6 +232,8 @@ struct DashboardDerivedMetrics {
         monthInterval: DateInterval?,
         selectedMemberId: UUID?,
         monthlyBudget: Double,
+        currencyCode: String = CurrencyOption.usd.code,
+        calendar: Calendar = .current,
         computeSettlements: Bool = true
     ) async throws -> DashboardDerivedMetrics {
         try Task.checkCancellation()
@@ -228,7 +248,8 @@ struct DashboardDerivedMetrics {
             settlementCache = try await SettlementComputationCache.build(
                 transactions: transactions,
                 settlements: settlements,
-                members: members
+                members: members,
+                currencyCode: currencyCode
             )
         } else {
             settlementCache = .empty
@@ -242,6 +263,7 @@ struct DashboardDerivedMetrics {
             monthTransactions = RecurringTransactionResolver.transactions(
                 in: monthInterval,
                 from: transactions,
+                calendar: calendar,
                 alreadyDeduplicated: true
             )
         } else {
@@ -261,12 +283,14 @@ struct DashboardDerivedMetrics {
         let totals = DashboardViewModel.totals(
             transactions: monthTransactions,
             monthlyBudget: monthlyBudget,
-            forMember: selectedMemberId
+            forMember: selectedMemberId,
+            currencyCode: currencyCode
         )
 
-        let expenseBreakdown = DashboardViewModel.expenseBreakdown(
+        let expenseBreakdownComputation = DashboardViewModel.expenseBreakdownResult(
             transactions: monthTransactions,
-            forMember: selectedMemberId
+            forMember: selectedMemberId,
+            currencyCode: currencyCode
         )
 
         try Task.checkCancellation()
@@ -276,7 +300,10 @@ struct DashboardDerivedMetrics {
             monthTransactions: monthTransactions,
             displayedTransactions: displayedTransactions,
             totals: totals,
-            expenseBreakdown: expenseBreakdown
+            expenseBreakdown: expenseBreakdownComputation.breakdown,
+            anomalies: Array(Set(
+                settlementCache.anomalies + totals.anomalies + expenseBreakdownComputation.anomalies
+            ))
         )
     }
 }
@@ -298,13 +325,16 @@ struct TransactionsTabMetrics {
         transactions: [Transaction],
         monthInterval: DateInterval?,
         selectedMemberId: UUID?,
-        monthlyBudget: Double
+        monthlyBudget: Double,
+        currencyCode: String = CurrencyOption.usd.code
+        , calendar: Calendar = .current
     ) -> TransactionsTabMetrics {
         let monthTransactions: [Transaction]
         if let monthInterval {
             monthTransactions = RecurringTransactionResolver.transactions(
                 in: monthInterval,
                 from: transactions.deduplicatedByID(),
+                calendar: calendar,
                 alreadyDeduplicated: true
             )
         } else {
@@ -318,7 +348,6 @@ struct TransactionsTabMetrics {
             filteredTransactions = monthTransactions
         }
 
-        let calendar = Calendar.current
         let groupedByDay = Dictionary(grouping: filteredTransactions) { calendar.startOfDay(for: $0.date) }
             .map { (date: $0.key, items: sortedNewestFirst($0.value)) }
             .sorted { $0.date > $1.date }
@@ -326,7 +355,8 @@ struct TransactionsTabMetrics {
         let summaryTotals = DashboardViewModel.totals(
             transactions: filteredTransactions,
             monthlyBudget: monthlyBudget,
-            forMember: selectedMemberId
+            forMember: selectedMemberId,
+            currencyCode: currencyCode
         )
 
         return TransactionsTabMetrics(
@@ -349,57 +379,217 @@ struct TransactionsTabMetrics {
     }
 }
 
+/// The exact transaction subset and total used by a budget category row and
+/// its read-only drill-down destination.
+struct BudgetCategoryTransactionBreakdown {
+    let categoryRawValue: String
+    let budgetScopeId: String
+    let transactions: [Transaction]
+    let total: Double
+    let currencyCode: String
+    let anomalies: [MoneyAccounting.ComputationAnomaly]
+
+    init(
+        categoryRawValue: String,
+        budgetScopeId: String,
+        sourceTransactions: [Transaction],
+        currencyCode: String = CurrencyOption.usd.code
+    ) {
+        self.categoryRawValue = categoryRawValue
+        self.budgetScopeId = budgetScopeId
+        self.currencyCode = currencyCode
+        let filtered = sourceTransactions
+            .filter {
+                $0.ownerUserId == budgetScopeId &&
+                    $0.type == .expense &&
+                    $0.category.rawValue == categoryRawValue
+            }
+            .sorted(by: Self.newestFirst)
+        transactions = filtered
+        var values: [Money] = []
+        var anomalies: [MoneyAccounting.ComputationAnomaly] = []
+        for transaction in filtered {
+            switch MoneyAccounting.checkedAmount(for: transaction, fallbackCurrencyCode: currencyCode) {
+            case .success(let money): values.append(money)
+            case .failure(let anomaly): anomalies.append(anomaly)
+            }
+        }
+        switch MoneyAccounting.aggregateValue(
+            values,
+            currencyCode: currencyCode,
+            sourceID: "category-\(categoryRawValue)"
+        ) {
+        case .success(let value): total = value
+        case .failure(let anomaly):
+            total = 0
+            anomalies.append(anomaly)
+        }
+        self.anomalies = Array(Set(anomalies))
+    }
+
+    static func newestFirst(_ lhs: Transaction, _ rhs: Transaction) -> Bool {
+        if lhs.date != rhs.date { return lhs.date > rhs.date }
+        if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
+        let titleOrder = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+        if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+}
+
 /// Cached values for the Budget tab (member spending + category rows).
 struct BudgetTabMetrics {
-    var netBalances: [UUID: Int] = [:]
+    var netBalances: [UUID: Int64] = [:]
     var monthlyExpenseTransactions: [Transaction] = []
     var expensesByMember: [(member: BudgetMember, total: Double)] = []
     var spentByCategory: [TransactionCategory: Double] = [:]
+    var currencyCode: String = CurrencyOption.usd.code
+    var anomalies: [MoneyAccounting.ComputationAnomaly] = []
+    var totalExpenses: Double = 0
 
-    var totalExpenses: Double {
-        monthlyExpenseTransactions.reduce(0) { $0 + $1.amount }
+    func categoryBreakdown(
+        for category: TransactionCategory,
+        budgetScopeId: String,
+        currencyCode: String = CurrencyOption.usd.code
+    ) -> BudgetCategoryTransactionBreakdown {
+        BudgetCategoryTransactionBreakdown(
+            categoryRawValue: category.rawValue,
+            budgetScopeId: budgetScopeId,
+            sourceTransactions: monthlyExpenseTransactions,
+            currencyCode: currencyCode
+        )
     }
 
     static func compute(
         transactions: [Transaction],
         settlements: [Settlement],
         members: [BudgetMember],
-        monthInterval: DateInterval?
+        monthInterval: DateInterval?,
+        currencyCode: String = CurrencyOption.usd.code,
+        budgetScopeId: String? = nil,
+        calendar: Calendar = .current
     ) -> BudgetTabMetrics {
-        let transactions = transactions.deduplicatedByID()
-        let settlements = settlements.deduplicatedByID()
+        let transactions = transactions
+            .filter { budgetScopeId == nil || $0.ownerUserId == budgetScopeId }
+            .deduplicatedByID()
+        let settlements = settlements
+            .filter { budgetScopeId == nil || $0.ownerUserId == budgetScopeId }
+            .deduplicatedByID()
         let splitExpenses = transactions.filter { $0.type == .expense && !$0.splits.isEmpty }
-        let netBalances = DashboardViewModel.netBalances(
+        let balanceComputation = DashboardViewModel.netBalancesResult(
             splitExpenses: splitExpenses,
-            settlements: settlements
+            settlements: settlements,
+            currencyCode: currencyCode
         )
 
         let monthlyExpenseTransactions: [Transaction]
         if let monthInterval {
             monthlyExpenseTransactions = RecurringTransactionResolver
-                .transactions(in: monthInterval, from: transactions, alreadyDeduplicated: true)
+                .transactions(in: monthInterval, from: transactions, calendar: calendar, alreadyDeduplicated: true)
                 .filter { $0.type == .expense }
         } else {
             monthlyExpenseTransactions = []
         }
 
-        var spentByCategory: [TransactionCategory: Double] = [:]
+        var anomalies = balanceComputation.anomalies
         for transaction in monthlyExpenseTransactions {
-            spentByCategory[transaction.category, default: 0] += transaction.amount
+            if case .failure(let anomaly) = MoneyAccounting.checkedAmount(
+                for: transaction,
+                fallbackCurrencyCode: currencyCode
+            ) {
+                anomalies.append(anomaly)
+            }
+            for split in transaction.splits {
+                if case .failure(let anomaly) = MoneyAccounting.checkedAmount(
+                    for: split,
+                    fallbackCurrencyCode: currencyCode
+                ) {
+                    anomalies.append(anomaly)
+                }
+            }
         }
 
-        let expensesByMember = members.map { member in
-            let total = monthlyExpenseTransactions.reduce(0) { partial, transaction in
-                partial + transaction.consumedExpense(for: member.id)
+        var spentByCategory: [TransactionCategory: [Money]] = [:]
+        for transaction in monthlyExpenseTransactions {
+            if case .success(let money) = MoneyAccounting.checkedAmount(
+                for: transaction,
+                fallbackCurrencyCode: currencyCode
+            ) {
+                spentByCategory[transaction.category, default: []].append(money)
             }
-            return (member, total)
+        }
+
+        var expensesByMember: [(member: BudgetMember, total: Double)] = []
+        for member in members {
+            var values: [Money] = []
+            for transaction in monthlyExpenseTransactions {
+                if transaction.isSplit {
+                    for split in transaction.splits where split.memberId == member.id {
+                        if case .success(let money) = MoneyAccounting.checkedAmount(
+                            for: split,
+                            fallbackCurrencyCode: currencyCode
+                        ) {
+                            values.append(money)
+                        }
+                    }
+                } else if transaction.createdByMemberId == member.id,
+                          case .success(let money) = MoneyAccounting.checkedAmount(
+                              for: transaction,
+                              fallbackCurrencyCode: currencyCode
+                          ) {
+                    values.append(money)
+                }
+            }
+            let total: Double
+            switch MoneyAccounting.aggregateValue(
+                values,
+                currencyCode: currencyCode,
+                sourceID: "member-\(member.id.uuidString)"
+            ) {
+            case .success(let value): total = value
+            case .failure(let anomaly):
+                anomalies.append(anomaly)
+                total = 0
+            }
+            expensesByMember.append((member, total))
+        }
+
+        var totalValues: [Money] = []
+        for transaction in monthlyExpenseTransactions {
+            if case .success(let money) = MoneyAccounting.checkedAmount(
+                for: transaction,
+                fallbackCurrencyCode: currencyCode
+            ) {
+                totalValues.append(money)
+            }
+        }
+        let totalExpenses: Double
+        switch MoneyAccounting.aggregateValue(totalValues, currencyCode: currencyCode, sourceID: "budget-total") {
+        case .success(let value): totalExpenses = value
+        case .failure(let anomaly):
+            anomalies.append(anomaly)
+            totalExpenses = 0
+        }
+
+        var categoryTotals: [TransactionCategory: Double] = [:]
+        for (category, values) in spentByCategory {
+            switch MoneyAccounting.aggregateValue(
+                values,
+                currencyCode: currencyCode,
+                sourceID: "category-\(category.rawValue)"
+            ) {
+            case .success(let value): categoryTotals[category] = value
+            case .failure(let anomaly): anomalies.append(anomaly); categoryTotals[category] = 0
+            }
         }
 
         return BudgetTabMetrics(
-            netBalances: netBalances,
+            netBalances: balanceComputation.balances,
             monthlyExpenseTransactions: monthlyExpenseTransactions,
             expensesByMember: expensesByMember,
-            spentByCategory: spentByCategory
+            spentByCategory: categoryTotals,
+            currencyCode: currencyCode,
+            anomalies: Array(Set(anomalies)),
+            totalExpenses: totalExpenses
         )
     }
 }
