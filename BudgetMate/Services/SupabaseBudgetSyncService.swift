@@ -46,10 +46,18 @@ private struct CloudRecordIdentityRow: Decodable {
     let id: UUID
 }
 
+/// PR02C ships the expanded DTO contract before any client depends on it.
+/// PR02D may replace this constant with the approved rollout mechanism only
+/// after the server migration has been deployed and verified.
+enum MoneyServerBridgeRollout {
+    static let isEnabled = false
+}
+
 enum SupabaseBudgetSyncError: LocalizedError {
     case missingUser
     case notBudgetOwner
     case invalidCloudDate(String)
+    case invalidCloudMoneyContract
 
     var errorDescription: String? {
         switch self {
@@ -59,6 +67,8 @@ enum SupabaseBudgetSyncError: LocalizedError {
             return "Only the household owner can invite members."
         case .invalidCloudDate(let value):
             return "Cloud data has an invalid date: \(value)."
+        case .invalidCloudMoneyContract:
+            return "Cloud data has inconsistent exact-money fields."
         }
     }
 }
@@ -111,6 +121,32 @@ private enum CloudISO8601DateCodec {
     }()
 }
 
+private enum CloudMoneyContract {
+    static func validatedExactMoney(
+        legacyAmount: Double,
+        minorUnits: Int64?,
+        currencyCode: String?,
+        rolloutEnabled: Bool
+    ) throws -> Money? {
+        guard rolloutEnabled else { return nil }
+        guard minorUnits != nil || currencyCode != nil else { return nil }
+        guard let minorUnits, let currencyCode,
+              let metadata = try? CurrencyMetadata(code: currencyCode) else {
+            throw SupabaseBudgetSyncError.invalidCloudMoneyContract
+        }
+        guard case .success(let expectedMinorUnits) =
+                LegacyDoubleMoneyConverter.convert(legacyAmount, metadata: metadata),
+              expectedMinorUnits == minorUnits,
+              let money = try? Money(
+                minorUnits: minorUnits,
+                currencyCode: metadata.code
+              ) else {
+            throw SupabaseBudgetSyncError.invalidCloudMoneyContract
+        }
+        return money
+    }
+}
+
 struct CloudBudgetSettingsRow: Codable {
     let userId: UUID
     let budgetId: UUID
@@ -118,6 +154,8 @@ struct CloudBudgetSettingsRow: Codable {
     let currencyCode: String
     let appearance: String
     let categoryBudgets: [String: Double]
+    let categoryBudgetsMinorUnits: [String: Int64]?
+    let categoryVisibility: [String: BudgetCategoryVisibility]?
     let categoryEmojis: [String: String]
 
     enum CodingKeys: String, CodingKey {
@@ -127,6 +165,8 @@ struct CloudBudgetSettingsRow: Codable {
         case currencyCode = "currency_code"
         case appearance
         case categoryBudgets = "category_budgets"
+        case categoryBudgetsMinorUnits = "category_budgets_minor_units"
+        case categoryVisibility = "category_visibility"
         case categoryEmojis = "category_emojis"
     }
 
@@ -137,6 +177,8 @@ struct CloudBudgetSettingsRow: Codable {
         currencyCode: String,
         appearance: String,
         categoryBudgets: [String: Double],
+        categoryBudgetsMinorUnits: [String: Int64]? = nil,
+        categoryVisibility: [String: BudgetCategoryVisibility]? = nil,
         categoryEmojis: [String: String] = [:]
     ) {
         self.userId = userId
@@ -145,16 +187,29 @@ struct CloudBudgetSettingsRow: Codable {
         self.currencyCode = currencyCode
         self.appearance = appearance
         self.categoryBudgets = categoryBudgets
+        self.categoryBudgetsMinorUnits = categoryBudgetsMinorUnits
+        self.categoryVisibility = categoryVisibility
         self.categoryEmojis = categoryEmojis.filter { $0.value.isSingleEmoji }
     }
 
-    init(settings: BudgetSettings, userId: UUID, budgetId: UUID? = nil) {
+    init(
+        settings: BudgetSettings,
+        userId: UUID,
+        budgetId: UUID? = nil,
+        rolloutEnabled: Bool = MoneyServerBridgeRollout.isEnabled
+    ) {
         self.userId = userId
         self.budgetId = budgetId ?? userId
         monthlyBudget = settings.monthlyBudget
         currencyCode = settings.currencyCode
         appearance = settings.appearance.rawValue
         categoryBudgets = settings.categoryBudgets
+        categoryBudgetsMinorUnits = rolloutEnabled
+            ? settings.categoryBudgetsMinorUnits
+            : nil
+        categoryVisibility = rolloutEnabled
+            ? settings.categoryVisibility
+            : nil
         categoryEmojis = settings.categoryEmojis
     }
 
@@ -166,18 +221,66 @@ struct CloudBudgetSettingsRow: Codable {
         currencyCode = try container.decodeIfPresent(String.self, forKey: .currencyCode) ?? CurrencyOption.usd.code
         appearance = try container.decodeIfPresent(String.self, forKey: .appearance) ?? AppearanceOption.system.rawValue
         categoryBudgets = try container.decodeIfPresent([String: Double].self, forKey: .categoryBudgets) ?? [:]
+        categoryBudgetsMinorUnits = try container.decodeIfPresent(
+            [String: Int64].self,
+            forKey: .categoryBudgetsMinorUnits
+        )
+        categoryVisibility = try container.decodeIfPresent(
+            [String: BudgetCategoryVisibility].self,
+            forKey: .categoryVisibility
+        )
         let decodedEmojis = try container.decodeIfPresent([String: String].self, forKey: .categoryEmojis) ?? [:]
         categoryEmojis = decodedEmojis.filter { $0.value.isSingleEmoji }
     }
 
-    func makeSettings() -> BudgetSettings {
+    func makeSettings(
+        rolloutEnabled: Bool = MoneyServerBridgeRollout.isEnabled
+    ) -> BudgetSettings {
         BudgetSettings(
             monthlyBudget: monthlyBudget,
             currencyCode: currencyCode,
             appearance: AppearanceOption(rawValue: appearance) ?? .system,
             categoryBudgets: categoryBudgets,
+            categoryBudgetsMinorUnits: rolloutEnabled
+                ? (categoryBudgetsMinorUnits ?? [:])
+                : [:],
+            categoryVisibility: rolloutEnabled
+                ? (categoryVisibility ?? [:])
+                : [:],
             categoryEmojis: categoryEmojis
         )
+    }
+
+    func validateMoneyContract(
+        rolloutEnabled: Bool = MoneyServerBridgeRollout.isEnabled
+    ) throws {
+        guard rolloutEnabled else { return }
+        guard categoryBudgetsMinorUnits != nil || categoryVisibility != nil else {
+            return
+        }
+        guard let categoryBudgetsMinorUnits, let categoryVisibility else {
+            throw SupabaseBudgetSyncError.invalidCloudMoneyContract
+        }
+        let candidate = BudgetSettings(
+            monthlyBudget: monthlyBudget,
+            currencyCode: currencyCode,
+            appearance: AppearanceOption(rawValue: appearance) ?? .system,
+            categoryBudgets: categoryBudgets,
+            categoryBudgetsMinorUnits: categoryBudgetsMinorUnits,
+            categoryVisibility: categoryVisibility,
+            categoryEmojis: categoryEmojis
+        )
+        let migration = LegacyBudgetSettingsMigrator.migrate(
+            candidate,
+            currencySource: StaticVerifiedCurrencySource(
+                currencyCode: currencyCode
+            )
+        )
+        guard !migration.anomalyReport.isBlocking,
+              migration.settings.categoryBudgetsMinorUnits ==
+                categoryBudgetsMinorUnits else {
+            throw SupabaseBudgetSyncError.invalidCloudMoneyContract
+        }
     }
 }
 
@@ -432,12 +535,28 @@ struct CloudTransactionSplitRow: Codable {
     }
 }
 
+struct CloudTransactionSplitMoneyRow: Codable, Equatable {
+    let id: UUID
+    let memberId: UUID
+    let amountMinorUnits: Int64
+    let currencyCode: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case memberId = "member_id"
+        case amountMinorUnits = "amount_minor_units"
+        case currencyCode = "currency_code"
+    }
+}
+
 struct CloudTransactionRow: Codable {
     let id: UUID
     let userId: UUID
     let budgetId: UUID
     let title: String
     let amount: Double
+    let amountMinorUnits: Int64?
+    let currencyCode: String?
     let type: String
     let category: String
     let paymentMethod: String?
@@ -447,6 +566,7 @@ struct CloudTransactionRow: Codable {
     let createdAt: String
     let recurrenceRule: String?
     let splits: [CloudTransactionSplitRow]
+    let splitsMinorUnits: [CloudTransactionSplitMoneyRow]?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -454,6 +574,8 @@ struct CloudTransactionRow: Codable {
         case budgetId = "budget_id"
         case title
         case amount
+        case amountMinorUnits = "amount_minor_units"
+        case currencyCode = "currency_code"
         case type
         case category
         case paymentMethod = "payment_method"
@@ -463,6 +585,7 @@ struct CloudTransactionRow: Codable {
         case createdAt = "created_at"
         case recurrenceRule = "recurrence_rule"
         case splits
+        case splitsMinorUnits = "splits_minor_units"
     }
 
     init(
@@ -471,13 +594,23 @@ struct CloudTransactionRow: Codable {
         budgetId: UUID? = nil,
         existingUserId: UUID? = nil,
         memberAliases: [UUID: UUID] = [:],
-        validMemberIds: Set<UUID> = []
+        validMemberIds: Set<UUID> = [],
+        rolloutEnabled: Bool = MoneyServerBridgeRollout.isEnabled
     ) {
         id = transaction.id
         self.userId = existingUserId ?? userId
         self.budgetId = budgetId ?? userId
         title = transaction.title
         amount = transaction.amount
+        if rolloutEnabled,
+           let exactMinorUnits = transaction.amountMinorUnits,
+           let exactCurrencyCode = transaction.currencyCode {
+            amountMinorUnits = exactMinorUnits
+            currencyCode = exactCurrencyCode
+        } else {
+            amountMinorUnits = nil
+            currencyCode = nil
+        }
         type = transaction.type.rawValue
         category = transaction.category.rawValue
         paymentMethod = transaction.paymentMethod?.rawValue
@@ -498,16 +631,44 @@ struct CloudTransactionRow: Codable {
                 amount: $0.amount
             )
         }
+        if rolloutEnabled {
+            let exactSplits = transaction.splits.compactMap {
+                split -> CloudTransactionSplitMoneyRow? in
+                guard let exactMinorUnits = split.amountMinorUnits,
+                      let exactCurrencyCode = split.currencyCode else {
+                    return nil
+                }
+                return CloudTransactionSplitMoneyRow(
+                    id: split.id,
+                    memberId: Self.resolvedMemberId(
+                        split.memberId,
+                        aliases: memberAliases
+                    ),
+                    amountMinorUnits: exactMinorUnits,
+                    currencyCode: exactCurrencyCode
+                )
+            }
+            splitsMinorUnits = exactSplits.count == transaction.splits.count
+                ? exactSplits
+                : nil
+        } else {
+            splitsMinorUnits = nil
+        }
     }
 
     func apply(
         to transaction: Transaction,
         ownerUserId: String,
         memberAliases: [UUID: UUID] = [:],
-        validMemberIds: Set<UUID> = []
+        validMemberIds: Set<UUID> = [],
+        rolloutEnabled: Bool = MoneyServerBridgeRollout.isEnabled
     ) {
         transaction.title = title
         transaction.amount = amount
+        if rolloutEnabled {
+            transaction.amountMinorUnits = amountMinorUnits
+            transaction.currencyCode = currencyCode
+        }
         transaction.type = TransactionType(rawValue: type) ?? .expense
         transaction.category = TransactionCategory(rawValue: category)
         transaction.paymentMethod = paymentMethod.flatMap(PaymentMethod.init(rawValue:))
@@ -530,10 +691,15 @@ struct CloudTransactionRow: Codable {
         _ transaction: Transaction,
         ownerUserId: String,
         memberAliases: [UUID: UUID],
-        validMemberIds: Set<UUID>
+        validMemberIds: Set<UUID>,
+        rolloutEnabled: Bool = MoneyServerBridgeRollout.isEnabled
     ) -> Bool {
         transaction.title == title &&
         transaction.amount == amount &&
+        (!rolloutEnabled || (
+            transaction.amountMinorUnits == amountMinorUnits &&
+            transaction.currencyCode == currencyCode
+        )) &&
         transaction.type == (TransactionType(rawValue: type) ?? .expense) &&
         transaction.category == TransactionCategory(rawValue: category) &&
         transaction.paymentMethod == paymentMethod.flatMap(PaymentMethod.init(rawValue:)) &&
@@ -551,7 +717,11 @@ struct CloudTransactionRow: Codable {
 
     /// Whether the local splits already equal this row's splits (after alias
     /// resolution), so the merge can leave the relationship untouched.
-    func splitsMatch(_ transaction: Transaction, memberAliases: [UUID: UUID]) -> Bool {
+    func splitsMatch(
+        _ transaction: Transaction,
+        memberAliases: [UUID: UUID],
+        rolloutEnabled: Bool = MoneyServerBridgeRollout.isEnabled
+    ) -> Bool {
         let desired = splits.filter { $0.amount > 0 }
         let existing = transaction.splits
         guard desired.count == existing.count else { return false }
@@ -559,22 +729,44 @@ struct CloudTransactionRow: Codable {
         let existingById = Dictionary(existing.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         guard existingById.count == existing.count else { return false }
 
-        return desired.allSatisfy { row in
+        let legacyMatches = desired.allSatisfy { row in
             guard let split = existingById[row.id] else { return false }
             return split.memberId == Self.resolvedMemberId(row.memberId, aliases: memberAliases)
                 && split.amount == row.amount
+        }
+        guard legacyMatches, rolloutEnabled else { return legacyMatches }
+        guard let splitsMinorUnits,
+              splitsMinorUnits.count == existing.count else {
+            return false
+        }
+        let exactByID = Dictionary(
+            splitsMinorUnits.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        guard exactByID.count == splitsMinorUnits.count else { return false }
+        return existing.allSatisfy { split in
+            guard let exact = exactByID[split.id] else { return false }
+            return split.memberId == Self.resolvedMemberId(
+                exact.memberId,
+                aliases: memberAliases
+            )
+                && split.amountMinorUnits == exact.amountMinorUnits
+                && split.currencyCode == exact.currencyCode
         }
     }
 
     func makeTransaction(
         ownerUserId: String,
         memberAliases: [UUID: UUID] = [:],
-        validMemberIds: Set<UUID> = []
+        validMemberIds: Set<UUID> = [],
+        rolloutEnabled: Bool = MoneyServerBridgeRollout.isEnabled
     ) -> Transaction {
         Transaction(
             id: id,
             title: title,
             amount: amount,
+            amountMinorUnits: rolloutEnabled ? amountMinorUnits : nil,
+            currencyCode: rolloutEnabled ? currencyCode : nil,
             type: TransactionType(rawValue: type) ?? .expense,
             category: TransactionCategory(rawValue: category),
             paymentMethod: paymentMethod.flatMap(PaymentMethod.init(rawValue:)),
@@ -591,7 +783,9 @@ struct CloudTransactionRow: Codable {
         )
     }
 
-    func validateDates() throws {
+    func validateDates(
+        rolloutEnabled: Bool = MoneyServerBridgeRollout.isEnabled
+    ) throws {
         if let occurredOn,
            CloudISO8601DateCodec.localDate(from: occurredOn) == nil {
             throw SupabaseBudgetSyncError.invalidCloudDate(occurredOn)
@@ -602,6 +796,58 @@ struct CloudTransactionRow: Codable {
 
         guard CloudISO8601DateCodec.date(from: createdAt) != nil else {
             throw SupabaseBudgetSyncError.invalidCloudDate(createdAt)
+        }
+        try validateMoneyContract(rolloutEnabled: rolloutEnabled)
+    }
+
+    private func validateMoneyContract(rolloutEnabled: Bool) throws {
+        guard rolloutEnabled else { return }
+        let exactAmount = try CloudMoneyContract.validatedExactMoney(
+            legacyAmount: amount,
+            minorUnits: amountMinorUnits,
+            currencyCode: currencyCode,
+            rolloutEnabled: true
+        )
+        guard exactAmount != nil || splitsMinorUnits == nil else {
+            throw SupabaseBudgetSyncError.invalidCloudMoneyContract
+        }
+        guard let exactSplits = splitsMinorUnits else { return }
+        guard exactSplits.count == splits.count else {
+            throw SupabaseBudgetSyncError.invalidCloudMoneyContract
+        }
+        let exactByID = Dictionary(
+            exactSplits.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        guard exactByID.count == exactSplits.count else {
+            throw SupabaseBudgetSyncError.invalidCloudMoneyContract
+        }
+
+        var exactTotal: Int64 = 0
+        for legacySplit in splits {
+            guard let exactSplit = exactByID[legacySplit.id],
+                  exactSplit.memberId == legacySplit.memberId else {
+                throw SupabaseBudgetSyncError.invalidCloudMoneyContract
+            }
+            let splitMoney = try CloudMoneyContract.validatedExactMoney(
+                legacyAmount: legacySplit.amount,
+                minorUnits: exactSplit.amountMinorUnits,
+                currencyCode: exactSplit.currencyCode,
+                rolloutEnabled: true
+            )
+            guard splitMoney?.currencyCode == exactAmount?.currencyCode else {
+                throw SupabaseBudgetSyncError.invalidCloudMoneyContract
+            }
+            let sum = exactTotal.addingReportingOverflow(
+                exactSplit.amountMinorUnits
+            )
+            guard !sum.overflow else {
+                throw SupabaseBudgetSyncError.invalidCloudMoneyContract
+            }
+            exactTotal = sum.partialValue
+        }
+        if !exactSplits.isEmpty, exactTotal != exactAmount?.minorUnits {
+            throw SupabaseBudgetSyncError.invalidCloudMoneyContract
         }
     }
 
@@ -649,6 +895,8 @@ struct CloudSettlementRow: Codable {
     let fromMemberId: UUID
     let toMemberId: UUID
     let amount: Double
+    let amountMinorUnits: Int64?
+    let currencyCode: String?
     let date: String
     var occurredOn: String?
 
@@ -659,6 +907,8 @@ struct CloudSettlementRow: Codable {
         case fromMemberId = "from_member_id"
         case toMemberId = "to_member_id"
         case amount
+        case amountMinorUnits = "amount_minor_units"
+        case currencyCode = "currency_code"
         case date
         case occurredOn = "occurred_on"
     }
@@ -668,7 +918,8 @@ struct CloudSettlementRow: Codable {
         userId: UUID,
         budgetId: UUID? = nil,
         existingUserId: UUID? = nil,
-        memberAliases: [UUID: UUID] = [:]
+        memberAliases: [UUID: UUID] = [:],
+        rolloutEnabled: Bool = MoneyServerBridgeRollout.isEnabled
     ) {
         id = settlement.id
         self.userId = existingUserId ?? userId
@@ -676,40 +927,75 @@ struct CloudSettlementRow: Codable {
         fromMemberId = CloudTransactionRow.resolvedMemberId(settlement.fromMemberId, aliases: memberAliases)
         toMemberId = CloudTransactionRow.resolvedMemberId(settlement.toMemberId, aliases: memberAliases)
         amount = settlement.amount
+        if rolloutEnabled,
+           let exactMinorUnits = settlement.amountMinorUnits,
+           let exactCurrencyCode = settlement.currencyCode {
+            amountMinorUnits = exactMinorUnits
+            currencyCode = exactCurrencyCode
+        } else {
+            amountMinorUnits = nil
+            currencyCode = nil
+        }
         date = CloudISO8601DateCodec.string(from: settlement.date)
         occurredOn = CloudISO8601DateCodec.localDateString(from: settlement.date)
     }
 
-    func apply(to settlement: Settlement, ownerUserId: String, memberAliases: [UUID: UUID] = [:]) {
+    func apply(
+        to settlement: Settlement,
+        ownerUserId: String,
+        memberAliases: [UUID: UUID] = [:],
+        rolloutEnabled: Bool = MoneyServerBridgeRollout.isEnabled
+    ) {
         settlement.fromMemberId = CloudTransactionRow.resolvedMemberId(fromMemberId, aliases: memberAliases)
         settlement.toMemberId = CloudTransactionRow.resolvedMemberId(toMemberId, aliases: memberAliases)
         settlement.amount = amount
+        if rolloutEnabled {
+            settlement.amountMinorUnits = amountMinorUnits
+            settlement.currencyCode = currencyCode
+        }
         settlement.date = resolvedDate
         settlement.ownerUserId = ownerUserId
     }
 
     /// Whether applying this row to `settlement` would be a no-op (see
     /// `CloudTransactionRow.matches`).
-    func matches(_ settlement: Settlement, ownerUserId: String, memberAliases: [UUID: UUID]) -> Bool {
+    func matches(
+        _ settlement: Settlement,
+        ownerUserId: String,
+        memberAliases: [UUID: UUID],
+        rolloutEnabled: Bool = MoneyServerBridgeRollout.isEnabled
+    ) -> Bool {
         settlement.fromMemberId == CloudTransactionRow.resolvedMemberId(fromMemberId, aliases: memberAliases) &&
         settlement.toMemberId == CloudTransactionRow.resolvedMemberId(toMemberId, aliases: memberAliases) &&
         settlement.amount == amount &&
+        (!rolloutEnabled || (
+            settlement.amountMinorUnits == amountMinorUnits &&
+            settlement.currencyCode == currencyCode
+        )) &&
         matchesDate(settlement.date) &&
         settlement.ownerUserId == ownerUserId
     }
 
-    func makeSettlement(ownerUserId: String, memberAliases: [UUID: UUID] = [:]) -> Settlement {
+    func makeSettlement(
+        ownerUserId: String,
+        memberAliases: [UUID: UUID] = [:],
+        rolloutEnabled: Bool = MoneyServerBridgeRollout.isEnabled
+    ) -> Settlement {
         Settlement(
             id: id,
             fromMemberId: CloudTransactionRow.resolvedMemberId(fromMemberId, aliases: memberAliases),
             toMemberId: CloudTransactionRow.resolvedMemberId(toMemberId, aliases: memberAliases),
             amount: amount,
+            amountMinorUnits: rolloutEnabled ? amountMinorUnits : nil,
+            currencyCode: rolloutEnabled ? currencyCode : nil,
             date: resolvedDate,
             ownerUserId: ownerUserId
         )
     }
 
-    func validateDate() throws {
+    func validateDate(
+        rolloutEnabled: Bool = MoneyServerBridgeRollout.isEnabled
+    ) throws {
         if let occurredOn,
            CloudISO8601DateCodec.localDate(from: occurredOn) == nil {
             throw SupabaseBudgetSyncError.invalidCloudDate(occurredOn)
@@ -717,6 +1003,12 @@ struct CloudSettlementRow: Codable {
         guard CloudISO8601DateCodec.date(from: date) != nil else {
             throw SupabaseBudgetSyncError.invalidCloudDate(date)
         }
+        _ = try CloudMoneyContract.validatedExactMoney(
+            legacyAmount: amount,
+            minorUnits: amountMinorUnits,
+            currencyCode: currencyCode,
+            rolloutEnabled: rolloutEnabled
+        )
     }
 
     private var resolvedDate: Date {
@@ -939,7 +1231,9 @@ final class SupabaseBudgetSyncService {
             .execute()
             .value
 
-        return rows.first?.makeSettings()
+        guard let row = rows.first else { return nil }
+        try row.validateMoneyContract()
+        return row.makeSettings()
     }
 
     func fetchCurrencyBaseline(
@@ -1895,18 +2189,26 @@ final class SupabaseBudgetSyncService {
         for transaction: Transaction,
         from row: CloudTransactionRow,
         memberAliases: [UUID: UUID],
-        in context: ModelContext
+        in context: ModelContext,
+        rolloutEnabled: Bool = MoneyServerBridgeRollout.isEnabled
     ) {
         for split in Array(transaction.splits) {
             context.delete(split)
         }
 
+        let exactByID = Dictionary(
+            (row.splitsMinorUnits ?? []).map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         for splitRow in row.splits where splitRow.amount > 0 {
+            let exact = rolloutEnabled ? exactByID[splitRow.id] : nil
             context.insert(
                 TransactionSplit(
                     id: splitRow.id,
                     memberId: CloudTransactionRow.resolvedMemberId(splitRow.memberId, aliases: memberAliases),
                     amount: splitRow.amount,
+                    amountMinorUnits: exact?.amountMinorUnits,
+                    currencyCode: exact?.currencyCode,
                     transaction: transaction
                 )
             )

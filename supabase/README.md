@@ -39,3 +39,19 @@ Supabase CLI metadata under `/supabase/.temp/` and
 `/web/supabase/.temp/` is reproducible local state and is ignored. The
 `web/supabase/` directory itself remains available for source or evidence and
 must not be broadly ignored without classification.
+
+## PR 02C money-bridge rehearsal
+
+The CI job `Money server migration contract` runs PostgreSQL 17 with:
+
+1. `supabase/tests/02c_legacy_fixture.sql`
+2. `supabase/migrations/20260729000100_money_server_bridge.sql` twice
+3. `supabase/tests/02c_money_server_bridge_contract.sql`
+4. a restore of the pre-migration custom-format dump
+
+This proves the additive migration, rerun safety, old-client compatibility,
+new dual-field validation, hidden-marker classification, currency locking, and
+rollback restore without touching a linked project. The iOS rollout constant
+remains disabled in PR 02C. Applying the migration to the linked BudgetMate
+project still requires a clean read-only preflight, a captured backup, explicit
+owner authorization, and post-apply verification.

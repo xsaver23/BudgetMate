@@ -233,4 +233,166 @@ final class CloudPersistenceCharacterizationTests: XCTestCase {
             CloudSyncStore.currentPendingCloudDeletionSafetyVersion
         )
     }
+
+    func testMoneyServerBridgeRolloutDefaultsOffAndOmitsAdditiveWrites() throws {
+        XCTAssertFalse(MoneyServerBridgeRollout.isEnabled)
+
+        let transaction = BudgetMateTestFixtures.equalSplitExpense()
+        transaction.amountMinorUnits = 10_000
+        transaction.currencyCode = "USD"
+        for split in transaction.splits {
+            split.amountMinorUnits = 5_000
+            split.currencyCode = "USD"
+        }
+        let transactionRow = CloudTransactionRow(
+            transaction: transaction,
+            userId: BudgetMateTestFixtures.aliceUserID,
+            budgetId: BudgetMateTestFixtures.sharedBudgetID
+        )
+        let transactionObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(transactionRow)
+            ) as? [String: Any]
+        )
+        XCTAssertNil(transactionObject["amount_minor_units"])
+        XCTAssertNil(transactionObject["currency_code"])
+        XCTAssertNil(transactionObject["splits_minor_units"])
+
+        var exactSettings = BudgetMateTestFixtures.settings
+        exactSettings.categoryBudgetsMinorUnits = [
+            TransactionCategory.groceries.rawValue: 40_000,
+            TransactionCategory.restaurant.rawValue: 25_000
+        ]
+        exactSettings.categoryVisibility = [
+            TransactionCategory.groceries.rawValue: .visible,
+            TransactionCategory.restaurant.rawValue: .visible
+        ]
+        let settingsRow = CloudBudgetSettingsRow(
+            settings: exactSettings,
+            userId: BudgetMateTestFixtures.aliceUserID,
+            budgetId: BudgetMateTestFixtures.sharedBudgetID
+        )
+        let settingsObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(settingsRow)
+            ) as? [String: Any]
+        )
+        XCTAssertNil(settingsObject["category_budgets_minor_units"])
+        XCTAssertNil(settingsObject["category_visibility"])
+    }
+
+    func testEnabledMoneyServerBridgeDualFieldsRoundTripWithoutChangingLegacyValues() throws {
+        let transaction = BudgetMateTestFixtures.equalSplitExpense()
+        transaction.amountMinorUnits = 10_000
+        transaction.currencyCode = "USD"
+        for split in transaction.splits {
+            split.amountMinorUnits = 5_000
+            split.currencyCode = "USD"
+        }
+        let row = CloudTransactionRow(
+            transaction: transaction,
+            userId: BudgetMateTestFixtures.aliceUserID,
+            budgetId: BudgetMateTestFixtures.sharedBudgetID,
+            rolloutEnabled: true
+        )
+        let data = try JSONEncoder().encode(row)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertEqual((object["amount_minor_units"] as? NSNumber)?.int64Value, 10_000)
+        XCTAssertEqual(object["currency_code"] as? String, "USD")
+        XCTAssertEqual((object["splits_minor_units"] as? [[String: Any]])?.count, 2)
+
+        let decoded = try JSONDecoder().decode(CloudTransactionRow.self, from: data)
+        try decoded.validateDates(rolloutEnabled: true)
+        let local = decoded.makeTransaction(
+            ownerUserId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            rolloutEnabled: true
+        )
+        XCTAssertEqual(local.amount, transaction.amount)
+        XCTAssertEqual(local.amountMinorUnits, 10_000)
+        XCTAssertEqual(local.currencyCode, "USD")
+
+        var settings = BudgetMateTestFixtures.settings
+        settings.categoryBudgetsMinorUnits = [
+            TransactionCategory.groceries.rawValue: 40_000,
+            TransactionCategory.restaurant.rawValue: 25_000
+        ]
+        settings.categoryVisibility = [
+            TransactionCategory.groceries.rawValue: .visible,
+            TransactionCategory.restaurant.rawValue: .visible
+        ]
+        let settingsRow = CloudBudgetSettingsRow(
+            settings: settings,
+            userId: BudgetMateTestFixtures.aliceUserID,
+            budgetId: BudgetMateTestFixtures.sharedBudgetID,
+            rolloutEnabled: true
+        )
+        let settingsData = try JSONEncoder().encode(settingsRow)
+        let decodedSettings = try JSONDecoder().decode(
+            CloudBudgetSettingsRow.self,
+            from: settingsData
+        )
+        try decodedSettings.validateMoneyContract(rolloutEnabled: true)
+        XCTAssertEqual(
+            decodedSettings.makeSettings(
+                rolloutEnabled: true
+            ).categoryBudgetsMinorUnits,
+            settings.categoryBudgetsMinorUnits
+        )
+
+        let settlement = BudgetMateTestFixtures.settlement(amount: 20)
+        settlement.amountMinorUnits = 2_000
+        settlement.currencyCode = "USD"
+        let settlementRow = CloudSettlementRow(
+            settlement: settlement,
+            userId: BudgetMateTestFixtures.aliceUserID,
+            budgetId: BudgetMateTestFixtures.sharedBudgetID,
+            rolloutEnabled: true
+        )
+        let settlementData = try JSONEncoder().encode(settlementRow)
+        let decodedSettlement = try JSONDecoder().decode(
+            CloudSettlementRow.self,
+            from: settlementData
+        )
+        try decodedSettlement.validateDate(rolloutEnabled: true)
+        XCTAssertEqual(
+            decodedSettlement.makeSettlement(
+                ownerUserId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+                rolloutEnabled: true
+            ).amountMinorUnits,
+            2_000
+        )
+    }
+
+    func testEnabledMoneyServerBridgeRejectsContradictoryExactFields() throws {
+        let transaction = BudgetMateTestFixtures.expense(amount: 12.34)
+        transaction.amountMinorUnits = 1_234
+        transaction.currencyCode = "USD"
+        let row = CloudTransactionRow(
+            transaction: transaction,
+            userId: BudgetMateTestFixtures.aliceUserID,
+            budgetId: BudgetMateTestFixtures.sharedBudgetID,
+            rolloutEnabled: true
+        )
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(row)
+            ) as? [String: Any]
+        )
+        object["amount_minor_units"] = 999
+        let contradictory = try JSONDecoder().decode(
+            CloudTransactionRow.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+
+        XCTAssertThrowsError(
+            try contradictory.validateDates(rolloutEnabled: true)
+        ) { error in
+            guard let syncError = error as? SupabaseBudgetSyncError,
+                  case .invalidCloudMoneyContract = syncError else {
+                return XCTFail("Expected invalidCloudMoneyContract, received \(error)")
+            }
+        }
+    }
 }
