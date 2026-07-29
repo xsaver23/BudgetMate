@@ -11,6 +11,74 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  money-server-contract:
+    name: Money server migration contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: budgetmate_02c
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d budgetmate_02c"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify checked-in secret safety
+        run: ./scripts/verify_ios_secrets.sh
+
+      - name: Rehearse expand, mixed-client contract, and rollback restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="supabase/tests/02c_legacy_fixture.sql"
+          migration="supabase/migrations/20260729000100_money_server_bridge.sql"
+          contract="supabase/tests/02c_money_server_bridge_contract.sql"
+          rollback_dump="${RUNNER_TEMP}/budgetmate-02c-legacy.dump"
+
+          psql --dbname budgetmate_02c --file "${fixture}"
+          pg_dump --format custom --dbname budgetmate_02c --file "${rollback_dump}"
+
+          psql --dbname budgetmate_02c --file "${migration}"
+          psql --dbname budgetmate_02c --file "${migration}"
+          psql --dbname budgetmate_02c --file "${contract}"
+
+          dropdb budgetmate_02c
+          createdb budgetmate_02c
+          pg_restore --dbname budgetmate_02c "${rollback_dump}"
+          restored="$(
+            psql --dbname budgetmate_02c --tuples-only --no-align --command "
+              select
+                (select count(*) from public.budgets),
+                (select count(*) from public.budget_transactions),
+                (select count(*) from public.budget_settlements),
+                (select count(*) from public.budget_settings),
+                not exists (
+                  select 1
+                  from information_schema.columns
+                  where table_schema = 'public'
+                    and column_name = 'amount_minor_units'
+                );
+            "
+          )"
+          test "${restored}" = "3|2|1|3|t"
+
   ios:
     name: Build and test iOS
     runs-on: macos-15
