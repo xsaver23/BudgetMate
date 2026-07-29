@@ -19,4 +19,19 @@ final class BudgetMateUITests: XCTestCase {
             "BudgetMate should show the intro or sign-in entry point when launched without a session."
         )
     }
+
+    func testPersistenceFailureShowsAccessibleRecoverySurface() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing", "-ui-testing-persistence-failure"]
+        app.launch()
+
+        XCTAssertTrue(
+            app.staticTexts["BudgetMate needs help opening local data"].waitForExistence(timeout: 15)
+        )
+        XCTAssertTrue(app.buttons["Retry"].exists)
+        XCTAssertTrue(app.buttons["Create Support Archive"].exists)
+        XCTAssertTrue(app.buttons["Restore Archive"].exists)
+        XCTAssertTrue(app.buttons["Reset Local Cache"].exists)
+        XCTAssertFalse(app.buttons["Reset Local Cache"].isEnabled)
+    }
 }
