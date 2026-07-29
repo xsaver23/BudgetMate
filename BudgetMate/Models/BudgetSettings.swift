@@ -1,11 +1,20 @@
 import Foundation
 
+enum BudgetCategoryVisibility: String, Codable, Equatable, Sendable {
+    case visible
+    case hidden
+}
+
 struct BudgetSettings: Codable, Equatable {
     static let monthBudgetPrefix = "__monthBudget__:"
+    static let legacyCodableContractVersion = 1
+    static let currentCodableContractVersion = 2
 
     var currencyCode: String
     var appearance: AppearanceOption
     var categoryBudgets: [String: Double]
+    var categoryBudgetsMinorUnits: [String: Int64]
+    var categoryVisibility: [String: BudgetCategoryVisibility]
     var categoryEmojis: [String: String]
 
     var monthlyBudget: Double {
@@ -19,11 +28,25 @@ struct BudgetSettings: Codable, Equatable {
         CurrencyOption.symbol(for: currencyCode)
     }
 
+    /// Compatibility aliases keep the Codable payload's meaning explicit to
+    /// callers without changing the legacy dictionary's name or contents.
+    var categoryBudgetMinorUnits: [String: Int64] {
+        get { categoryBudgetsMinorUnits }
+        set { categoryBudgetsMinorUnits = newValue }
+    }
+
+    var categoryVisibilityState: [String: BudgetCategoryVisibility] {
+        get { categoryVisibility }
+        set { categoryVisibility = newValue }
+    }
+
     static let `default` = BudgetSettings(
         monthlyBudget: 0,
         currencyCode: CurrencyOption.usd.code,
         appearance: .system,
         categoryBudgets: [:],
+        categoryBudgetsMinorUnits: [:],
+        categoryVisibility: [:],
         categoryEmojis: [:]
     )
 
@@ -32,6 +55,8 @@ struct BudgetSettings: Codable, Equatable {
         currencyCode: String,
         appearance: AppearanceOption = .system,
         categoryBudgets: [String: Double],
+        categoryBudgetsMinorUnits: [String: Int64] = [:],
+        categoryVisibility: [String: BudgetCategoryVisibility] = [:],
         categoryEmojis: [String: String] = [:]
     ) {
         self.currencyCode = CurrencyOption.normalizedCode(currencyCode)
@@ -41,6 +66,19 @@ struct BudgetSettings: Codable, Equatable {
         } else {
             self.categoryBudgets = categoryBudgets
         }
+        self.categoryBudgetsMinorUnits = categoryBudgetsMinorUnits.filter {
+            !Self.isHiddenMarkerKey($0.key)
+        }
+        var resolvedVisibility = categoryVisibility
+        for key in self.categoryBudgets.keys {
+            if let category = Self.hiddenCategory(fromMarkerKey: key) {
+                resolvedVisibility[category] = .hidden
+            } else if let category = Self.categoryRawValue(fromBudgetKey: key),
+                      resolvedVisibility[category] == nil {
+                resolvedVisibility[category] = .visible
+            }
+        }
+        self.categoryVisibility = resolvedVisibility
         self.categoryEmojis = categoryEmojis.filter { $0.value.isSingleEmoji }
     }
 
@@ -50,11 +88,26 @@ struct BudgetSettings: Codable, Equatable {
         case currencySymbol
         case appearance
         case categoryBudgets
+        case categoryBudgetsMinorUnits
+        case categoryVisibility
         case categoryEmojis
+        case settingsContractVersion
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let contractVersion = try container.decodeIfPresent(
+            Int.self,
+            forKey: .settingsContractVersion
+        ) ?? Self.legacyCodableContractVersion
+        guard contractVersion == Self.legacyCodableContractVersion ||
+                contractVersion == Self.currentCodableContractVersion else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .settingsContractVersion,
+                in: container,
+                debugDescription: "Unsupported BudgetSettings contract version."
+            )
+        }
         if let decodedCode = try container.decodeIfPresent(String.self, forKey: .currencyCode) {
             currencyCode = CurrencyOption.normalizedCode(decodedCode)
         } else {
@@ -69,16 +122,39 @@ struct BudgetSettings: Codable, Equatable {
         } else {
             categoryBudgets = decodedCategoryBudgets
         }
+        let decodedMinorUnits = try container.decodeIfPresent(
+            [String: Int64].self,
+            forKey: .categoryBudgetsMinorUnits
+        ) ?? [:]
+        categoryBudgetsMinorUnits = decodedMinorUnits.filter {
+            !Self.isHiddenMarkerKey($0.key)
+        }
+        var resolvedVisibility = try container.decodeIfPresent(
+            [String: BudgetCategoryVisibility].self,
+            forKey: .categoryVisibility
+        ) ?? [:]
+        for key in categoryBudgets.keys {
+            if let category = Self.hiddenCategory(fromMarkerKey: key) {
+                resolvedVisibility[category] = .hidden
+            } else if let category = Self.categoryRawValue(fromBudgetKey: key),
+                      resolvedVisibility[category] == nil {
+                resolvedVisibility[category] = .visible
+            }
+        }
+        categoryVisibility = resolvedVisibility
         let decodedEmojis = try container.decodeIfPresent([String: String].self, forKey: .categoryEmojis) ?? [:]
         categoryEmojis = decodedEmojis.filter { $0.value.isSingleEmoji }
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(Self.currentCodableContractVersion, forKey: .settingsContractVersion)
         try container.encode(monthlyBudget, forKey: .monthlyBudget)
         try container.encode(currencyCode, forKey: .currencyCode)
         try container.encode(appearance, forKey: .appearance)
         try container.encode(categoryBudgets, forKey: .categoryBudgets)
+        try container.encode(categoryBudgetsMinorUnits, forKey: .categoryBudgetsMinorUnits)
+        try container.encode(categoryVisibility, forKey: .categoryVisibility)
         try container.encode(categoryEmojis, forKey: .categoryEmojis)
     }
 
@@ -134,8 +210,26 @@ struct BudgetSettings: Codable, Equatable {
         key.hasPrefix(monthBudgetPrefix)
     }
 
+    static func isHiddenMarkerKey(_ key: String) -> Bool {
+        TransactionCategory.isHiddenMarkerKey(key)
+    }
+
     static func isInternalBudgetKey(_ key: String) -> Bool {
         isMonthBudgetKey(key) || TransactionCategory.isHiddenMarkerKey(key)
+    }
+
+    private static func hiddenCategory(fromMarkerKey key: String) -> String? {
+        guard isHiddenMarkerKey(key) else { return nil }
+        let category = String(key.dropFirst(TransactionCategory.hiddenCategoryPrefix.count))
+        return category.isEmpty ? nil : category
+    }
+
+    private static func categoryRawValue(fromBudgetKey key: String) -> String? {
+        if let scoped = monthAndCategory(from: key) {
+            return scoped.categoryRawValue
+        }
+        guard !isInternalBudgetKey(key), !key.isEmpty else { return nil }
+        return key
     }
 
     private func scopedCategoryBudgets(forMonthKey monthKey: String) -> [String: Double] {

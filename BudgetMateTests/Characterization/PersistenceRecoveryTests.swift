@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import SwiftData
 import XCTest
 @testable import BudgetMate
@@ -37,7 +38,7 @@ final class PersistenceRecoveryTests: XCTestCase {
 
         XCTAssertTrue(result.isRestorable)
         XCTAssertEqual(result.manifest.archiveFormatVersion, 1)
-        XCTAssertEqual(result.manifest.schemaVersion, "1.0.0")
+        XCTAssertEqual(result.manifest.schemaVersion, BudgetMateSchema.currentVersionString)
         XCTAssertEqual(result.manifest.sourceOpenStatus, "verified")
         XCTAssertTrue(result.manifest.files.contains { $0.kind == "primary" })
         XCTAssertTrue(result.manifest.files.contains { $0.kind == "companion" })
@@ -56,6 +57,73 @@ final class PersistenceRecoveryTests: XCTestCase {
         )
         let restored = try snapshot(at: storeURL)
         XCTAssertEqual(restored, verification.snapshot)
+    }
+
+    func testV1ArchiveVerifyTwiceAndRestoreNeverMutatesArchiveChecksums() throws {
+        let sourceDirectory = testRoot.appendingPathComponent("legacy-source", isDirectory: true)
+        let targetDirectory = testRoot.appendingPathComponent("legacy-target", isDirectory: true)
+        try fileManager.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: targetDirectory, withIntermediateDirectories: true)
+        let sourceStoreURL = sourceDirectory.appendingPathComponent("BudgetMate.store")
+        try LegacyUnversionedStoreFixture.create(at: sourceStoreURL)
+
+        let service = makeService()
+        let legacyDescriptor = PersistenceStoreDescriptor(
+            storeURL: sourceStoreURL,
+            schemaVersion: "1.0.0"
+        )
+        let archive = try service.createSupportArchive(
+            for: legacyDescriptor,
+            reason: "legacy verification test",
+            failureCode: "test"
+        )
+        XCTAssertTrue(archive.isRestorable)
+        XCTAssertEqual(archive.manifest.schemaVersion, "1.0.0")
+
+        let checksumsBefore = try archiveChecksums(
+            at: archive.archiveURL,
+            manifest: archive.manifest
+        )
+        let firstVerification = try service.verifyArchive(at: archive.archiveURL)
+        XCTAssertEqual(firstVerification.snapshot.transactionCount, 2)
+        XCTAssertEqual(firstVerification.snapshot.splitCount, 3)
+        XCTAssertEqual(firstVerification.snapshot.settlementCount, 1)
+        XCTAssertEqual(
+            try archiveChecksums(at: archive.archiveURL, manifest: archive.manifest),
+            checksumsBefore
+        )
+
+        let secondVerification = try service.verifyArchive(at: archive.archiveURL)
+        XCTAssertEqual(secondVerification.manifest, firstVerification.manifest)
+        XCTAssertEqual(secondVerification.snapshot, firstVerification.snapshot)
+        XCTAssertEqual(
+            try archiveChecksums(at: archive.archiveURL, manifest: archive.manifest),
+            checksumsBefore
+        )
+
+        let restoredStoreURL = targetDirectory.appendingPathComponent("BudgetMate.store")
+        let restored = try service.restoreArchive(
+            at: archive.archiveURL,
+            to: PersistenceStoreDescriptor(
+                storeURL: restoredStoreURL,
+                schemaVersion: "1.0.0"
+            )
+        )
+        XCTAssertEqual(restored.manifest, firstVerification.manifest)
+        XCTAssertEqual(restored.snapshot, firstVerification.snapshot)
+        XCTAssertEqual(
+            try service.verifyStoreForTesting(
+                at: restoredStoreURL,
+                schemaVersion: "1.0.0"
+            ),
+            firstVerification.snapshot
+        )
+        let primary = try XCTUnwrap(archive.manifest.files.first { $0.kind == "primary" })
+        XCTAssertEqual(try sha256(at: restoredStoreURL), primary.sha256)
+        XCTAssertEqual(
+            try archiveChecksums(at: archive.archiveURL, manifest: archive.manifest),
+            checksumsBefore
+        )
     }
 
     func testCorruptArchiveIsRejectedBeforeActiveStoreChanges() throws {
@@ -522,5 +590,23 @@ final class PersistenceRecoveryTests: XCTestCase {
             to: PersistenceRecoveryService.journalURLForTesting(for: descriptor),
             options: [.atomic]
         )
+    }
+
+    private func archiveChecksums(
+        at archiveURL: URL,
+        manifest: PersistenceArchiveManifest
+    ) throws -> [String: String] {
+        try Dictionary(uniqueKeysWithValues: manifest.files.map { file in
+            (
+                file.relativePath,
+                try sha256(at: archiveURL.appendingPathComponent(file.relativePath))
+            )
+        })
+    }
+
+    private func sha256(at url: URL) throws -> String {
+        SHA256.hash(data: try Data(contentsOf: url))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 }

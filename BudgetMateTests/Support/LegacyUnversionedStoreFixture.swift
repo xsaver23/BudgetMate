@@ -4,6 +4,18 @@ import SwiftData
 
 /// Deterministically materializes the exact pre-versioning app schema in a
 /// file-backed store. The fixture deliberately omits a migration plan.
+struct LegacySchemaRelationshipContract: Equatable {
+    let destination: String
+    let inverseName: String
+    let deleteRule: String
+    let isToOne: Bool
+}
+
+struct LegacySchemaPhysicalContract: Equatable {
+    let entities: [String: [String: Bool]]
+    let relationships: [String: LegacySchemaRelationshipContract]
+}
+
 @MainActor
 enum LegacyUnversionedStoreFixture {
     static let expenseID = UUID(uuidString: "10000000-0000-0000-0000-000000000001")!
@@ -20,11 +32,62 @@ enum LegacyUnversionedStoreFixture {
     static let settlementDate = Date(timeIntervalSince1970: 1_704_240_000)
     static let ownerUserID = "50000000-0000-0000-0000-000000000001"
 
+    /// Independent contract transcribed from the shipping unversioned model
+    /// surface. It is intentionally not derived from BudgetMateSchemaV1.
+    static let shippingSchemaContract = LegacySchemaPhysicalContract(
+        entities: [
+            "Settlement": [
+                "amount": false,
+                "date": false,
+                "fromMemberId": false,
+                "id": false,
+                "needsSync": false,
+                "ownerUserId": false,
+                "toMemberId": false
+            ],
+            "Transaction": [
+                "amount": false,
+                "category": false,
+                "createdAt": false,
+                "createdByMemberId": false,
+                "date": false,
+                "id": false,
+                "needsSync": false,
+                "ownerUserId": false,
+                "paymentMethod": true,
+                "recurrenceRule": true,
+                "splits": false,
+                "title": false,
+                "type": false
+            ],
+            "TransactionSplit": [
+                "amount": false,
+                "id": false,
+                "memberId": false,
+                "transaction": true
+            ]
+        ],
+        relationships: [
+            "Transaction.splits": LegacySchemaRelationshipContract(
+                destination: "TransactionSplit",
+                inverseName: "transaction",
+                deleteRule: "cascade",
+                isToOne: false
+            ),
+            "TransactionSplit.transaction": LegacySchemaRelationshipContract(
+                destination: "Transaction",
+                inverseName: "splits",
+                deleteRule: "nullify",
+                isToOne: true
+            )
+        ]
+    )
+
     static var schema: Schema {
         Schema([
-            Transaction.self,
-            TransactionSplit.self,
-            Settlement.self
+            BudgetMateSchemaV1.Transaction.self,
+            BudgetMateSchemaV1.TransactionSplit.self,
+            BudgetMateSchemaV1.Settlement.self
         ])
     }
 
@@ -42,7 +105,7 @@ enum LegacyUnversionedStoreFixture {
         )
         let context = container.mainContext
 
-        let expense = Transaction(
+        let expense = BudgetMateSchemaV1.Transaction(
             id: expenseID,
             title: "Legacy groceries",
             amount: 123.45,
@@ -57,27 +120,27 @@ enum LegacyUnversionedStoreFixture {
         )
         expense.needsSync = true
 
-        let firstSplit = TransactionSplit(
+        let firstSplit = BudgetMateSchemaV1.TransactionSplit(
             id: firstSplitID,
             memberId: firstMemberID,
             amount: 61.72,
             transaction: expense
         )
-        let secondSplit = TransactionSplit(
+        let secondSplit = BudgetMateSchemaV1.TransactionSplit(
             id: secondSplitID,
             memberId: secondMemberID,
             amount: 61.73,
             transaction: expense
         )
         expense.splits = [firstSplit, secondSplit]
-        let orphanSplit = TransactionSplit(
+        let orphanSplit = BudgetMateSchemaV1.TransactionSplit(
             id: orphanSplitID,
             memberId: firstMemberID,
             amount: 9.99,
             transaction: nil
         )
 
-        let income = Transaction(
+        let income = BudgetMateSchemaV1.Transaction(
             id: incomeID,
             title: "Legacy pay",
             amount: 2_500,
@@ -91,7 +154,7 @@ enum LegacyUnversionedStoreFixture {
             ownerUserId: ownerUserID
         )
 
-        let settlement = Settlement(
+        let settlement = BudgetMateSchemaV1.Settlement(
             id: settlementID,
             fromMemberId: secondMemberID,
             toMemberId: firstMemberID,

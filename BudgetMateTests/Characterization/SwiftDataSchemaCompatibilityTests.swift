@@ -6,53 +6,19 @@ import XCTest
 @MainActor
 final class SwiftDataSchemaCompatibilityTests: XCTestCase {
     func testVersionedV1ExactlyMatchesTheShippingUnversionedSchema() throws {
-        let shippingSchema = LegacyUnversionedStoreFixture.schema
         let versionedSchema = Schema(versionedSchema: BudgetMateSchemaV1.self)
 
-        XCTAssertEqual(versionedSchema, shippingSchema)
+        XCTAssertEqual(
+            physicalContract(in: versionedSchema),
+            LegacyUnversionedStoreFixture.shippingSchemaContract
+        )
         XCTAssertEqual(versionedSchema.version, Schema.Version(1, 0, 0))
-        XCTAssertEqual(BudgetMateSchemaMigrationPlan.schemas.count, 1)
+        XCTAssertEqual(BudgetMateSchemaMigrationPlan.schemas.count, 2)
         XCTAssertEqual(
             ObjectIdentifier(BudgetMateSchemaMigrationPlan.schemas[0]),
             ObjectIdentifier(BudgetMateSchemaV1.self)
         )
-        XCTAssertTrue(BudgetMateSchemaMigrationPlan.stages.isEmpty)
-
-        XCTAssertEqual(
-            entityContract(in: versionedSchema),
-            [
-                "Settlement": [
-                    "amount": false,
-                    "date": false,
-                    "fromMemberId": false,
-                    "id": false,
-                    "needsSync": false,
-                    "ownerUserId": false,
-                    "toMemberId": false
-                ],
-                "Transaction": [
-                    "amount": false,
-                    "category": false,
-                    "createdAt": false,
-                    "createdByMemberId": false,
-                    "date": false,
-                    "id": false,
-                    "needsSync": false,
-                    "ownerUserId": false,
-                    "paymentMethod": true,
-                    "recurrenceRule": true,
-                    "splits": false,
-                    "title": false,
-                    "type": false
-                ],
-                "TransactionSplit": [
-                    "amount": false,
-                    "id": false,
-                    "memberId": false,
-                    "transaction": true
-                ]
-            ]
-        )
+        XCTAssertEqual(BudgetMateSchemaMigrationPlan.stages.count, 1)
 
         let transaction = try XCTUnwrap(versionedSchema.entitiesByName["Transaction"])
         let splits = try XCTUnwrap(transaction.relationshipsByName["splits"])
@@ -69,12 +35,57 @@ final class SwiftDataSchemaCompatibilityTests: XCTestCase {
         XCTAssertTrue(parent.isToOneRelationship)
     }
 
+    func testVersionedV2PreservesEntityAndRelationshipIdentityWithOptionalMoneyFields() throws {
+        let v1 = Schema(versionedSchema: BudgetMateSchemaV1.self)
+        let v2 = Schema(versionedSchema: BudgetMateSchemaV2.self)
+
+        XCTAssertEqual(v2.version, Schema.Version(2, 0, 0))
+        XCTAssertEqual(
+            Set(v2.entities.map(\.name)),
+            Set(v1.entities.map(\.name))
+        )
+        XCTAssertEqual(
+            Set(BudgetMateSchemaMigrationPlan.schemas.map { $0.versionIdentifier }),
+            [Schema.Version(1, 0, 0), Schema.Version(2, 0, 0)]
+        )
+
+        for entityName in ["Transaction", "TransactionSplit", "Settlement"] {
+            let oldEntity = try XCTUnwrap(v1.entitiesByName[entityName])
+            let newEntity = try XCTUnwrap(v2.entitiesByName[entityName])
+            let oldProperties = Set(oldEntity.properties.map(\.name))
+            XCTAssertTrue(
+                oldProperties.isSubset(of: Set(newEntity.properties.map(\.name))),
+                "V2 removed a V1 property from \(entityName)"
+            )
+        }
+
+        let transaction = try XCTUnwrap(v2.entitiesByName["Transaction"])
+        XCTAssertEqual(transaction.attributesByName["amountMinorUnits"]?.isOptional, true)
+        XCTAssertEqual(transaction.attributesByName["currencyCode"]?.isOptional, true)
+        let splits = try XCTUnwrap(transaction.relationshipsByName["splits"])
+        XCTAssertEqual(splits.destination, "TransactionSplit")
+        XCTAssertEqual(splits.inverseName, "transaction")
+        XCTAssertEqual(splits.deleteRule, .cascade)
+
+        let split = try XCTUnwrap(v2.entitiesByName["TransactionSplit"])
+        let parent = try XCTUnwrap(split.relationshipsByName["transaction"])
+        XCTAssertEqual(parent.destination, "Transaction")
+        XCTAssertEqual(parent.inverseName, "splits")
+        XCTAssertEqual(parent.deleteRule, .nullify)
+        XCTAssertEqual(split.attributesByName["amountMinorUnits"]?.isOptional, true)
+        XCTAssertEqual(split.attributesByName["currencyCode"]?.isOptional, true)
+
+        let settlement = try XCTUnwrap(v2.entitiesByName["Settlement"])
+        XCTAssertEqual(settlement.attributesByName["amountMinorUnits"]?.isOptional, true)
+        XCTAssertEqual(settlement.attributesByName["currencyCode"]?.isOptional, true)
+    }
+
     func testFreshVersionedFileBackedStoreSavesAndReopens() throws {
         let location = try makeStoreLocation()
         defer { try? FileManager.default.removeItem(at: location.directory) }
 
         try withVersionedStore(at: location.storeURL) { context in
-            let transaction = Transaction(
+            let transaction = BudgetMateSchemaV2.Transaction(
                 id: LegacyUnversionedStoreFixture.expenseID,
                 title: "Fresh transaction",
                 amount: 42.25,
@@ -374,6 +385,27 @@ final class SwiftDataSchemaCompatibilityTests: XCTestCase {
         XCTAssertTrue(settlement.needsSync, file: file, line: line)
     }
 
+    private func physicalContract(in schema: Schema) -> LegacySchemaPhysicalContract {
+        var relationships: [String: LegacySchemaRelationshipContract] = [:]
+        for entity in schema.entities {
+            for property in entity.properties {
+                guard let relationship = entity.relationshipsByName[property.name] else {
+                    continue
+                }
+                relationships[entity.name + "." + relationship.name] = LegacySchemaRelationshipContract(
+                    destination: relationship.destination,
+                    inverseName: relationship.inverseName ?? "",
+                    deleteRule: String(describing: relationship.deleteRule),
+                    isToOne: relationship.isToOneRelationship
+                )
+            }
+        }
+        return LegacySchemaPhysicalContract(
+            entities: entityContract(in: schema),
+            relationships: relationships
+        )
+    }
+
     private func entityContract(in schema: Schema) -> [String: [String: Bool]] {
         Dictionary(uniqueKeysWithValues: schema.entities.map { entity in
             (
@@ -413,12 +445,12 @@ final class SwiftDataSchemaCompatibilityTests: XCTestCase {
             for: schema,
             configurations: [configuration]
         )
-        return try snapshot(from: container.mainContext)
+        return try snapshotV1(from: container.mainContext)
     }
 
     private func versionedSnapshot(at storeURL: URL) throws -> StoreSnapshot {
         try withVersionedStore(at: storeURL) { context in
-            try snapshot(from: context)
+            try snapshotV2(from: context)
         }
     }
 
@@ -441,15 +473,38 @@ final class SwiftDataSchemaCompatibilityTests: XCTestCase {
         return try operation(container.mainContext)
     }
 
-    private func snapshot(from context: ModelContext) throws -> StoreSnapshot {
+    private func snapshotV1(from context: ModelContext) throws -> StoreSnapshot {
+        let transactions = try context.fetch(
+            FetchDescriptor<BudgetMateSchemaV1.Transaction>()
+        )
+            .map { TransactionSnapshot(v1: $0) }
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+        let splits = try context.fetch(
+            FetchDescriptor<BudgetMateSchemaV1.TransactionSplit>()
+        )
+            .map { SplitSnapshot(v1: $0) }
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+        let settlements = try context.fetch(
+            FetchDescriptor<BudgetMateSchemaV1.Settlement>()
+        )
+            .map { SettlementSnapshot(v1: $0) }
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+        return StoreSnapshot(
+            transactions: transactions,
+            splits: splits,
+            settlements: settlements
+        )
+    }
+
+    private func snapshotV2(from context: ModelContext) throws -> StoreSnapshot {
         let transactions = try context.fetch(FetchDescriptor<Transaction>())
-            .map(TransactionSnapshot.init)
+            .map { TransactionSnapshot(v2: $0) }
             .sorted { $0.id.uuidString < $1.id.uuidString }
         let splits = try context.fetch(FetchDescriptor<TransactionSplit>())
-            .map(SplitSnapshot.init)
+            .map { SplitSnapshot(v2: $0) }
             .sorted { $0.id.uuidString < $1.id.uuidString }
         let settlements = try context.fetch(FetchDescriptor<Settlement>())
-            .map(SettlementSnapshot.init)
+            .map { SettlementSnapshot(v2: $0) }
             .sorted { $0.id.uuidString < $1.id.uuidString }
         return StoreSnapshot(
             transactions: transactions,
@@ -480,7 +535,25 @@ private struct TransactionSnapshot {
     let needsSync: Bool
     let splitIDs: [UUID]
 
-    init(_ transaction: Transaction) {
+    init(v1 transaction: BudgetMateSchemaV1.Transaction) {
+        id = transaction.id
+        title = transaction.title
+        amount = transaction.amount
+        type = transaction.type
+        category = transaction.category
+        paymentMethod = transaction.paymentMethod
+        createdByMemberID = transaction.createdByMemberId
+        date = transaction.date
+        createdAt = transaction.createdAt
+        recurrenceRule = transaction.recurrenceRule
+        ownerUserID = transaction.ownerUserId
+        needsSync = transaction.needsSync
+        splitIDs = transaction.splits
+            .map(\.id)
+            .sorted { $0.uuidString < $1.uuidString }
+    }
+
+    init(v2 transaction: Transaction) {
         id = transaction.id
         title = transaction.title
         amount = transaction.amount
@@ -505,7 +578,14 @@ private struct SplitSnapshot {
     let amount: Double
     let transactionID: UUID?
 
-    init(_ split: TransactionSplit) {
+    init(v1 split: BudgetMateSchemaV1.TransactionSplit) {
+        id = split.id
+        memberID = split.memberId
+        amount = split.amount
+        transactionID = split.transaction?.id
+    }
+
+    init(v2 split: TransactionSplit) {
         id = split.id
         memberID = split.memberId
         amount = split.amount
@@ -522,7 +602,17 @@ private struct SettlementSnapshot {
     let ownerUserID: String
     let needsSync: Bool
 
-    init(_ settlement: Settlement) {
+    init(v1 settlement: BudgetMateSchemaV1.Settlement) {
+        id = settlement.id
+        fromMemberID = settlement.fromMemberId
+        toMemberID = settlement.toMemberId
+        amount = settlement.amount
+        date = settlement.date
+        ownerUserID = settlement.ownerUserId
+        needsSync = settlement.needsSync
+    }
+
+    init(v2 settlement: Settlement) {
         id = settlement.id
         fromMemberID = settlement.fromMemberId
         toMemberID = settlement.toMemberId
