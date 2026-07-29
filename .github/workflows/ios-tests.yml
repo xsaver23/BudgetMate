@@ -49,6 +49,7 @@ jobs:
           set -euo pipefail
           fixture="supabase/tests/02c_legacy_fixture.sql"
           migration="supabase/migrations/20260729000100_money_server_bridge.sql"
+          uuid_case_fix="supabase/migrations/20260729000200_money_server_bridge_uuid_case_fix.sql"
           contract="supabase/tests/02c_money_server_bridge_contract.sql"
           rollback_dump="${RUNNER_TEMP}/budgetmate-02c-legacy.dump"
           postgres_container="${{ job.services.postgres.id }}"
@@ -64,6 +65,8 @@ jobs:
 
           psql --dbname budgetmate_02c --file "${migration}"
           psql --dbname budgetmate_02c --file "${migration}"
+          psql --dbname budgetmate_02c --file "${uuid_case_fix}"
+          psql --dbname budgetmate_02c --file "${uuid_case_fix}"
           psql --dbname budgetmate_02c --file "${contract}"
 
           dropdb budgetmate_02c
