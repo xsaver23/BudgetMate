@@ -51,9 +51,16 @@ jobs:
           migration="supabase/migrations/20260729000100_money_server_bridge.sql"
           contract="supabase/tests/02c_money_server_bridge_contract.sql"
           rollback_dump="${RUNNER_TEMP}/budgetmate-02c-legacy.dump"
+          postgres_container="${{ job.services.postgres.id }}"
 
           psql --dbname budgetmate_02c --file "${fixture}"
-          pg_dump --format custom --dbname budgetmate_02c --file "${rollback_dump}"
+          docker exec \
+            -e PGPASSWORD="${PGPASSWORD}" \
+            "${postgres_container}" \
+            pg_dump \
+              --username "${PGUSER}" \
+              --format custom \
+              --dbname budgetmate_02c > "${rollback_dump}"
 
           psql --dbname budgetmate_02c --file "${migration}"
           psql --dbname budgetmate_02c --file "${migration}"
@@ -61,7 +68,13 @@ jobs:
 
           dropdb budgetmate_02c
           createdb budgetmate_02c
-          pg_restore --dbname budgetmate_02c "${rollback_dump}"
+          docker exec \
+            -i \
+            -e PGPASSWORD="${PGPASSWORD}" \
+            "${postgres_container}" \
+            pg_restore \
+              --username "${PGUSER}" \
+              --dbname budgetmate_02c < "${rollback_dump}"
           restored="$(
             psql --dbname budgetmate_02c --tuples-only --no-align --command "
               select
