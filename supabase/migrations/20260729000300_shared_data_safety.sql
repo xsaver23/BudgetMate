@@ -1,9 +1,10 @@
 -- Gate C: authoritative shared-data mutation safety.
 --
--- This is an additive, forward-only migration. It deliberately starts with
--- the server gate disabled. Once applied, transaction/settlement writes must
--- use the CAS/idempotent RPCs below; direct PostgREST writes are removed from
--- the client-facing RLS surface. Existing memberships retain read access.
+-- This is a forward-only migration. It deliberately starts with the server
+-- gate disabled, retires the identified obsolete mutation surface, and adds
+-- the Gate C contract. Once applied, transaction/settlement writes must use
+-- the CAS/idempotent RPCs below; direct PostgREST writes are removed from the
+-- client-facing RLS surface. Existing memberships retain read access.
 -- Activation sequence: apply and rehearse this migration, upgrade all clients
 -- that understand the RPC contract, verify the controlled beta, then have the
 -- owner enable budget_data_safety_config.writes_enabled out of band. There is
@@ -33,6 +34,36 @@ alter table public.budget_settlements
 
 alter table public.budget_sync_tombstones
   add column if not exists deleted_by_mutation_id uuid;
+
+-- A pre-00300 production drift introduced an authenticated, security-definer
+-- mutation surface that does not consult budget_data_safety_config. Retire the
+-- triggers first so their helper functions can be dropped without leaving an
+-- alternate mutation-ID or tombstone path behind. Dropping the RPCs is stronger
+-- than only revoking EXECUTE: PostgREST cannot expose an obsolete signature and
+-- a stale client cannot invoke it through a cached function endpoint.
+drop trigger if exists b_clear_reused_transaction_mutation_id
+on public.budget_transactions;
+drop trigger if exists b_clear_reused_settlement_mutation_id
+on public.budget_settlements;
+drop trigger if exists z_capture_budget_transaction_delete
+on public.budget_transactions;
+drop trigger if exists z_capture_budget_settlement_delete
+on public.budget_settlements;
+drop trigger if exists z_clear_budget_transaction_tombstone
+on public.budget_transactions;
+drop trigger if exists z_clear_budget_settlement_tombstone
+on public.budget_settlements;
+
+drop function if exists public.clear_reused_financial_mutation_id();
+drop function if exists public.capture_budget_data_tombstone();
+drop function if exists public.clear_budget_data_tombstone();
+
+drop function if exists public.save_budget_transaction_cas(jsonb, bigint, uuid);
+drop function if exists public.save_budget_settlement_cas(jsonb, bigint, uuid);
+drop function if exists public.save_budget_transactions_cas(jsonb);
+drop function if exists public.save_budget_settlements_cas(jsonb);
+drop function if exists public.delete_budget_transaction_cas(uuid, uuid, bigint);
+drop function if exists public.delete_budget_settlement_cas(uuid, uuid, bigint);
 
 -- Existing user_id is the only authenticated writer identity preserved by the
 -- shipped schema. Attribute that history explicitly; rows created after this
@@ -422,7 +453,9 @@ drop policy if exists "Budget members can update own shared transactions" on pub
 drop policy if exists "Budget members can delete own shared transactions" on public.budget_transactions;
 drop policy if exists "Budget members can delete shared transactions" on public.budget_transactions;
 drop policy if exists "Active members can create owned transactions" on public.budget_transactions;
+drop policy if exists "Active members can update transactions" on public.budget_transactions;
 drop policy if exists "Creators and owners can update transactions" on public.budget_transactions;
+drop policy if exists "Creators and owners can delete transactions" on public.budget_transactions;
 drop policy if exists "Active members can delete transactions" on public.budget_transactions;
 drop policy if exists "Users can read their budget transactions" on public.budget_transactions;
 drop policy if exists "Budget members can read shared transactions" on public.budget_transactions;
@@ -436,6 +469,7 @@ drop policy if exists "Budget members can create shared settlements" on public.b
 drop policy if exists "Budget members can delete shared settlements" on public.budget_settlements;
 drop policy if exists "Creators and owners can update settlements" on public.budget_settlements;
 drop policy if exists "Active members can create owned settlements" on public.budget_settlements;
+drop policy if exists "Creators and owners can delete settlements" on public.budget_settlements;
 drop policy if exists "Active members can delete settlements" on public.budget_settlements;
 drop policy if exists "Users can read their budget settlements" on public.budget_settlements;
 drop policy if exists "Budget members can read shared settlements" on public.budget_settlements;
@@ -799,3 +833,5 @@ to authenticated
 using (public.gate_c_is_active_member(budget_id, (select auth.uid())));
 
 commit;
+
+notify pgrst, 'reload schema';

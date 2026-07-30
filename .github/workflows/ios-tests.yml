@@ -48,13 +48,16 @@ jobs:
         run: |
           set -euo pipefail
           fixture="supabase/tests/02c_legacy_fixture.sql"
+          legacy_surface_fixture="supabase/tests/03_gate_c_legacy_surface_fixture.sql"
           migration="supabase/migrations/20260729000100_money_server_bridge.sql"
           uuid_case_fix="supabase/migrations/20260729000200_money_server_bridge_uuid_case_fix.sql"
           contract="supabase/tests/02c_money_server_bridge_contract.sql"
           shared_data_safety_migration="supabase/migrations/20260729000300_shared_data_safety.sql"
+          shared_data_safety_disabled_contract="supabase/tests/03_shared_data_safety_disabled_contract.sql"
           shared_data_safety_contract="supabase/tests/03_shared_data_safety_contract.sql"
           trigger_permission_fix="supabase/migrations/20260729000400_money_bridge_trigger_permission_fix.sql"
           trigger_permission_contract="supabase/tests/02c_trigger_permission_contract.sql"
+          legacy_surface_rollback_contract="supabase/tests/03_gate_c_legacy_surface_rollback_contract.sql"
           gate_c_rollback_dump="${RUNNER_TEMP}/budgetmate-gate-c-pre-00300.dump"
           postgres_container="${{ job.services.postgres.id }}"
 
@@ -83,6 +86,52 @@ jobs:
                   where table_schema = 'public'
                     and table_name = 'budget_transactions'
                     and column_name = 'created_by_user_id'
+                ),
+                (
+                  select count(*) = 2
+                  from information_schema.columns
+                  where table_schema = 'public'
+                    and table_name in ('budget_transactions', 'budget_settlements')
+                    and column_name = 'last_mutation_id'
+                ),
+                (
+                  select count(*) = 6
+                  from pg_trigger
+                  where tgname in (
+                    'b_clear_reused_transaction_mutation_id',
+                    'b_clear_reused_settlement_mutation_id',
+                    'z_capture_budget_transaction_delete',
+                    'z_capture_budget_settlement_delete',
+                    'z_clear_budget_transaction_tombstone',
+                    'z_clear_budget_settlement_tombstone'
+                  )
+                    and not tgisinternal
+                ),
+                (
+                  select count(*) = 6
+                  from pg_policies
+                  where schemaname = 'public'
+                    and tablename in ('budget_transactions', 'budget_settlements')
+                    and policyname in (
+                      'Active members can create owned transactions',
+                      'Active members can update transactions',
+                      'Creators and owners can delete transactions',
+                      'Active members can create owned settlements',
+                      'Creators and owners can update settlements',
+                      'Creators and owners can delete settlements'
+                    )
+                ),
+                (
+                  select count(*) = 6
+                  from (values
+                    (to_regprocedure('public.save_budget_transaction_cas(jsonb,bigint,uuid)')),
+                    (to_regprocedure('public.save_budget_settlement_cas(jsonb,bigint,uuid)')),
+                    (to_regprocedure('public.save_budget_transactions_cas(jsonb)')),
+                    (to_regprocedure('public.save_budget_settlements_cas(jsonb)')),
+                    (to_regprocedure('public.delete_budget_transaction_cas(uuid,uuid,bigint)')),
+                    (to_regprocedure('public.delete_budget_settlement_cas(uuid,uuid,bigint)'))
+                  ) as legacy_functions(regprocedure)
+                  where regprocedure is not null
                 );
             "
           }
@@ -96,6 +145,7 @@ jobs:
           psql --set ON_ERROR_STOP=1 --dbname budgetmate_02c --file "${trigger_permission_fix}"
           psql --set ON_ERROR_STOP=1 --dbname budgetmate_02c --file "${trigger_permission_fix}"
           psql --dbname budgetmate_02c --file "${trigger_permission_contract}"
+          psql --dbname budgetmate_02c --file "${legacy_surface_fixture}"
           rollback_baseline="$(database_fingerprint)"
           docker exec \
             -e PGPASSWORD="${PGPASSWORD}" \
@@ -109,6 +159,7 @@ jobs:
           # exact state, including an idempotent retry of the pending migration.
           psql --dbname budgetmate_02c --file "${shared_data_safety_migration}"
           psql --dbname budgetmate_02c --file "${shared_data_safety_migration}"
+          psql --dbname budgetmate_02c --file "${shared_data_safety_disabled_contract}"
           psql --dbname budgetmate_02c --file "${shared_data_safety_contract}"
           bash supabase/tests/03_shared_data_safety_concurrency.sh
           psql --dbname budgetmate_02c --file "${trigger_permission_contract}"
@@ -129,6 +180,7 @@ jobs:
             echo "Restored database: ${restored}" >&2
             exit 1
           fi
+          psql --dbname budgetmate_02c --file "${legacy_surface_rollback_contract}"
           psql --dbname budgetmate_02c --file "${trigger_permission_contract}"
 
   ios:

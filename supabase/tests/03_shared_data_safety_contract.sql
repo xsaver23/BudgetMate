@@ -16,6 +16,51 @@ begin
     raise exception 'Gate C server writes must start disabled';
   end if;
 
+  if (select count(*)
+      from (values
+        (to_regprocedure('public.save_budget_transaction_cas(jsonb,bigint,uuid)')),
+        (to_regprocedure('public.save_budget_settlement_cas(jsonb,bigint,uuid)')),
+        (to_regprocedure('public.save_budget_transactions_cas(jsonb)')),
+        (to_regprocedure('public.save_budget_settlements_cas(jsonb)')),
+        (to_regprocedure('public.delete_budget_transaction_cas(uuid,uuid,bigint)')),
+        (to_regprocedure('public.delete_budget_settlement_cas(uuid,uuid,bigint)')),
+        (to_regprocedure('public.clear_reused_financial_mutation_id()')),
+        (to_regprocedure('public.capture_budget_data_tombstone()')),
+        (to_regprocedure('public.clear_budget_data_tombstone()'))
+      ) as retired_objects(regprocedure)
+      where regprocedure is not null) <> 0 then
+    raise exception 'Legacy authenticated mutation surface remains callable';
+  end if;
+
+  if exists (
+       select 1
+       from pg_trigger
+       where tgname in (
+         'b_clear_reused_transaction_mutation_id',
+         'b_clear_reused_settlement_mutation_id',
+         'z_capture_budget_transaction_delete',
+         'z_capture_budget_settlement_delete',
+         'z_clear_budget_transaction_tombstone',
+         'z_clear_budget_settlement_tombstone'
+       )
+         and not tgisinternal
+     ) then
+    raise exception 'Legacy mutation-ID or tombstone triggers remain';
+  end if;
+
+  if exists (
+       select 1
+       from pg_policies
+       where schemaname = 'public'
+         and policyname in (
+           'Active members can update transactions',
+           'Creators and owners can delete transactions',
+           'Creators and owners can delete settlements'
+         )
+     ) then
+    raise exception 'Unmatched legacy write policies remain';
+  end if;
+
   if (select created_by_user_id from public.budget_transactions
       where id = '20000000-0000-0000-0000-000000000001')
      <> '90000000-0000-0000-0000-000000000001'
@@ -68,7 +113,28 @@ begin
     );
     raise exception 'Disabled Gate C accepted a transaction mutation';
   exception
-    when sqlstate '55000' then null;
+    when sqlstate '55000' then
+      get stacked diagnostics error_message = message_text;
+      if error_message <> 'Shared-data safety writes are not enabled.' then
+        raise;
+      end if;
+  end;
+  begin
+    perform public.mutate_budget_settlement(
+      '10000000-0000-0000-0000-000000000001',
+      '40000000-0000-0000-0000-000000000097',
+      0,
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa0000',
+      'insert',
+      '{"from_member_id":"80000000-0000-0000-0000-000000000002","to_member_id":"80000000-0000-0000-0000-000000000001","amount":1}'::jsonb
+    );
+    raise exception 'Disabled Gate C accepted a settlement mutation';
+  exception
+    when sqlstate '55000' then
+      get stacked diagnostics error_message = message_text;
+      if error_message <> 'Shared-data safety writes are not enabled.' then
+        raise;
+      end if;
   end;
 
   update public.budget_data_safety_config

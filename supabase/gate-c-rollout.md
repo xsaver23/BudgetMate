@@ -6,6 +6,15 @@ client-role direct transaction and settlement writes, so it must not be applied
 until the intended controlled-beta client has the Gate C RPC contract and its
 distribution/enable sequence is ready.
 
+The production project also contains pre-00300 schema drift: both financial
+tables already have `last_mutation_id`, and an older authenticated mutation
+surface exists outside the migration ledger. The pending migration must be the
+corrected version that drops all six legacy CAS RPCs, the obsolete mutation-ID
+and tombstone helper/trigger surface, and the three unmatched legacy write
+policies before it creates the Gate C contract. Do not apply an earlier copy of
+00300. Authorized reads and the 00400 trigger-permission contract must remain
+intact.
+
 ## Operational write window
 
 Applying `00300` immediately revokes direct DML, even though the RPC gate stays
@@ -42,6 +51,41 @@ Capture its output with the change record. Confirm it plans only
 `20260729000300_shared_data_safety.sql`, and that the recorded history still
 contains `00400`.
 
+## Required logical backup and restore verification
+
+No production backup is claimed by this repository. Before the maintenance
+window, the rollout owner must approve an access-restricted, encrypted logical
+backup and its restore verification. Keep credentials, tokens, emails, private
+transaction text, and amounts out of command output and evidence.
+
+The approved operator may use the linked CLI connection path to create the
+following owner-controlled artifacts in a protected location. The exact
+directory and checksum are change-record metadata, not application config:
+
+```bash
+umask 077
+backup_dir="/owner-controlled/budgetmate-gate-c-backup-YYYYMMDD"
+mkdir -p "${backup_dir}"
+supabase db dump --linked --schema public \
+  --file "${backup_dir}/public-schema-and-data.sql"
+supabase db dump --linked --schema public --data-only \
+  --file "${backup_dir}/public-data.sql"
+supabase db dump --linked --role-only \
+  --file "${backup_dir}/cluster-roles.sql"
+shasum -a 256 "${backup_dir}"/*.sql
+```
+
+The operator must confirm that the schema/data export contains the deployed
+public objects and records needed to restore the pre-00300 state, and must
+capture the migration-ledger history separately if it is not included in the
+approved dump. Restore the artifacts into an isolated PostgreSQL rehearsal,
+then compare opaque schema fingerprints, authorized read counts, the absence
+of Gate C objects, the presence of the pre-00300 legacy surface, and the 00400
+trigger contract. Preserve the checksum and restore result with the change
+record. Do not enable PITR, alter a billing plan, or purchase retention in this
+implementation chunk; those are separate owner approvals if a platform backup
+is selected instead of the logical backup.
+
 Before the maintenance window, run this read-only SQL-editor preflight and
 capture the result. It checks the tables required by `00300`, including the
 sync tombstone table that the migration alters but does not create, and rejects
@@ -74,8 +118,9 @@ $$;
 
 ## Authorized deployment and verification
 
-Only after the rollout owner has approved a fresh backup and the client
-compatibility check, an operator may apply the pending migration:
+Only after the rollout owner has approved a fresh secure backup, its isolated
+restore/fingerprint verification, and the client compatibility check, an
+operator may apply the corrected pending migration:
 
 ```bash
 supabase db push --linked --include-all
@@ -129,8 +174,11 @@ through the disabled invitation flow during the rollout.
 
 There is no down migration. If the migration must be reversed, stop the
 rollout, preserve the incident evidence, and restore the verified pre-`00300`
-backup under the database owner’s change process. That backup must include
+backup under the database owner’s change process. If the owner-approved logical
+backup and restore verification are not complete, stop rather than applying
+00300. That backup must include
 `00100`, `00200`, and `00400`; restoring the older pre-money-bridge snapshot
 would also discard unrelated deployed work. After restore, verify `00300` is
 absent, `budget_data_safety_config` is absent, and the `00400` trigger
-permission contract still holds.
+permission contract still holds, along with the expected pre-00300 legacy
+surface fingerprint.

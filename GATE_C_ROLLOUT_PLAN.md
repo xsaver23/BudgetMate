@@ -15,6 +15,10 @@ release checks are all green on identified commits.
 - Migrations `20260729000100`, `20260729000200`, and
   `20260729000400` are deployed.
 - Migration `20260729000300_shared_data_safety.sql` is not deployed.
+- The linked project has pre-00300 `last_mutation_id` columns plus an
+  unledgered legacy mutation surface. The pending migration must retire that
+  surface before production application; the older 00300 text is not an
+  acceptable production candidate.
 - The Gate C server configuration does not exist in production yet.
 - iOS `MoneyServerBridgeRollout` and `SharedDataSafetyGate` default to
   disabled.
@@ -27,9 +31,17 @@ release checks are all green on identified commits.
 ## Scope guardrails
 
 - No new product feature, UI redesign, schema redesign, or unrelated cleanup.
-- One additive server migration: the already-merged `00300`.
+- One forward server migration: the already-merged `00300`.
+- The corrected 00300 may remove only the six identified legacy CAS RPCs, their
+  obsolete mutation-ID/tombstone helpers and triggers, and the three identified
+  unmatched transaction/settlement write policies. It must preserve authorized
+  reads and the 00400 trigger contract.
 - No destructive down migration and no production restore unless a verified
   incident requires the pre-rollout backup.
+- This repository does not claim that a production backup exists. Before any
+  production apply, the owner must approve creation of an access-restricted,
+  encrypted logical backup and a restore/fingerprint rehearsal. Do not enable
+  PITR or change a billing/plan setting as part of this code chunk.
 - Server writes stay disabled while the migration is deployed and verified.
 - Client activation stays disabled until the server migration and server
   configuration are verified.
@@ -44,16 +56,23 @@ release checks are all green on identified commits.
 Owner: Gate C server track.
 
 1. Verify the live migration ledger, schema prerequisites, policies, function
-   signatures, and a current recoverable backup.
-2. Rehearse applying `00300` after already-applied `00400`. Supabase requires
+   signatures, and the exact pre-00300 legacy drift. Confirm the corrected
+   migration retires all six authenticated legacy CAS RPCs, the obsolete
+   mutation-ID/tombstone helper-trigger surface, and the three unmatched write
+   policies while preserving reads and 00400.
+2. With owner approval, create a secure logical production backup, record an
+   opaque checksum and restricted storage location, and restore it into an
+   isolated PostgreSQL rehearsal. A dry-run or an unverified CLI export is not
+   a rollback backup.
+3. Rehearse applying `00300` after already-applied `00400`. Supabase requires
    an explicit `--include-all` because `00300` sorts before the latest remote
    migration.
-3. Prove migration replay/idempotency, PostgreSQL contract tests,
+4. Prove migration replay/idempotency, PostgreSQL contract tests,
    concurrency tests, old-client read behavior, and rollback restore.
-4. Dry-run the exact production command and prove it selects only `00300`.
-5. With separate owner approval, deploy `00300` while
+5. Dry-run the exact production command and prove it selects only `00300`.
+6. With separate owner approval, deploy `00300` while
    `writes_enabled = false`.
-6. Postflight must prove:
+7. Postflight must prove:
    - Gate C reports disabled.
    - Existing authorized reads still work.
    - Direct transaction and settlement writes are denied.
