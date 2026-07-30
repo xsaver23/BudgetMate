@@ -343,6 +343,81 @@ final class CloudPersistenceCharacterizationTests: XCTestCase {
         XCTAssertNil(settingsObject["category_visibility"])
     }
 
+    func testGateCConfigurationDefaultsDisabledAndPreservesPendingWrites() {
+        let configuration = GateCClientRolloutConfiguration(values: [:])
+        XCTAssertEqual(configuration.state, .disabled)
+        XCTAssertFalse(configuration.isEnabled)
+        XCTAssertFalse(SharedDataSafetyGate.isEnabled(configuration: configuration))
+        XCTAssertFalse(MoneyServerBridgeRollout.isEnabled(configuration: configuration))
+        XCTAssertTrue(configuration.disabledMessage.localizedCaseInsensitiveContains("temporarily unavailable"))
+
+        let transaction = BudgetMateTestFixtures.expense()
+        let settlement = BudgetMateTestFixtures.settlement()
+        transaction.needsSync = true
+        settlement.needsSync = true
+
+        XCTAssertTrue(
+            SupabaseBudgetSyncService.shouldDeferFinancialWrites(
+                transactions: [transaction],
+                settlements: [settlement],
+                gateEnabled: configuration.isEnabled
+            )
+        )
+        XCTAssertTrue(transaction.needsSync)
+        XCTAssertTrue(settlement.needsSync)
+    }
+
+    func testGateCConfigurationEnablesBothGatesOnlyAfterServerReadiness() {
+        let configuration = GateCClientRolloutConfiguration(values: [
+            GateCClientRolloutConfiguration.serverReadyKey: "YES",
+            GateCClientRolloutConfiguration.sharedDataSafetyKey: "YES",
+            GateCClientRolloutConfiguration.moneyServerBridgeKey: "YES"
+        ])
+
+        XCTAssertEqual(configuration.state, .enabled)
+        XCTAssertTrue(configuration.isEnabled)
+        XCTAssertTrue(SharedDataSafetyGate.isEnabled(configuration: configuration))
+        XCTAssertTrue(MoneyServerBridgeRollout.isEnabled(configuration: configuration))
+        XCTAssertFalse(
+            SupabaseBudgetSyncService.shouldDeferFinancialWrites(
+                transactions: [BudgetMateTestFixtures.expense()],
+                settlements: [],
+                gateEnabled: configuration.isEnabled
+            )
+        )
+    }
+
+    func testGateCConfigurationFailsClosedForInconsistentOrInvalidConfiguration() {
+        let inconsistent = GateCClientRolloutConfiguration(values: [
+            GateCClientRolloutConfiguration.serverReadyKey: "YES",
+            GateCClientRolloutConfiguration.sharedDataSafetyKey: "YES",
+            GateCClientRolloutConfiguration.moneyServerBridgeKey: "NO"
+        ])
+        let serverNotReady = GateCClientRolloutConfiguration(values: [
+            GateCClientRolloutConfiguration.serverReadyKey: "NO",
+            GateCClientRolloutConfiguration.sharedDataSafetyKey: "YES",
+            GateCClientRolloutConfiguration.moneyServerBridgeKey: "YES"
+        ])
+        let invalid = GateCClientRolloutConfiguration(values: [
+            GateCClientRolloutConfiguration.serverReadyKey: "YES",
+            GateCClientRolloutConfiguration.sharedDataSafetyKey: "true",
+            GateCClientRolloutConfiguration.moneyServerBridgeKey: "YES"
+        ])
+
+        for configuration in [inconsistent, serverNotReady, invalid] {
+            XCTAssertEqual(configuration.state, .inconsistent)
+            XCTAssertFalse(configuration.isEnabled)
+            XCTAssertFalse(SharedDataSafetyGate.isEnabled(configuration: configuration))
+            XCTAssertFalse(MoneyServerBridgeRollout.isEnabled(configuration: configuration))
+            XCTAssertTrue(configuration.disabledMessage.localizedCaseInsensitiveContains("configuration is incomplete"))
+        }
+    }
+
+    func testSharedDataSafetyRPCSelectionUsesTheDedicatedMutationEndpoints() {
+        XCTAssertEqual(SharedDataSafetyMutationRPC.transaction.name, "mutate_budget_transaction")
+        XCTAssertEqual(SharedDataSafetyMutationRPC.settlement.name, "mutate_budget_settlement")
+    }
+
     func testEnabledMoneyServerBridgeDualFieldsRoundTripWithoutChangingLegacyValues() throws {
         let transaction = BudgetMateTestFixtures.equalSplitExpense()
         transaction.amountMinorUnits = 10_000

@@ -108,10 +108,30 @@ docs/shared-budgets-architecture.md
 // Host only: do not include https:// because xcconfig treats // as a comment.
 SUPABASE_PROJECT_URL = your-project.supabase.co
 SUPABASE_PUBLISHABLE_KEY = your-publishable-key
+
+// Keep Gate C disabled in normal builds.
+BUDGETMATE_GATE_C_SERVER_READY = NO
+BUDGETMATE_GATE_C_ENABLED = NO
+BUDGETMATE_MONEY_SERVER_BRIDGE_ENABLED = NO
 ```
 
 The app adds the `https://` scheme at runtime. The local config file should not
 be committed.
+
+### Gate C activation
+
+Only after the production shared-data migration and mutation RPCs are deployed
+and verified, create the signed rollout build with all three settings below set
+to `YES` in `Supabase.local.xcconfig` (or its secure CI equivalent):
+
+```xcconfig
+BUDGETMATE_GATE_C_SERVER_READY = YES
+BUDGETMATE_GATE_C_ENABLED = YES
+BUDGETMATE_MONEY_SERVER_BRIDGE_ENABLED = YES
+```
+
+The app activates neither shared-data writes nor exact-money bridge fields if
+any marker is absent, `NO`, or malformed.
 
 Build check:
 

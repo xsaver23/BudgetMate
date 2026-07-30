@@ -46,11 +46,28 @@ private struct CloudRecordIdentityRow: Decodable {
     let id: UUID
 }
 
-/// PR02C ships the expanded DTO contract before any client depends on it.
-/// PR02D may replace this constant with the approved rollout mechanism only
-/// after the server migration has been deployed and verified.
+/// The money bridge shares Gate C's readiness/configuration contract, so it
+/// cannot be enabled independently of the safety RPC rollout.
 enum MoneyServerBridgeRollout {
-    static let isEnabled = false
+    static var isEnabled: Bool { isEnabled(configuration: .current) }
+
+    static func isEnabled(configuration: GateCClientRolloutConfiguration) -> Bool {
+        configuration.isEnabled
+    }
+}
+
+enum SharedDataSafetyMutationRPC {
+    case transaction
+    case settlement
+
+    var name: String {
+        switch self {
+        case .transaction:
+            return "mutate_budget_transaction"
+        case .settlement:
+            return "mutate_budget_settlement"
+        }
+    }
 }
 
 struct SharedDataSafetyMutationResult: Decodable, Equatable {
@@ -1256,9 +1273,10 @@ final class SupabaseBudgetSyncService {
 
     static func shouldDeferFinancialWrites(
         transactions: [Transaction],
-        settlements: [Settlement]
+        settlements: [Settlement],
+        gateEnabled: Bool = SharedDataSafetyGate.isEnabled
     ) -> Bool {
-        !SharedDataSafetyGate.isEnabled &&
+        !gateEnabled &&
             (transactions.contains(where: \.needsSync) || settlements.contains(where: \.needsSync))
     }
 
@@ -1890,7 +1908,7 @@ final class SupabaseBudgetSyncService {
         )
         do {
             return try await client
-                .rpc("mutate_budget_transaction", params: params)
+                .rpc(SharedDataSafetyMutationRPC.transaction.name, params: params)
                 .execute()
                 .value
         } catch {
@@ -1925,7 +1943,7 @@ final class SupabaseBudgetSyncService {
         )
         do {
             return try await client
-                .rpc("mutate_budget_transaction", params: params)
+                .rpc(SharedDataSafetyMutationRPC.transaction.name, params: params)
                 .execute()
                 .value
         } catch {
@@ -2025,7 +2043,7 @@ final class SupabaseBudgetSyncService {
         )
         do {
             return try await client
-                .rpc("mutate_budget_settlement", params: params)
+                .rpc(SharedDataSafetyMutationRPC.settlement.name, params: params)
                 .execute()
                 .value
         } catch {
@@ -2060,7 +2078,7 @@ final class SupabaseBudgetSyncService {
         )
         do {
             return try await client
-                .rpc("mutate_budget_settlement", params: params)
+                .rpc(SharedDataSafetyMutationRPC.settlement.name, params: params)
                 .execute()
                 .value
         } catch {
