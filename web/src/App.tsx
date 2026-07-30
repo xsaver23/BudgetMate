@@ -63,19 +63,24 @@ import type {
 } from "./domain/types";
 import {
   acceptCloudInvite,
+  buildSettlementGateCMutation,
+  buildTransactionDeleteGateCMutation,
+  buildTransactionGateCMutation,
   createCloudInvite,
   createCloudSharedBudget,
-  deleteCloudTransaction,
   fetchCloudState,
   fetchPendingInvites,
+  pendingGateCFinancialMutations,
+  queueGateCFinancialMutation,
+  replayGateCFinancialMutations,
   signInWithEmail,
   signOut,
   signUpWithEmail,
   upsertCloudMember,
-  upsertCloudSettlement,
   upsertCloudSettings,
-  upsertCloudTransaction
 } from "./data/cloudRepository";
+import type { QueuedGateCFinancialMutation } from "./data/gateCFinancialOutbox";
+import { gateCFinancialWritesEnabled, gateCFinancialWritesReadOnlyMessage } from "./data/gateCRollout";
 import {
   appStatesEqual,
   clearState,
@@ -303,6 +308,8 @@ function App() {
     () => settlementSuggestions(budgetTransactions, budgetSettlements, budgetMembers),
     [budgetTransactions, budgetSettlements, budgetMembers]
   );
+  const cloudFinancialWritesReadOnly = syncMode === "cloud" && !gateCFinancialWritesEnabled;
+  const financialMutationUserId = session?.user.id ?? state.currentUserId;
   const activeTabTitle: Record<Tab, string> = {
     dashboard: "Dashboard",
     transactions: "Transactions",
@@ -510,6 +517,16 @@ function App() {
 
         const refreshVersion = cloudDataVersion.current;
         try {
+          if (gateCFinancialWritesEnabled) {
+            const replayed = await replayGateCFinancialMutations(activeUser.id);
+            if (replayed.length > 0) {
+              cloudDataVersion.current += 1;
+              setCloudMessage(`Saved ${replayed.length} pending financial ${replayed.length === 1 ? "change" : "changes"}`);
+            }
+          } else if (pendingGateCFinancialMutations(activeUser.id).length > 0) {
+            setCloudMessage("Pending financial changes are deferred until this build is approved for Gate C writes.");
+          }
+
           const [nextState, invites] = await Promise.all([
             fetchCloudState(activeUser, request.preferredBudgetId),
             fetchPendingInvites(activeUser.email ?? "")
@@ -610,6 +627,19 @@ function App() {
     return operation;
   }
 
+  function queueFinancialMutation(createMutation: () => QueuedGateCFinancialMutation) {
+    try {
+      queueGateCFinancialMutation(createMutation());
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Financial change could not be queued safely.";
+      setCloudError(message);
+      setCloudMessage("Needs attention");
+      setToastMessage(message);
+      return false;
+    }
+  }
+
   function updateSettings(nextSettings: BudgetSettings) {
     setState((current) => ({
       ...current,
@@ -656,6 +686,10 @@ function App() {
   }
 
   function addTransaction(form: TransactionFormState) {
+    if (cloudFinancialWritesReadOnly) {
+      setToastMessage(gateCFinancialWritesReadOnlyMessage);
+      return;
+    }
     const amount = normalizeAmount(Number(form.amount));
     if (amount <= 0 || !form.title.trim()) {
       return;
@@ -690,13 +724,19 @@ function App() {
       splits
     };
 
+    if (syncMode === "cloud" && !queueFinancialMutation(() => buildTransactionGateCMutation(transaction, financialMutationUserId))) {
+      return;
+    }
+
     setState((current) => ({
       ...current,
       transactions: [transaction, ...current.transactions]
     }));
     setToastMessage("Transaction saved on this device");
     window.setTimeout(() => setToastMessage(""), 2600);
-    void runCloudMutation(() => upsertCloudTransaction(transaction, state.currentUserId));
+    if (syncMode === "cloud") {
+      void runCloudMutation(() => replayGateCFinancialMutations(financialMutationUserId).then(() => undefined));
+    }
     setIsAddingTransaction(false);
     window.setTimeout(() => addTransactionButtonRef.current?.focus(), 0);
   }
@@ -707,6 +747,10 @@ function App() {
   }
 
   function deleteTransaction(id: string) {
+    if (cloudFinancialWritesReadOnly) {
+      setToastMessage(gateCFinancialWritesReadOnlyMessage);
+      return;
+    }
     const transaction = state.transactions.find((candidate) => candidate.id === id);
     if (
       transaction?.recurrenceRule?.startsWith("monthly") &&
@@ -715,17 +759,25 @@ function App() {
       return;
     }
 
+    if (!transaction || (syncMode === "cloud" && !queueFinancialMutation(() => buildTransactionDeleteGateCMutation(transaction, financialMutationUserId)))) {
+      return;
+    }
+
     setState((current) => ({
       ...current,
       transactions: current.transactions.filter((transaction) => transaction.id !== id)
     }));
 
-    if (transaction) {
-      void runCloudMutation(() => deleteCloudTransaction(transaction.id, transaction.budgetId));
+    if (syncMode === "cloud") {
+      void runCloudMutation(() => replayGateCFinancialMutations(financialMutationUserId).then(() => undefined));
     }
   }
 
   function settleBalance(suggestion: ReturnType<typeof settlementSuggestions>[number]) {
+    if (cloudFinancialWritesReadOnly) {
+      setToastMessage(gateCFinancialWritesReadOnlyMessage);
+      return;
+    }
     if (
       !window.confirm(
         `Record that ${suggestion.from.displayName} paid ${suggestion.to.displayName} ${formatMoney(suggestion.amount, settings.currencyCode)}? This settle-up record cannot be undone on the web.`
@@ -745,11 +797,17 @@ function App() {
       date: settlementDate
     };
 
+    if (syncMode === "cloud" && !queueFinancialMutation(() => buildSettlementGateCMutation(settlement, financialMutationUserId))) {
+      return;
+    }
+
     setState((current) => ({
       ...current,
       settlements: [...current.settlements, settlement]
     }));
-    void runCloudMutation(() => upsertCloudSettlement(settlement, state.currentUserId), "Settlement saved");
+    if (syncMode === "cloud") {
+      void runCloudMutation(() => replayGateCFinancialMutations(financialMutationUserId).then(() => undefined), "Settlement saved");
+    }
   }
 
   function addMember(name: string, email: string) {
@@ -988,6 +1046,8 @@ function App() {
               onClick={() => setIsAddingTransaction(true)}
               ref={addTransactionButtonRef}
               type="button"
+              disabled={cloudFinancialWritesReadOnly}
+              title={cloudFinancialWritesReadOnly ? gateCFinancialWritesReadOnlyMessage : undefined}
             >
               <Plus size={18} aria-hidden="true" />
               <span className="desktop-action-label">Add transaction</span>
@@ -995,6 +1055,12 @@ function App() {
             </button>
           </div>
         </header>
+
+        {cloudFinancialWritesReadOnly && (
+          <div className="rollout-notice" role="status">
+            {gateCFinancialWritesReadOnlyMessage} You can still review cloud data and edit non-financial settings.
+          </div>
+        )}
 
         {activeTab !== "settings" && budgetMembers.length > 1 && (
           <div className="member-subbar">
@@ -1015,6 +1081,7 @@ function App() {
             onViewAll={() => setActiveTab("transactions")}
             onOpenBudget={() => setActiveTab("budget")}
             onSettle={settleBalance}
+            canSettle={!cloudFinancialWritesReadOnly}
           />
         )}
 
@@ -1029,6 +1096,7 @@ function App() {
             onSearch={setTransactionSearch}
             onDelete={deleteTransaction}
             onAddTransaction={() => setIsAddingTransaction(true)}
+            financialReadOnly={cloudFinancialWritesReadOnly}
           />
         )}
 
@@ -1083,7 +1151,7 @@ function App() {
         )}
       </main>
 
-      {isAddingTransaction && (
+      {isAddingTransaction && !cloudFinancialWritesReadOnly && (
           <TransactionDialog
             members={budgetMembers}
             settings={settings}
@@ -1310,7 +1378,8 @@ function DashboardView({
   members,
   onViewAll,
   onOpenBudget,
-  onSettle
+  onSettle,
+  canSettle
 }: {
   settings: BudgetSettings;
   totals: ReturnType<typeof dashboardTotals>;
@@ -1322,6 +1391,7 @@ function DashboardView({
   onViewAll: () => void;
   onOpenBudget: () => void;
   onSettle: (settlement: ReturnType<typeof settlementSuggestions>[number]) => void;
+  canSettle: boolean;
 }) {
   const budgetLimit = monthlyBudget(settings, selectedMonth);
   const spentRatio = budgetLimit > 0 ? Math.min(1, Math.max(0, totals.totalExpenses / budgetLimit)) : 0;
@@ -1436,6 +1506,8 @@ function DashboardView({
                   type="button"
                   onClick={() => onSettle(settlement)}
                   aria-label={`Settle ${firstName(settlement.from.displayName)} paying ${firstName(settlement.to.displayName)}`}
+                  disabled={!canSettle}
+                  title={!canSettle ? gateCFinancialWritesReadOnlyMessage : undefined}
                 >
                   Settle
                 </button>
@@ -1582,7 +1654,8 @@ function TransactionsView({
   search,
   onSearch,
   onDelete,
-  onAddTransaction
+  onAddTransaction,
+  financialReadOnly
 }: {
   settings: BudgetSettings;
   transactions: BudgetTransaction[];
@@ -1593,6 +1666,7 @@ function TransactionsView({
   onSearch: (search: string) => void;
   onDelete: (id: string) => void;
   onAddTransaction: () => void;
+  financialReadOnly: boolean;
 }) {
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState<"all" | TransactionType>("all");
@@ -1681,7 +1755,13 @@ function TransactionsView({
         {filteredTransactions.length === 0 ? (
           <div className="empty-state">
             <p>{hasActiveFilters ? "No transactions match these filters." : "No transactions this month yet."}</p>
-            <button className="text-action" type="button" onClick={hasActiveFilters ? clearFilters : onAddTransaction}>
+            <button
+              className="text-action"
+              type="button"
+              onClick={hasActiveFilters ? clearFilters : onAddTransaction}
+              disabled={!hasActiveFilters && financialReadOnly}
+              title={!hasActiveFilters && financialReadOnly ? gateCFinancialWritesReadOnlyMessage : undefined}
+            >
               {hasActiveFilters ? "Clear filters" : "Add transaction"}
             </button>
           </div>
@@ -1732,6 +1812,7 @@ function TransactionsView({
                     title="Delete transaction"
                     aria-label={`Delete ${transaction.title}${transaction.recurrenceRule?.startsWith("monthly") ? " recurring series" : ""}`}
                     type="button"
+                    disabled={financialReadOnly}
                   >
                     <Trash2 size={17} aria-hidden="true" />
                   </button>

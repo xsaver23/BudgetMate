@@ -204,6 +204,12 @@ VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
 ```
 
+Gate C financial writes are disabled by default in web builds. The web client
+is a required rollout participant: set all three `VITE_BUDGETMATE_GATE_C_*`
+markers to `YES` only in the approved controlled-beta build after the server
+RPC rehearsal. See [`web/README.md`](web/README.md) and
+[`supabase/gate-c-rollout.md`](supabase/gate-c-rollout.md).
+
 ## Product Principles
 
 BudgetMate is designed to feel calm, clear, and practical:

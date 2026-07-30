@@ -99,6 +99,26 @@ The required result is a recorded `00300` and `writes_enabled = false`. Do not
 change that flag during this deployment. Rehearse the RPCs and controlled beta
 while disabled; a separate owner-approved change is required to enable writes.
 
+### Required client compatibility check
+
+iOS **and web** are required Gate C participants. Before applying `00300`,
+verify an intended web rollout build passes `cd web && npm test && npm run
+build` and has the Gate C mutation client included. Its three build variables
+must remain `NO`/absent for ordinary deployments; a controlled-beta build may
+set all of the following to `YES` only after the RPC rehearsal and before the
+separate owner-approved server write enablement:
+
+```text
+VITE_BUDGETMATE_GATE_C_SERVER_READY=YES
+VITE_BUDGETMATE_GATE_C_ENABLED=YES
+VITE_BUDGETMATE_MONEY_SERVER_BRIDGE_ENABLED=YES
+```
+
+Confirm the deployed web build is intentionally read-only while any marker is
+missing, malformed, or partially enabled, and that it calls only
+`mutate_budget_transaction` / `mutate_budget_settlement` for financial writes.
+Do not enable the server flag until this check includes the web controlled beta.
+
 Shared-household beta validation needs two already-active members. Gate D
 invitations are disabled, so use an existing two-member household or have a
 privileged database operator provision the test membership through the approved

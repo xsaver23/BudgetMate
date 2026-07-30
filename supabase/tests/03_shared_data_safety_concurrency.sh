@@ -20,13 +20,42 @@ psql --set=ON_ERROR_STOP=1 --dbname "${PGDATABASE:-budgetmate_02c}" --command \
 cleanup() {
   psql --set=ON_ERROR_STOP=1 --dbname "${PGDATABASE:-budgetmate_02c}" --command \
     "update public.budget_data_safety_config set writes_enabled = false where id = true;" >/dev/null
+  rm -f "${transaction_a}" "${transaction_b}" "${settlement_a}" "${settlement_b}"
 }
-trap cleanup EXIT
 
 transaction_a="$(mktemp)"
 transaction_b="$(mktemp)"
 settlement_a="$(mktemp)"
 settlement_b="$(mktemp)"
+trap cleanup EXIT
+
+assert_replay_pair() {
+  local label="$1"
+  local first_output="$2"
+  local second_output="$3"
+  local actual
+
+  actual="$(
+    awk '
+      {
+        value = $0
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        if (value == "true" || value == "false") {
+          print value
+        }
+      }
+    ' "${first_output}" "${second_output}" | LC_ALL=C sort
+  )"
+
+  if [[ "${actual}" != $'false\ntrue' ]]; then
+    echo "${label} concurrency invariant failed: expected one original result and one replay." >&2
+    echo "${label} worker A output:" >&2
+    sed -n '1,80p' "${first_output}" >&2
+    echo "${label} worker B output:" >&2
+    sed -n '1,80p' "${second_output}" >&2
+    return 1
+  fi
+}
 
 (
   psql --set=ON_ERROR_STOP=1 --dbname "${PGDATABASE:-budgetmate_02c}" --tuples-only --no-align <<SQL
@@ -59,8 +88,7 @@ pid_b=$!
 wait "${pid_a}"
 wait "${pid_b}"
 
-grep -q '^false$' "${transaction_a}" || grep -q '^false$' "${transaction_b}"
-grep -q '^true$' "${transaction_a}" || grep -q '^true$' "${transaction_b}"
+assert_replay_pair "transaction" "${transaction_a}" "${transaction_b}"
 test "$(psql --set=ON_ERROR_STOP=1 --dbname "${PGDATABASE:-budgetmate_02c}" --tuples-only --no-align --command \
   "select amount from public.budget_transactions where id = '${record_transaction}';")" = "7"
 
@@ -94,8 +122,7 @@ settlement_pid_b=$!
 wait "${settlement_pid_a}"
 wait "${settlement_pid_b}"
 
-grep -q '^false$' "${settlement_a}" || grep -q '^false$' "${settlement_b}"
-grep -q '^true$' "${settlement_a}" || grep -q '^true$' "${settlement_b}"
+assert_replay_pair "settlement" "${settlement_a}" "${settlement_b}"
 test "$(psql --set=ON_ERROR_STOP=1 --dbname "${PGDATABASE:-budgetmate_02c}" --tuples-only --no-align --command \
   "select amount from public.budget_settlements where id = '${record_settlement}';")" = "7"
 

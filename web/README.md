@@ -79,3 +79,31 @@ Cloud writes are implemented in `src/data/cloudRepository.ts` and match the iOS 
 - `budget_invites`
 
 Desktop-local mode is still useful for demos, offline testing, and development without Supabase credentials.
+
+## Gate C financial-write rollout
+
+Cloud transaction and settlement writes use the server-owned CAS/idempotency
+RPCs (`mutate_budget_transaction` and `mutate_budget_settlement`); the web
+client does not use direct DML for these tables. The RPC payload includes the
+last read `row_version`. Before any network activity, the browser persists the
+exact RPC request (including its generated mutation UUID) in a user-scoped
+local outbox. It replays requests serially after reload, reconnect, or sign-in
+and removes an entry only after a normal or idempotent replay receipt. The
+outbox contains no authentication material.
+
+The default build is intentionally read-only for cloud transactions and
+settlements. It stays that way unless all three Cloudflare/Vite build variables
+are explicitly `YES`:
+
+```text
+VITE_BUDGETMATE_GATE_C_SERVER_READY=YES
+VITE_BUDGETMATE_GATE_C_ENABLED=YES
+VITE_BUDGETMATE_MONEY_SERVER_BRIDGE_ENABLED=YES
+```
+
+Absent, malformed, or partially enabled markers fail closed and show an
+in-product explanation. Do not set any marker in production until the Gate C
+migration has been applied, the disabled postflight is verified, the RPC
+contract has been rehearsed, and the rollout owner approves the write-enable
+step. Web is a required controlled-beta participant, not an optional legacy
+client.

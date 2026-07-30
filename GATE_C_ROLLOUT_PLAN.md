@@ -16,7 +16,11 @@ release checks are all green on identified commits.
   `20260729000400` are deployed.
 - Migration `20260729000300_shared_data_safety.sql` is not deployed.
 - The Gate C server configuration does not exist in production yet.
-- `MoneyServerBridgeRollout` and `SharedDataSafetyGate` default to disabled.
+- iOS `MoneyServerBridgeRollout` and `SharedDataSafetyGate` default to
+  disabled.
+- The production web client still shares the same Supabase backend and is a
+  required Gate C participant. Ordinary web builds default to read-only for
+  financial writes.
 - Gate D keeps unfinished invitation, leave, ownership-transfer, clear-all,
   and account-deletion actions unavailable.
 
@@ -59,24 +63,30 @@ Owner: Gate C server track.
 Exit criterion: production has `00300`, the write switch is false, and all
 disabled-state checks pass.
 
-## Chunk 2 — Fail-closed client activation
+## Chunk 2 — Fail-closed iOS and web activation
 
-Owner: Gate C client track.
+Owner: Gate C client tracks.
 
 1. Replace hard-coded rollout decisions with one explicit, testable
-   configuration contract.
-2. Default every ordinary Debug and Release build to disabled.
+   configuration contract per client.
+2. Default every ordinary iOS Debug/Release build and web deployment to
+   disabled.
 3. Require money-bridge compatibility and Gate C activation together; any
    missing or inconsistent value fails closed.
-4. Verify pending local mutations keep their stable mutation IDs while
-   disabled and route only through Gate C RPCs when enabled.
-5. Cover insert, update, delete, retry, conflict mapping, capability rules,
+4. Route iOS and web financial writes only through the two Gate C RPCs when
+   enabled; no direct financial-table DML fallback is allowed.
+5. Persist pending mutations before network or optimistic UI work. Verify the
+   exact RPC request and stable mutation ID survive offline failure, browser or
+   app relaunch, and authenticated replay, and remain user/budget scoped while
+   disabled.
+6. Cover insert, update, delete, retry, conflict mapping, capability rules,
    account/budget switching, and accessible read-only messaging.
-6. Run focused tests, full unit/UI suites, iPhone/iPad builds, Release
+7. Run focused tests, full iOS unit/UI suites, iPhone/iPad builds, web tests
+   and production builds in disabled and all-enabled configurations, Release
    analyze/archive, secret scan, and project-integrity checks.
 
 Exit criterion: a reviewed candidate can be explicitly enabled without
-changing source again, while default builds remain disabled.
+changing source again, while default iOS and web builds remain disabled.
 
 ## Chunk 3 — Controlled authenticated QA window
 
@@ -110,9 +120,9 @@ This chunk requires separate owner approval after Chunks 1–3 are green.
 1. Enable `budget_data_safety_config.writes_enabled` for the controlled
    production environment.
 2. Re-run the server RPC matrix before distributing an enabled client.
-3. Build and install the exact reviewed client commit with the approved Gate C
-   configuration.
-4. Re-run the two-account smoke matrix from the installed app.
+3. Build and install the exact reviewed iOS commit and deploy the exact
+   reviewed web commit with their approved Gate C configurations.
+4. Re-run the two-account smoke matrix from both clients.
 5. Observe authentication failures, RPC error classes, conflict counts,
    duplicate prevention, pending mutation count, and crashes without logging
    private financial content.
@@ -132,9 +142,10 @@ This chunk requires separate owner approval after Chunks 1–3 are green.
 
 - Migration `00300` is deployed and recorded.
 - Gate C server writes are enabled only after the disabled-state postflight.
-- The reviewed client configuration is enabled on an identified commit.
+- The reviewed iOS and web configurations are enabled on an identified
+  commit.
 - Two-account authenticated QA passes before and after activation.
 - Hosted migration, iOS Debug, iPhone/iPad UI, Release analyze/archive, and
-  secret checks pass.
+  web test/build, Cloudflare, and secret checks pass.
 - Rollback-to-read-only is rehearsed and documented.
 - Gate D deferred actions remain disabled.

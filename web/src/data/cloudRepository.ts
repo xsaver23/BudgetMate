@@ -4,6 +4,15 @@ import { defaultBudgetSettings } from "../domain/defaults";
 import { monthlyBudget, uniqueTransactions } from "../domain/budgetMath";
 import { localDateKey, localNoonISOString } from "../domain/dates";
 import { normalizedCurrencyCode } from "../domain/currency";
+import { gateCFinancialWritesEnabled, gateCFinancialWritesReadOnlyMessage } from "./gateCRollout";
+import {
+  GateCFinancialOutbox,
+  type GateCMutationParameters,
+  type GateCMutationResult,
+  type GateCOperation,
+  type GateCRpcName,
+  type QueuedGateCFinancialMutation
+} from "./gateCFinancialOutbox";
 import type {
   AppState,
   Budget,
@@ -68,6 +77,7 @@ type TransactionRow = {
   created_by_member_id: string;
   date: string;
   occurred_on?: string | null;
+  row_version?: number | string | null;
   created_at: string;
   recurrence_rule: string | null;
   splits: Array<{ id: string; member_id?: string; memberId?: string; amount: number | string }> | null;
@@ -82,6 +92,7 @@ type SettlementRow = {
   amount: number | string;
   date: string;
   occurred_on?: string | null;
+  row_version?: number | string | null;
 };
 
 type InviteRow = {
@@ -96,8 +107,14 @@ type InviteRow = {
 
 const palette = ["#3B8FE2", "#E2572E", "#1FA37D", "#7B6EE6"];
 const ensuredPersonalBudgets = new Map<string, Promise<void>>();
-let supportsTransactionOccurredOn: boolean | undefined;
-let supportsSettlementOccurredOn: boolean | undefined;
+const gateCFinancialOutbox = new GateCFinancialOutbox();
+
+export class GateCFinancialWritesDisabledError extends Error {
+  constructor() {
+    super(gateCFinancialWritesReadOnlyMessage);
+    this.name = "GateCFinancialWritesDisabledError";
+  }
+}
 
 function swiftISODate(value: string | Date = new Date()) {
   const date = value instanceof Date ? value : new Date(value);
@@ -110,6 +127,119 @@ function requireSupabase() {
     throw new Error("Supabase is not configured for the web app.");
   }
   return supabase;
+}
+
+function requireGateCFinancialWrites() {
+  if (!gateCFinancialWritesEnabled) {
+    throw new GateCFinancialWritesDisabledError();
+  }
+}
+
+function isRetriableMutationError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { message?: string; status?: number; code?: string };
+  if (candidate.status !== undefined && candidate.status >= 500) return true;
+  const message = (candidate.message ?? "").toLowerCase();
+  return candidate.code === "ECONNRESET" || message.includes("network") || message.includes("fetch") || message.includes("timeout");
+}
+
+/** Replays a logical operation once with its original UUID after a transport failure. */
+export async function retryGateCMutation<T>(operation: () => Promise<T>): Promise<T> {
+  let firstError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (attempt === 1 || !isRetriableMutationError(error)) throw error;
+      firstError = error;
+    }
+  }
+  throw firstError;
+}
+
+function transactionMutationPayload(transaction: BudgetTransaction): Record<string, unknown> {
+  return {
+    title: transaction.title,
+    amount: transaction.amount,
+    type: transaction.type,
+    category: transaction.category,
+    payment_method: transaction.paymentMethod ?? "",
+    created_by_member_id: transaction.createdByMemberId,
+    date: swiftISODate(transaction.date),
+    occurred_on: localDateKey(new Date(transaction.date)),
+    created_at: swiftISODate(transaction.createdAt),
+    recurrence_rule: transaction.recurrenceRule ?? "",
+    splits: transaction.splits.map((split) => ({
+      id: split.id,
+      member_id: split.memberId,
+      amount: split.amount
+    }))
+  };
+}
+
+function settlementMutationPayload(settlement: Settlement): Record<string, unknown> {
+  return {
+    from_member_id: settlement.fromMemberId,
+    to_member_id: settlement.toMemberId,
+    amount: settlement.amount,
+    date: swiftISODate(settlement.date),
+    occurred_on: localDateKey(new Date(settlement.date))
+  };
+}
+
+async function invokeGateCMutation(
+  rpcName: GateCRpcName,
+  parameters: GateCMutationParameters
+): Promise<GateCMutationResult> {
+  const client = requireSupabase();
+  return retryGateCMutation(async () => {
+    const { data, error } = await client.rpc(rpcName, parameters);
+    if (error) throw error;
+    return data as GateCMutationResult;
+  });
+}
+
+function queuedGateCMutation(
+  userId: string,
+  rpcName: GateCRpcName,
+  parameters: GateCMutationParameters
+): QueuedGateCFinancialMutation {
+  if (!userId) {
+    throw new Error("An authenticated user is required to queue a financial change.");
+  }
+  return { userId, rpcName, parameters, queuedAt: new Date().toISOString() };
+}
+
+async function flushGateCFinancialOutbox(userId: string) {
+  requireGateCFinancialWrites();
+  return gateCFinancialOutbox.flush(userId, (mutation) =>
+    invokeGateCMutation(mutation.rpcName, mutation.parameters)
+  );
+}
+
+async function enqueueAndFlushGateCFinancialMutation(mutation: QueuedGateCFinancialMutation) {
+  queueGateCFinancialMutation(mutation);
+  const results = await flushGateCFinancialOutbox(mutation.userId);
+  const result = results.slice().reverse().find((candidate) => candidate.record_id === mutation.parameters.p_record_id);
+  if (!result) {
+    throw new Error("Financial change was queued but did not receive a server receipt.");
+  }
+  return result;
+}
+
+/** Persists the exact request before any caller starts network activity. */
+export function queueGateCFinancialMutation(mutation: QueuedGateCFinancialMutation) {
+  requireGateCFinancialWrites();
+  return gateCFinancialOutbox.enqueue(mutation);
+}
+
+export function pendingGateCFinancialMutations(userId: string) {
+  return gateCFinancialOutbox.pending(userId);
+}
+
+/** Rehydrates and serially replays this user's exact persisted Gate C requests. */
+export async function replayGateCFinancialMutations(userId: string) {
+  return flushGateCFinancialOutbox(userId);
 }
 
 function normalizeEmail(email?: string | null) {
@@ -382,7 +512,8 @@ function mapTransaction(row: TransactionRow): BudgetTransaction {
     date: occurredOnDate ?? row.date,
     createdAt: row.created_at,
     recurrenceRule: row.recurrence_rule ?? undefined,
-    splits: mapSplits(row.splits)
+    splits: mapSplits(row.splits),
+    rowVersion: row.row_version == null ? undefined : Number(row.row_version)
   };
 }
 
@@ -395,7 +526,8 @@ function mapSettlement(row: SettlementRow): Settlement {
     fromMemberId: row.from_member_id,
     toMemberId: row.to_member_id,
     amount: Number(row.amount),
-    date: occurredOnDate ?? row.date
+    date: occurredOnDate ?? row.date,
+    rowVersion: row.row_version == null ? undefined : Number(row.row_version)
   };
 }
 
@@ -437,29 +569,6 @@ function memberRow(member: BudgetMember, userId: string): MemberRow {
     invite_status: member.inviteStatus,
     joined_date: member.joinedDate ? swiftISODate(member.joinedDate) : null,
     created_date: swiftISODate(member.createdDate)
-  };
-}
-
-function transactionRow(transaction: BudgetTransaction, userId: string): TransactionRow {
-  return {
-    id: transaction.id,
-    user_id: transaction.userId || userId,
-    budget_id: transaction.budgetId,
-    title: transaction.title,
-    amount: transaction.amount,
-    type: transaction.type,
-    category: transaction.category,
-    payment_method: transaction.paymentMethod ?? null,
-    created_by_member_id: transaction.createdByMemberId,
-    date: swiftISODate(transaction.date),
-    occurred_on: localDateKey(new Date(transaction.date)),
-    created_at: swiftISODate(transaction.createdAt),
-    recurrence_rule: transaction.recurrenceRule ?? null,
-    splits: transaction.splits.map((split) => ({
-      id: split.id,
-      member_id: split.memberId,
-      amount: split.amount
-    }))
   };
 }
 
@@ -773,72 +882,88 @@ export async function createCloudInvite(member: BudgetMember, userId: string) {
   if (error) throw error;
 }
 
-export async function upsertCloudTransaction(transaction: BudgetTransaction, userId: string) {
-  const client = requireSupabase();
-  // New web transactions are created from the already-canonical member list
-  // returned by fetchCloudState, so another full member-table read here only
-  // adds latency and opens a needless read/write race.
-  const row = transactionRow(transaction, userId);
-  if (supportsTransactionOccurredOn === false) {
-    const { occurred_on: _occurredOn, ...legacyRow } = row;
-    const { error } = await client.from("budget_transactions").upsert(legacyRow, { onConflict: "id" });
-    if (error) throw error;
-    return;
-  }
-
-  const { error } = await client.from("budget_transactions").upsert(row, { onConflict: "id" });
-  if (!error) {
-    supportsTransactionOccurredOn = true;
-    return;
-  }
-  if (!isMissingColumnError(error, "occurred_on")) {
-    throw error;
-  }
-
-  supportsTransactionOccurredOn = false;
-  const { occurred_on: _occurredOn, ...legacyRow } = row;
-  const { error: legacyError } = await client.from("budget_transactions").upsert(legacyRow, { onConflict: "id" });
-  if (legacyError) throw legacyError;
+export async function upsertCloudTransaction(transaction: BudgetTransaction, _userId: string, mutationId = crypto.randomUUID()) {
+  const result = await enqueueAndFlushGateCFinancialMutation(buildTransactionGateCMutation(transaction, _userId, mutationId));
+  transaction.rowVersion = result.row_version;
 }
 
-export async function upsertCloudSettlement(settlement: Settlement, userId: string) {
-  const client = requireSupabase();
-  const row: SettlementRow = {
-    id: settlement.id,
-    user_id: settlement.userId || userId,
-    budget_id: settlement.budgetId,
-    from_member_id: settlement.fromMemberId,
-    to_member_id: settlement.toMemberId,
-    amount: settlement.amount,
-    date: swiftISODate(settlement.date),
-    occurred_on: localDateKey(new Date(settlement.date))
-  };
-  if (supportsSettlementOccurredOn === false) {
-    const { occurred_on: _occurredOn, ...legacyRow } = row;
-    const { error } = await client.from("budget_settlements").upsert(legacyRow, { onConflict: "id" });
-    if (error) throw error;
-    return;
-  }
-
-  const { error } = await client.from("budget_settlements").upsert(row, { onConflict: "id" });
-  if (!error) {
-    supportsSettlementOccurredOn = true;
-    return;
-  }
-  if (!isMissingColumnError(error, "occurred_on")) {
-    throw error;
-  }
-
-  supportsSettlementOccurredOn = false;
-  const { occurred_on: _occurredOn, ...legacyRow } = row;
-  const { error: legacyError } = await client.from("budget_settlements").upsert(legacyRow, { onConflict: "id" });
-  if (legacyError) throw legacyError;
+export function buildTransactionGateCMutation(
+  transaction: BudgetTransaction,
+  userId: string,
+  mutationId = crypto.randomUUID()
+): QueuedGateCFinancialMutation {
+  return queuedGateCMutation(userId, "mutate_budget_transaction", {
+    p_budget_id: transaction.budgetId,
+    p_record_id: transaction.id,
+    p_expected_row_version: transaction.rowVersion ?? 0,
+    p_client_mutation_id: mutationId,
+    p_operation: transaction.rowVersion === undefined ? "insert" : "update",
+    p_payload: transactionMutationPayload(transaction)
+  });
 }
 
-export async function deleteCloudTransaction(transactionId: string, budgetId: string) {
-  const client = requireSupabase();
-  const { error } = await client.from("budget_transactions").delete().eq("id", transactionId).eq("budget_id", budgetId);
-  if (error) throw error;
+export async function upsertCloudSettlement(settlement: Settlement, userId: string, mutationId = crypto.randomUUID()) {
+  const result = await enqueueAndFlushGateCFinancialMutation(buildSettlementGateCMutation(settlement, userId, mutationId));
+  settlement.rowVersion = result.row_version;
+}
+
+export function buildSettlementGateCMutation(
+  settlement: Settlement,
+  userId: string,
+  mutationId = crypto.randomUUID()
+): QueuedGateCFinancialMutation {
+  return queuedGateCMutation(userId, "mutate_budget_settlement", {
+    p_budget_id: settlement.budgetId,
+    p_record_id: settlement.id,
+    p_expected_row_version: settlement.rowVersion ?? 0,
+    p_client_mutation_id: mutationId,
+    p_operation: settlement.rowVersion === undefined ? "insert" : "update",
+    p_payload: settlementMutationPayload(settlement)
+  });
+}
+
+export async function deleteCloudTransaction(transaction: BudgetTransaction, userId: string, mutationId = crypto.randomUUID()) {
+  await enqueueAndFlushGateCFinancialMutation(buildTransactionDeleteGateCMutation(transaction, userId, mutationId));
+}
+
+export function buildTransactionDeleteGateCMutation(
+  transaction: BudgetTransaction,
+  userId: string,
+  mutationId = crypto.randomUUID()
+): QueuedGateCFinancialMutation {
+  if (transaction.rowVersion === undefined) {
+    throw new Error("Transaction is not ready to delete safely. Refresh cloud data and try again.");
+  }
+  return queuedGateCMutation(userId, "mutate_budget_transaction", {
+    p_budget_id: transaction.budgetId,
+    p_record_id: transaction.id,
+    p_expected_row_version: transaction.rowVersion,
+    p_client_mutation_id: mutationId,
+    p_operation: "delete",
+    p_payload: {}
+  });
+}
+
+export async function deleteCloudSettlement(settlement: Settlement, userId: string, mutationId = crypto.randomUUID()) {
+  await enqueueAndFlushGateCFinancialMutation(buildSettlementDeleteGateCMutation(settlement, userId, mutationId));
+}
+
+export function buildSettlementDeleteGateCMutation(
+  settlement: Settlement,
+  userId: string,
+  mutationId = crypto.randomUUID()
+): QueuedGateCFinancialMutation {
+  if (settlement.rowVersion === undefined) {
+    throw new Error("Settlement is not ready to delete safely. Refresh cloud data and try again.");
+  }
+  return queuedGateCMutation(userId, "mutate_budget_settlement", {
+    p_budget_id: settlement.budgetId,
+    p_record_id: settlement.id,
+    p_expected_row_version: settlement.rowVersion,
+    p_client_mutation_id: mutationId,
+    p_operation: "delete",
+    p_payload: {}
+  });
 }
 
 export async function fetchPendingInvites(email: string): Promise<BudgetInvite[]> {
@@ -903,11 +1028,6 @@ export async function acceptCloudInvite(invite: BudgetInvite, userId: string) {
     })
     .eq("id", invite.id);
   if (inviteError) throw inviteError;
-}
-
-function isMissingColumnError(error: { code?: string; message?: string; details?: string }, column: string) {
-  const message = `${error.message ?? ""} ${error.details ?? ""}`.toLowerCase();
-  return error.code === "PGRST204" || (message.includes(column.toLowerCase()) && message.includes("column"));
 }
 
 function isMissingFunctionError(error: { code?: string; message?: string; details?: string }, functionName: string) {
