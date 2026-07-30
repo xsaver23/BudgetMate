@@ -46,6 +46,8 @@ export interface BudgetTransaction {
   createdAt: string;
   recurrenceRule?: string;
   splits: TransactionSplit[];
+  /** Server-owned CAS value used only by Gate C mutation RPCs. */
+  rowVersion?: number;
 }
 
 export interface Settlement {
@@ -56,6 +58,8 @@ export interface Settlement {
   toMemberId: string;
   amount: number;
   date: string;
+  /** Server-owned CAS value used only by Gate C mutation RPCs. */
+  rowVersion?: number;
 }
 
 export interface BudgetSettings {

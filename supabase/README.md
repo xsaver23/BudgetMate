@@ -55,3 +55,11 @@ rollback restore without touching a linked project. The iOS rollout constant
 remains disabled in PR 02C. Applying the migration to the linked BudgetMate
 project still requires a clean read-only preflight, a captured backup, explicit
 owner authorization, and post-apply verification.
+
+## Gate C production-order rehearsal
+
+The Gate C CI contract applies `00400` before `00300`, matching production's
+currently recorded migration history, and restores a pre-`00300` backup that
+retains the money-bridge migrations. See `gate-c-rollout.md` for the read-only
+linked-project rehearsal, the temporary write-read-only window created by
+`00300`, and the authorization/rollback checklist.

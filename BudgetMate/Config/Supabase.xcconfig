@@ -4,4 +4,11 @@
 SUPABASE_PROJECT_URL =
 SUPABASE_PUBLISHABLE_KEY =
 
+// Gate C is deliberately inactive in every ordinary build. The three values
+// must be set to YES together in Supabase.local.xcconfig only after the
+// deployed server migration and RPCs have been verified.
+BUDGETMATE_GATE_C_SERVER_READY = NO
+BUDGETMATE_GATE_C_ENABLED = NO
+BUDGETMATE_MONEY_SERVER_BRIDGE_ENABLED = NO
+
 #include? "Supabase.local.xcconfig"

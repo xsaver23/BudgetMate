@@ -2,3 +2,10 @@
 # comment, so the scheme is added back in code (see SupabaseConfig.swift).
 SUPABASE_PROJECT_URL = your-project.supabase.co
 SUPABASE_PUBLISHABLE_KEY = your-publishable-key
+
+// Leave these as NO for normal development. After production server readiness
+// is verified, set all three to YES in Supabase.local.xcconfig for the signed
+// rollout build; any partial or invalid combination stays disabled.
+BUDGETMATE_GATE_C_SERVER_READY = NO
+BUDGETMATE_GATE_C_ENABLED = NO
+BUDGETMATE_MONEY_SERVER_BRIDGE_ENABLED = NO

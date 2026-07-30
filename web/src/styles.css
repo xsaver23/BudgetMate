@@ -202,6 +202,17 @@ h2 {
   width: 100%;
 }
 
+.rollout-notice {
+  margin: 0 28px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--orange-500, #e76f51) 45%, var(--hairline));
+  border-radius: 10px;
+  color: var(--ink);
+  background: var(--panel);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
 .sidebar {
   position: sticky;
   top: 0;

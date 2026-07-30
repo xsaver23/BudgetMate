@@ -297,6 +297,24 @@ final class ScopedPersistenceCharacterizationTests: XCTestCase {
         XCTAssertEqual(decision.readOnlyMessage, SharedDataSafetyGate.readOnlyMessage)
     }
 
+    func testEnabledGateCConfigurationPreservesSharedOwnerCapabilityRules() {
+        let configuration = GateCClientRolloutConfiguration(values: [
+            GateCClientRolloutConfiguration.serverReadyKey: "YES",
+            GateCClientRolloutConfiguration.sharedDataSafetyKey: "YES",
+            GateCClientRolloutConfiguration.moneyServerBridgeKey: "YES"
+        ])
+        let decision = SharedRecordMutationCapability.decision(
+            currentUserScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+            activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            recordBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            members: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob],
+            serverGateEnabled: configuration.isEnabled
+        )
+
+        XCTAssertTrue(decision.isAllowed)
+        XCTAssertEqual(decision.reason, .householdOwner)
+    }
+
     func testUnverifiedOwnerDisplayRoleDoesNotGrantSharedMutationAuthority() {
         let unmatchedOwner = BudgetMember(
             displayName: "Unverified Owner",
