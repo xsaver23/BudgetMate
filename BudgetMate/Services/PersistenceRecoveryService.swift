@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import SQLite3
 import SwiftData
 
 struct PersistenceStoreSnapshot: Codable, Equatable, Sendable {
@@ -31,6 +32,55 @@ struct PersistenceArchiveManifest: Codable, Equatable, Sendable {
     let files: [PersistenceArchiveFile]
     let snapshot: PersistenceStoreSnapshot?
     let sanitizedDiagnostics: PersistenceSanitizedDiagnostics
+    let legacyMetadataStatus: PersistenceLegacyMetadataStatus?
+}
+
+struct PersistenceLegacyMetadataStatus: Codable, Equatable, Sendable {
+    let formatVersion: Int
+    let sidecarTargetRelativePath: String
+    let sourceArtifactFingerprint: String
+    let sourceMetadataFingerprint: String?
+    let transactionRowCount: Int
+    let settlementRowCount: Int
+    let pendingRowCount: Int
+    let requiresManualReview: Bool
+    let cloudRowVersionMapping: String
+    let pendingMutationMapping: String
+    let reviewedResolution: PersistenceLegacyMetadataResolution?
+}
+
+struct PersistenceLegacyMetadataResolution: Codable, Equatable, Sendable {
+    static let retryWithFreshGateCMutationID = "retry-with-fresh-gate-c-mutation-id"
+
+    let decision: String
+    let sourceArtifactFingerprint: String
+    let sourceMetadataFingerprint: String
+}
+
+struct PersistenceLegacyMetadataReviewToken: Codable, Equatable, Sendable {
+    let sourceArtifactFingerprint: String
+    let sourceMetadataFingerprint: String
+    let transactionRowCount: Int
+    let settlementRowCount: Int
+    let pendingRowCount: Int
+}
+
+struct PersistenceLegacyMetadataRow: Codable, Equatable, Sendable {
+    let stableID: String
+    let cloudRowVersion: Int64?
+    let pendingMutationBytesBase64: String?
+    let needsSync: Bool
+}
+
+struct PersistenceLegacyMetadataSidecar: Codable, Equatable, Sendable {
+    let formatVersion: Int
+    let sourceArtifactFingerprint: String
+    let sourceMetadataFingerprint: String?
+    let transactionRows: [PersistenceLegacyMetadataRow]
+    let settlementRows: [PersistenceLegacyMetadataRow]
+    let pendingMutationSemantics: String
+    let mappedCloudRowVersionSemantics: String
+    let reviewedResolution: PersistenceLegacyMetadataResolution?
 }
 
 struct PersistenceSanitizedDiagnostics: Codable, Equatable, Sendable {
@@ -63,6 +113,9 @@ enum PersistenceRecoveryError: Error, LocalizedError {
     case archiveNotCurrent
     case storeValidationFailed
     case noVerifiedArchive
+    case legacySurfaceNotFound
+    case legacyMetadataReviewRequired
+    case legacyMetadataMismatch
     case fileSystemFailure
     case interruptedReplacement
 
@@ -82,6 +135,12 @@ enum PersistenceRecoveryError: Error, LocalizedError {
             return "The staged local store failed validation."
         case .noVerifiedArchive:
             return "A current verified archive is required before resetting local data."
+        case .legacySurfaceNotFound:
+            return "No supported legacy local-store surface was found."
+        case .legacyMetadataReviewRequired:
+            return "Recovery is blocked until legacy sync metadata is reviewed. The local store was left untouched."
+        case .legacyMetadataMismatch:
+            return "Legacy sync metadata could not be reconciled without risking local data."
         case .fileSystemFailure, .interruptedReplacement:
             return "Local-data recovery stopped safely without discarding the current store."
         }
@@ -94,6 +153,11 @@ private struct PersistenceArchiveArtifact {
     let kind: String
 }
 
+private struct LegacyRecoveryStaging {
+    let rootURL: URL
+    let artifacts: [PersistenceArchiveArtifact]
+}
+
 struct PersistenceReplacementJournal: Codable {
     var phase: String
     let storeFilename: String
@@ -103,9 +167,243 @@ struct PersistenceReplacementJournal: Codable {
     let newTargets: [String]
 }
 
-/// File-backed support archive and replacement boundary. It intentionally
-/// knows only the immutable PR01A V1 schema; it does not touch UserDefaults,
-/// cloud state, or application-level recovery settings.
+private enum LegacySQLiteValue {
+    case null
+    case integer(Int64)
+    case real(Double)
+    case text(String)
+    case blob(Data)
+}
+
+private struct LegacyMetadataCapture {
+    let transactionRows: [PersistenceLegacyMetadataRow]
+    let settlementRows: [PersistenceLegacyMetadataRow]
+    let sourceMetadataFingerprint: String
+
+    var pendingRowCount: Int {
+        transactionRows.filter { $0.pendingMutationBytesBase64 != nil }.count
+            + settlementRows.filter { $0.pendingMutationBytesBase64 != nil }.count
+    }
+}
+
+private struct LegacyRecoverySplitRecord: Equatable {
+    let id: String
+    let memberID: String
+    let amount: Double
+    let amountMinorUnits: Int64?
+    let currencyCode: String?
+}
+
+private struct LegacyRecoveryTransactionRecord: Equatable {
+    let id: String
+    let amount: Double
+    let amountMinorUnits: Int64?
+    let currencyCode: String?
+    let type: String
+    let category: String
+    let paymentMethod: String?
+    let createdByMemberID: String
+    let needsSync: Bool
+    let splits: [LegacyRecoverySplitRecord]
+}
+
+private struct LegacyRecoverySettlementRecord: Equatable {
+    let id: String
+    let fromMemberID: String
+    let toMemberID: String
+    let amount: Double
+    let amountMinorUnits: Int64?
+    let currencyCode: String?
+    let needsSync: Bool
+}
+
+private struct LegacyRecoveryFinancialSnapshot: Equatable {
+    let transactions: [LegacyRecoveryTransactionRecord]
+    let settlements: [LegacyRecoverySettlementRecord]
+}
+
+private final class LegacySQLiteReader {
+    private var database: OpaquePointer?
+
+    init(url: URL) throws {
+        var opened: OpaquePointer?
+        let result = url.path.withCString { path in
+            sqlite3_open_v2(
+                path,
+                &opened,
+                SQLITE_OPEN_READONLY | SQLITE_OPEN_URI,
+                nil
+            )
+        }
+        guard result == SQLITE_OK, let opened else {
+            if let opened { sqlite3_close(opened) }
+            throw PersistenceRecoveryError.legacyMetadataMismatch
+        }
+        database = opened
+    }
+
+    deinit {
+        if let database {
+            sqlite3_close(database)
+        }
+    }
+
+    func captureMetadata() throws -> LegacyMetadataCapture {
+        let transactionRows = try captureRows(from: "ZTRANSACTION")
+        let settlementRows = try captureRows(from: "ZSETTLEMENT")
+        return LegacyMetadataCapture(
+            transactionRows: transactionRows,
+            settlementRows: settlementRows,
+            sourceMetadataFingerprint: recoveryLegacyMetadataFingerprint(
+                transactionRows: transactionRows,
+                settlementRows: settlementRows
+            )
+        )
+    }
+
+    private func captureRows(from table: String) throws -> [PersistenceLegacyMetadataRow] {
+        let columns = try columnNames(for: table)
+        let lowercaseColumns = Dictionary(
+            uniqueKeysWithValues: columns.map { ($0.lowercased(), $0) }
+        )
+        guard let idColumn = lowercaseColumns["zid"],
+              let cloudColumn = lowercaseColumns["zcloudrowversion"],
+              let pendingColumn = lowercaseColumns["zpendingmutationid"],
+              let needsSyncColumn = lowercaseColumns["zneedssync"] else {
+            throw PersistenceRecoveryError.legacySurfaceNotFound
+        }
+
+        let rows = try query(
+            "SELECT \(quote(idColumn)) AS c0, \(quote(cloudColumn)) AS c1, \(quote(pendingColumn)) AS c2, \(quote(needsSyncColumn)) AS c3 FROM \(quote(table)) ORDER BY \(quote(idColumn))"
+        )
+        return try rows.map { row in
+            guard let stableID = stableID(from: row["c0"]),
+                  let needsSync = integer(from: row["c3"]) else {
+                throw PersistenceRecoveryError.legacyMetadataMismatch
+            }
+            return PersistenceLegacyMetadataRow(
+                stableID: stableID,
+                cloudRowVersion: integer(from: row["c1"]),
+                pendingMutationBytesBase64: opaqueBase64(from: row["c2"]),
+                needsSync: needsSync != 0
+            )
+        }
+    }
+
+    private func columnNames(for table: String) throws -> [String] {
+        try query("PRAGMA table_info(\(quote(table)))").compactMap { row in
+            text(from: row["name"])
+        }
+    }
+
+    private func query(_ sql: String) throws -> [[String: LegacySQLiteValue]] {
+        guard let database else { throw PersistenceRecoveryError.legacyMetadataMismatch }
+        var statement: OpaquePointer?
+        let prepareResult = sql.withCString { sqlPointer in
+            sqlite3_prepare_v2(database, sqlPointer, -1, &statement, nil)
+        }
+        guard prepareResult == SQLITE_OK, let statement else {
+            throw PersistenceRecoveryError.legacyMetadataMismatch
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var result: [[String: LegacySQLiteValue]] = []
+        while true {
+            let step = sqlite3_step(statement)
+            if step == SQLITE_DONE { return result }
+            guard step == SQLITE_ROW else {
+                throw PersistenceRecoveryError.legacyMetadataMismatch
+            }
+            var row: [String: LegacySQLiteValue] = [:]
+            for index in 0..<sqlite3_column_count(statement) {
+                guard let namePointer = sqlite3_column_name(statement, index) else {
+                    throw PersistenceRecoveryError.legacyMetadataMismatch
+                }
+                row[String(cString: namePointer)] = value(
+                    from: statement,
+                    index: index
+                )
+            }
+            result.append(row)
+        }
+    }
+
+    private func value(
+        from statement: OpaquePointer,
+        index: Int32
+    ) -> LegacySQLiteValue {
+        switch sqlite3_column_type(statement, index) {
+        case SQLITE_INTEGER:
+            return .integer(sqlite3_column_int64(statement, index))
+        case SQLITE_FLOAT:
+            return .real(sqlite3_column_double(statement, index))
+        case SQLITE_TEXT:
+            guard let pointer = sqlite3_column_text(statement, index) else { return .text("") }
+            return .text(String(cString: pointer))
+        case SQLITE_BLOB:
+            let count = Int(sqlite3_column_bytes(statement, index))
+            guard count > 0, let pointer = sqlite3_column_blob(statement, index) else {
+                return .blob(Data())
+            }
+            return .blob(Data(bytes: pointer, count: count))
+        default:
+            return .null
+        }
+    }
+
+    private func stableID(from value: LegacySQLiteValue?) -> String? {
+        switch value {
+        case .text(let value):
+            return UUID(uuidString: value)?.uuidString
+        case .blob(let data):
+            guard data.count == 16 else { return nil }
+            let bytes = Array(data)
+            let uuid = UUID(uuid: (
+                bytes[0], bytes[1], bytes[2], bytes[3],
+                bytes[4], bytes[5], bytes[6], bytes[7],
+                bytes[8], bytes[9], bytes[10], bytes[11],
+                bytes[12], bytes[13], bytes[14], bytes[15]
+            ))
+            return uuid.uuidString
+        default:
+            return nil
+        }
+    }
+
+    private func opaqueBase64(from value: LegacySQLiteValue?) -> String? {
+        switch value {
+        case .blob(let data) where !data.isEmpty:
+            return data.base64EncodedString()
+        case .text(let value) where !value.isEmpty:
+            return Data(value.utf8).base64EncodedString()
+        default:
+            return nil
+        }
+    }
+
+    private func integer(from value: LegacySQLiteValue?) -> Int64? {
+        switch value {
+        case .integer(let value): return value
+        case .real(let value): return Int64(value)
+        case .text(let value): return Int64(value)
+        default: return nil
+        }
+    }
+
+    private func text(from value: LegacySQLiteValue?) -> String? {
+        if case .text(let value) = value { return value }
+        return nil
+    }
+
+    private func quote(_ identifier: String) -> String {
+        "\"" + identifier.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
+}
+
+/// File-backed support archive and replacement boundary. It handles the
+/// immutable PR01A V1 schema plus the explicit staged V1→V2→V3 bridge; it
+/// does not touch UserDefaults, cloud state, or application-level recovery
+/// settings.
 @MainActor
 final class PersistenceRecoveryService {
     static let archiveFormatVersion = 1
@@ -216,7 +514,8 @@ final class PersistenceRecoveryService {
                 message: isRestorable
                     ? "The local store was copied and validated before publication."
                     : "The local store was copied, but validation did not succeed."
-            )
+            ),
+            legacyMetadataStatus: nil
         )
 
         try writeJSON(manifest, to: temporaryArchive.appendingPathComponent("manifest.json"))
@@ -234,8 +533,193 @@ final class PersistenceRecoveryService {
         )
     }
 
+    private func makeVerifiedLegacyStaging(
+        sourceArtifacts: [PersistenceArchiveArtifact],
+        sourceFingerprint: String
+    ) throws -> LegacyRecoveryStaging {
+        let stagingRoot = fileManager.temporaryDirectory.appendingPathComponent(
+            "BudgetMateLegacyRecovery-" + UUID().uuidString,
+            isDirectory: true
+        )
+        do {
+            try makeProtectedDirectory(stagingRoot)
+            for artifact in sourceArtifacts {
+                let destination = stagingRoot.appendingPathComponent(
+                    artifact.targetRelativePath,
+                    isDirectory: false
+                )
+                try makeProtectedDirectory(destination.deletingLastPathComponent())
+                guard try !isSymbolicLink(artifact.sourceURL) else {
+                    throw PersistenceRecoveryError.fileSystemFailure
+                }
+                try fileManager.copyItem(at: artifact.sourceURL, to: destination)
+                try protectTree(at: destination)
+            }
+            let stagedArtifacts = sourceArtifacts.map { artifact in
+                PersistenceArchiveArtifact(
+                    sourceURL: stagingRoot.appendingPathComponent(artifact.targetRelativePath),
+                    targetRelativePath: artifact.targetRelativePath,
+                    kind: artifact.kind
+                )
+            }
+            guard try artifactFingerprint(for: stagedArtifacts) == sourceFingerprint,
+                  try artifactFingerprint(for: sourceArtifacts) == sourceFingerprint else {
+                throw PersistenceRecoveryError.checksumMismatch
+            }
+            return LegacyRecoveryStaging(rootURL: stagingRoot, artifacts: stagedArtifacts)
+        } catch {
+            try? fileManager.removeItem(at: stagingRoot)
+            throw error
+        }
+    }
+
+    /// Converts a legacy physical store only on a fresh staging copy. The
+    /// source is never opened by SwiftData and is never replaced. The old
+    /// cloud row version has a documented server-version meaning in the
+    /// release history, so it is restored to V3 `rowVersion`. The pending
+    /// mutation column has no equivalent provenance in this repository; its
+    /// bytes are preserved in an opaque sidecar and restore remains blocked
+    /// unless an exact digest-bound review resolution is supplied.
+    func legacyMetadataReviewToken(
+        for descriptor: PersistenceStoreDescriptor
+    ) throws -> PersistenceLegacyMetadataReviewToken {
+        guard !descriptor.isStoredInMemoryOnly else { throw PersistenceRecoveryError.notFileBacked }
+        guard fileManager.fileExists(atPath: descriptor.storeURL.path) else {
+            throw PersistenceRecoveryError.storeMissing
+        }
+        let sourceArtifacts = try collectArtifacts(for: descriptor).filter {
+            $0.kind == "primary" || $0.kind == "sidecar"
+        }
+        guard sourceArtifacts.contains(where: { $0.kind == "primary" }) else {
+            throw PersistenceRecoveryError.storeMissing
+        }
+        let sourceFingerprintBefore = try artifactFingerprint(for: sourceArtifacts)
+        let staging = try makeVerifiedLegacyStaging(
+            sourceArtifacts: sourceArtifacts,
+            sourceFingerprint: sourceFingerprintBefore
+        )
+        defer { try? fileManager.removeItem(at: staging.rootURL) }
+        let metadata = try LegacySQLiteReader(
+            url: try requirePrimary(in: staging.artifacts).sourceURL
+        ).captureMetadata()
+        guard try artifactFingerprint(for: sourceArtifacts) == sourceFingerprintBefore else {
+            throw PersistenceRecoveryError.checksumMismatch
+        }
+        return PersistenceLegacyMetadataReviewToken(
+            sourceArtifactFingerprint: sourceFingerprintBefore,
+            sourceMetadataFingerprint: metadata.sourceMetadataFingerprint,
+            transactionRowCount: metadata.transactionRows.count,
+            settlementRowCount: metadata.settlementRows.count,
+            pendingRowCount: metadata.pendingRowCount
+        )
+    }
+
+    func createSchema3RecoveryArchive(
+        for descriptor: PersistenceStoreDescriptor,
+        reason: String = "legacy local-store recovery",
+        failureCode: String = "legacy-store-recovery",
+        reviewedResolution: PersistenceLegacyMetadataResolution? = nil
+    ) throws -> PersistenceArchiveResult {
+        guard !descriptor.isStoredInMemoryOnly else { throw PersistenceRecoveryError.notFileBacked }
+        guard fileManager.fileExists(atPath: descriptor.storeURL.path) else {
+            throw PersistenceRecoveryError.storeMissing
+        }
+
+        let sourceArtifacts = try collectArtifacts(for: descriptor).filter {
+            $0.kind == "primary" || $0.kind == "sidecar"
+        }
+        guard sourceArtifacts.contains(where: { $0.kind == "primary" }) else {
+            throw PersistenceRecoveryError.storeMissing
+        }
+        let sourceFingerprintBefore = try artifactFingerprint(for: sourceArtifacts)
+
+        let staging = try makeVerifiedLegacyStaging(
+            sourceArtifacts: sourceArtifacts,
+            sourceFingerprint: sourceFingerprintBefore
+        )
+        defer { try? fileManager.removeItem(at: staging.rootURL) }
+        let stagedArtifacts = staging.artifacts
+
+        let primary = try requirePrimary(in: stagedArtifacts)
+        // This is the only read of the legacy metadata, and it happens before
+        // any SwiftData/Core Data open can normalize the physical columns.
+        let legacyMetadata = try LegacySQLiteReader(url: primary.sourceURL).captureMetadata()
+        try validateReviewedResolution(
+            reviewedResolution,
+            sourceArtifactFingerprint: sourceFingerprintBefore,
+            sourceMetadataFingerprint: legacyMetadata.sourceMetadataFingerprint,
+            metadata: legacyMetadata
+        )
+        let legacyFinancialSnapshot = try readLegacyFinancialSnapshot(at: primary.sourceURL)
+        let currentFinancialSnapshot = try migrateLegacyStagedStore(
+            at: primary.sourceURL,
+            metadata: legacyMetadata,
+            reviewedResolution: reviewedResolution
+        )
+        guard currentFinancialSnapshot == legacyFinancialSnapshot else {
+            throw PersistenceRecoveryError.legacyMetadataMismatch
+        }
+        guard try artifactFingerprint(for: sourceArtifacts) == sourceFingerprintBefore else {
+            throw PersistenceRecoveryError.checksumMismatch
+        }
+
+        let sidecar = PersistenceLegacyMetadataSidecar(
+            formatVersion: 1,
+            sourceArtifactFingerprint: sourceFingerprintBefore,
+            sourceMetadataFingerprint: legacyMetadata.sourceMetadataFingerprint,
+            transactionRows: legacyMetadata.transactionRows,
+            settlementRows: legacyMetadata.settlementRows,
+            pendingMutationSemantics: reviewedResolution == nil
+                ? "unproven-opaque-preserved-no-v3-mapping"
+                : "opaque-preserved-reviewed-\(PersistenceLegacyMetadataResolution.retryWithFreshGateCMutationID)-fresh-id-on-sync",
+            mappedCloudRowVersionSemantics: "release-152fb5b-server-row-version-to-v3-rowVersion",
+            reviewedResolution: reviewedResolution
+        )
+        let sidecarTarget = primary.sourceURL.lastPathComponent + "-legacy-metadata.json"
+        let sidecarURL = staging.rootURL.appendingPathComponent(sidecarTarget)
+        try writeJSON(sidecar, to: sidecarURL)
+        try protectTree(at: sidecarURL)
+
+        let stagedDescriptor = PersistenceStoreDescriptor(
+            storeURL: primary.sourceURL,
+            schemaVersion: BudgetMateSchema.currentVersionString
+        )
+        return try createMigratedArchive(
+            for: stagedDescriptor,
+            sourceArtifactFingerprint: sourceFingerprintBefore,
+            sidecar: sidecar,
+            sidecarURL: sidecarURL,
+            sidecarTarget: sidecarTarget,
+            snapshot: try validateCurrentStore(at: primary.sourceURL),
+            reason: reason,
+            failureCode: failureCode
+        )
+    }
+
+    private func validateReviewedResolution(
+        _ resolution: PersistenceLegacyMetadataResolution?,
+        sourceArtifactFingerprint: String,
+        sourceMetadataFingerprint: String,
+        metadata: LegacyMetadataCapture
+    ) throws {
+        guard let resolution else { return }
+        let pendingRows = metadata.transactionRows.filter { $0.pendingMutationBytesBase64 != nil }
+            + metadata.settlementRows.filter { $0.pendingMutationBytesBase64 != nil }
+        guard !pendingRows.isEmpty,
+              resolution.decision == PersistenceLegacyMetadataResolution.retryWithFreshGateCMutationID,
+              resolution.sourceArtifactFingerprint == sourceArtifactFingerprint,
+              resolution.sourceMetadataFingerprint == sourceMetadataFingerprint,
+              pendingRows.allSatisfy({ $0.needsSync && $0.cloudRowVersion == 0 }) else {
+            throw PersistenceRecoveryError.legacyMetadataMismatch
+        }
+    }
+
     func verifyArchive(at archiveURL: URL) throws -> PersistenceArchiveVerification {
         let manifest = try validateArchivePackage(at: archiveURL)
+        try validateLegacyMetadataSidecarIfPresent(
+            manifest: manifest,
+            archiveURL: archiveURL
+        )
         guard manifest.sourceOpenStatus == "verified",
               let expectedSnapshot = manifest.snapshot else {
             throw PersistenceRecoveryError.archiveNotVerified
@@ -252,6 +736,11 @@ final class PersistenceRecoveryService {
               actualSnapshot == expectedSnapshot else {
             throw PersistenceRecoveryError.storeValidationFailed
         }
+        try validateLegacyMetadataPayloadIfPresent(
+            manifest: manifest,
+            archiveURL: archiveURL,
+            primaryURL: payloadPath
+        )
         return PersistenceArchiveVerification(
             archiveURL: archiveURL,
             manifest: manifest,
@@ -268,12 +757,350 @@ final class PersistenceRecoveryService {
         try validateStore(at: storeURL, schemaVersion: schemaVersion)
     }
 
+    private func readLegacyFinancialSnapshot(
+        at storeURL: URL
+    ) throws -> LegacyRecoveryFinancialSnapshot {
+        let schema = Schema(versionedSchema: BudgetMateSchemaV1.self)
+        let configuration = ModelConfiguration(
+            "BudgetMateLegacyRecoveryV1",
+            schema: schema,
+            url: storeURL,
+            cloudKitDatabase: .none
+        )
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [configuration]
+        )
+        let context = container.mainContext
+        let transactions = try context.fetch(
+            FetchDescriptor<BudgetMateSchemaV1.Transaction>()
+        )
+        let settlements = try context.fetch(
+            FetchDescriptor<BudgetMateSchemaV1.Settlement>()
+        )
+        return LegacyRecoveryFinancialSnapshot(
+            transactions: transactions.map { transaction in
+                LegacyRecoveryTransactionRecord(
+                    id: transaction.id.uuidString,
+                    amount: transaction.amount,
+                    amountMinorUnits: nil,
+                    currencyCode: nil,
+                    type: transaction.type.rawValue,
+                    category: transaction.category.rawValue,
+                    paymentMethod: transaction.paymentMethod?.rawValue,
+                    createdByMemberID: transaction.createdByMemberId.uuidString,
+                    needsSync: transaction.needsSync,
+                    splits: transaction.splits.map { split in
+                        LegacyRecoverySplitRecord(
+                            id: split.id.uuidString,
+                            memberID: split.memberId.uuidString,
+                            amount: split.amount,
+                            amountMinorUnits: nil,
+                            currencyCode: nil
+                        )
+                    }.sorted { $0.id < $1.id }
+                )
+            }.sorted { $0.id < $1.id },
+            settlements: settlements.map { settlement in
+                LegacyRecoverySettlementRecord(
+                    id: settlement.id.uuidString,
+                    fromMemberID: settlement.fromMemberId.uuidString,
+                    toMemberID: settlement.toMemberId.uuidString,
+                    amount: settlement.amount,
+                    amountMinorUnits: nil,
+                    currencyCode: nil,
+                    needsSync: settlement.needsSync
+                )
+            }.sorted { $0.id < $1.id }
+        )
+    }
+
+    private func normalizedRowVersion(
+        for row: PersistenceLegacyMetadataRow,
+        reviewedResolution: PersistenceLegacyMetadataResolution?
+    ) throws -> Int64? {
+        guard reviewedResolution != nil, row.pendingMutationBytesBase64 != nil else {
+            return row.cloudRowVersion
+        }
+        guard row.needsSync, row.cloudRowVersion == 0 else {
+            throw PersistenceRecoveryError.legacyMetadataMismatch
+        }
+        return nil
+    }
+
+    private func normalizedNeedsSync(
+        for row: PersistenceLegacyMetadataRow,
+        reviewedResolution: PersistenceLegacyMetadataResolution?
+    ) throws -> Bool {
+        guard reviewedResolution != nil, row.pendingMutationBytesBase64 != nil else {
+            return row.needsSync
+        }
+        guard row.needsSync, row.cloudRowVersion == 0 else {
+            throw PersistenceRecoveryError.legacyMetadataMismatch
+        }
+        return true
+    }
+
+    private func migrateLegacyStagedStore(
+        at storeURL: URL,
+        metadata: LegacyMetadataCapture,
+        reviewedResolution: PersistenceLegacyMetadataResolution?
+    ) throws -> LegacyRecoveryFinancialSnapshot {
+        let configuration = ModelConfiguration(
+            "BudgetMateLegacyRecoveryV3",
+            schema: BudgetMateSchema.current,
+            url: storeURL,
+            cloudKitDatabase: .none
+        )
+        let container = try ModelContainer(
+            for: BudgetMateSchema.current,
+            migrationPlan: BudgetMateSchemaMigrationPlan.self,
+            configurations: [configuration]
+        )
+        let context = container.mainContext
+        let transactions = try context.fetch(FetchDescriptor<Transaction>())
+        let settlements = try context.fetch(FetchDescriptor<Settlement>())
+        let transactionMetadata = Dictionary(
+            uniqueKeysWithValues: metadata.transactionRows.map { ($0.stableID, $0) }
+        )
+        let settlementMetadata = Dictionary(
+            uniqueKeysWithValues: metadata.settlementRows.map { ($0.stableID, $0) }
+        )
+        guard transactions.count == metadata.transactionRows.count,
+              settlements.count == metadata.settlementRows.count else {
+            throw PersistenceRecoveryError.legacyMetadataMismatch
+        }
+
+        for transaction in transactions {
+            guard let row = transactionMetadata[transaction.id.uuidString] else {
+                throw PersistenceRecoveryError.legacyMetadataMismatch
+            }
+            // This mapping is backed by the release sync contract. Do not
+            // substitute the opaque pending value here.
+            transaction.rowVersion = try normalizedRowVersion(
+                for: row,
+                reviewedResolution: reviewedResolution
+            )
+            transaction.lastMutationId = nil
+            transaction.needsSync = try normalizedNeedsSync(
+                for: row,
+                reviewedResolution: reviewedResolution
+            )
+        }
+        for settlement in settlements {
+            guard let row = settlementMetadata[settlement.id.uuidString] else {
+                throw PersistenceRecoveryError.legacyMetadataMismatch
+            }
+            settlement.rowVersion = try normalizedRowVersion(
+                for: row,
+                reviewedResolution: reviewedResolution
+            )
+            settlement.lastMutationId = nil
+            settlement.needsSync = try normalizedNeedsSync(
+                for: row,
+                reviewedResolution: reviewedResolution
+            )
+        }
+        try context.save()
+
+        let persistedTransactions = try context.fetch(FetchDescriptor<Transaction>())
+        let persistedSettlements = try context.fetch(FetchDescriptor<Settlement>())
+        for transaction in persistedTransactions {
+            guard let row = transactionMetadata[transaction.id.uuidString] else {
+                throw PersistenceRecoveryError.legacyMetadataMismatch
+            }
+            let expectedRowVersion = try normalizedRowVersion(
+                for: row,
+                reviewedResolution: reviewedResolution
+            )
+            let expectedNeedsSync = try normalizedNeedsSync(
+                for: row,
+                reviewedResolution: reviewedResolution
+            )
+            guard transaction.rowVersion == expectedRowVersion,
+                  transaction.lastMutationId == nil,
+                  transaction.needsSync == expectedNeedsSync else {
+                throw PersistenceRecoveryError.legacyMetadataMismatch
+            }
+        }
+        for settlement in persistedSettlements {
+            guard let row = settlementMetadata[settlement.id.uuidString] else {
+                throw PersistenceRecoveryError.legacyMetadataMismatch
+            }
+            let expectedRowVersion = try normalizedRowVersion(
+                for: row,
+                reviewedResolution: reviewedResolution
+            )
+            let expectedNeedsSync = try normalizedNeedsSync(
+                for: row,
+                reviewedResolution: reviewedResolution
+            )
+            guard settlement.rowVersion == expectedRowVersion,
+                  settlement.lastMutationId == nil,
+                  settlement.needsSync == expectedNeedsSync else {
+                throw PersistenceRecoveryError.legacyMetadataMismatch
+            }
+        }
+
+        return LegacyRecoveryFinancialSnapshot(
+            transactions: persistedTransactions.map { transaction in
+                LegacyRecoveryTransactionRecord(
+                    id: transaction.id.uuidString,
+                    amount: transaction.amount,
+                    amountMinorUnits: transaction.amountMinorUnits,
+                    currencyCode: transaction.currencyCode,
+                    type: transaction.type.rawValue,
+                    category: transaction.category.rawValue,
+                    paymentMethod: transaction.paymentMethod?.rawValue,
+                    createdByMemberID: transaction.createdByMemberId.uuidString,
+                    needsSync: transaction.needsSync,
+                    splits: transaction.splits.map { split in
+                        LegacyRecoverySplitRecord(
+                            id: split.id.uuidString,
+                            memberID: split.memberId.uuidString,
+                            amount: split.amount,
+                            amountMinorUnits: split.amountMinorUnits,
+                            currencyCode: split.currencyCode
+                        )
+                    }.sorted { $0.id < $1.id }
+                )
+            }.sorted { $0.id < $1.id },
+            settlements: persistedSettlements.map { settlement in
+                LegacyRecoverySettlementRecord(
+                    id: settlement.id.uuidString,
+                    fromMemberID: settlement.fromMemberId.uuidString,
+                    toMemberID: settlement.toMemberId.uuidString,
+                    amount: settlement.amount,
+                    amountMinorUnits: settlement.amountMinorUnits,
+                    currencyCode: settlement.currencyCode,
+                    needsSync: settlement.needsSync
+                )
+            }.sorted { $0.id < $1.id }
+        )
+    }
+
+    private func createMigratedArchive(
+        for descriptor: PersistenceStoreDescriptor,
+        sourceArtifactFingerprint: String,
+        sidecar: PersistenceLegacyMetadataSidecar,
+        sidecarURL: URL,
+        sidecarTarget: String,
+        snapshot: PersistenceStoreSnapshot,
+        reason: String,
+        failureCode: String
+    ) throws -> PersistenceArchiveResult {
+        let storeArtifacts = try collectArtifacts(for: descriptor).filter {
+            $0.targetRelativePath != sidecarTarget
+        }
+        let sidecarArtifact = PersistenceArchiveArtifact(
+            sourceURL: sidecarURL,
+            targetRelativePath: sidecarTarget,
+            kind: "companion"
+        )
+        let artifacts = storeArtifacts + [sidecarArtifact]
+        try makeProtectedDirectory(archiveDirectory)
+        let archiveName = "BudgetMate-" + String(Int(Date().timeIntervalSince1970)) + "-" + UUID().uuidString + ".budgetmatearchive"
+        let temporaryArchive = archiveDirectory.appendingPathComponent(
+            "." + archiveName + ".partial",
+            isDirectory: true
+        )
+        let finalArchive = archiveDirectory.appendingPathComponent(archiveName, isDirectory: true)
+        try? fileManager.removeItem(at: temporaryArchive)
+        defer { try? fileManager.removeItem(at: temporaryArchive) }
+        try makeProtectedDirectory(temporaryArchive)
+        let payloadDirectory = temporaryArchive.appendingPathComponent("payload", isDirectory: true)
+        try makeProtectedDirectory(payloadDirectory)
+
+        for artifact in artifacts {
+            guard try !isSymbolicLink(artifact.sourceURL) else {
+                throw PersistenceRecoveryError.fileSystemFailure
+            }
+            let destination = payloadDirectory.appendingPathComponent(
+                artifact.targetRelativePath,
+                isDirectory: false
+            )
+            try makeProtectedDirectory(destination.deletingLastPathComponent())
+            try fileManager.copyItem(at: artifact.sourceURL, to: destination)
+            try protectTree(at: destination)
+        }
+
+        let primary = try requirePrimary(in: storeArtifacts)
+        let stagedSnapshot = try validateCurrentStore(at: primary.sourceURL)
+        guard stagedSnapshot == snapshot else { throw PersistenceRecoveryError.storeValidationFailed }
+        let manifestFiles = try artifacts.flatMap { artifact in
+            try filesForManifest(
+                at: payloadDirectory.appendingPathComponent(artifact.targetRelativePath),
+                targetRelativePath: artifact.targetRelativePath,
+                kind: artifact.kind
+            )
+        }.sorted { lhs, rhs in
+            if lhs.targetRelativePath == rhs.targetRelativePath {
+                return lhs.relativePath < rhs.relativePath
+            }
+            return lhs.targetRelativePath < rhs.targetRelativePath
+        }
+        let pendingRowCount = sidecar.transactionRows.filter { $0.pendingMutationBytesBase64 != nil }.count
+            + sidecar.settlementRows.filter { $0.pendingMutationBytesBase64 != nil }.count
+        let legacyStatus = PersistenceLegacyMetadataStatus(
+            formatVersion: sidecar.formatVersion,
+            sidecarTargetRelativePath: sidecarTarget,
+            sourceArtifactFingerprint: sourceArtifactFingerprint,
+            sourceMetadataFingerprint: sidecar.sourceMetadataFingerprint,
+            transactionRowCount: sidecar.transactionRows.count,
+            settlementRowCount: sidecar.settlementRows.count,
+            pendingRowCount: pendingRowCount,
+            requiresManualReview: pendingRowCount > 0 && sidecar.reviewedResolution == nil,
+            cloudRowVersionMapping: sidecar.mappedCloudRowVersionSemantics,
+            pendingMutationMapping: sidecar.pendingMutationSemantics,
+            reviewedResolution: sidecar.reviewedResolution
+        )
+        let manifest = PersistenceArchiveManifest(
+            archiveFormatVersion: Self.archiveFormatVersion,
+            schemaVersion: BudgetMateSchema.currentVersionString,
+            appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
+            appBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
+            createdAt: .now,
+            reason: sanitizedReason(reason),
+            sourceOpenStatus: "verified",
+            sourceStoreFilename: descriptor.storeURL.lastPathComponent,
+            sourceArtifactFingerprint: sourceArtifactFingerprint,
+            files: manifestFiles,
+            snapshot: snapshot,
+            sanitizedDiagnostics: PersistenceSanitizedDiagnostics(
+                operation: "legacy-schema3-recovery",
+                failureCode: sanitizedReason(failureCode),
+                storeFilename: descriptor.storeURL.lastPathComponent,
+                message: pendingRowCount == 0
+                    ? "Legacy metadata was reconciled on an isolated staged copy."
+                    : sidecar.reviewedResolution == nil
+                        ? "Legacy pending metadata was preserved opaquely; restore is blocked pending review."
+                        : "Legacy pending metadata was preserved opaquely; reviewed restore will assign a fresh Gate C mutation ID on sync."
+            ),
+            legacyMetadataStatus: legacyStatus
+        )
+        try writeJSON(manifest, to: temporaryArchive.appendingPathComponent("manifest.json"))
+        try writeJSON(
+            manifest.sanitizedDiagnostics,
+            to: temporaryArchive.appendingPathComponent("diagnostics.json")
+        )
+        try protectTree(at: temporaryArchive)
+        try fileManager.moveItem(at: temporaryArchive, to: finalArchive)
+        return PersistenceArchiveResult(
+            archiveURL: finalArchive,
+            manifest: manifest,
+            isRestorable: !legacyStatus.requiresManualReview
+        )
+    }
+
     func restoreArchive(
         at archiveURL: URL,
         to descriptor: PersistenceStoreDescriptor
     ) throws -> PersistenceArchiveVerification {
         guard !descriptor.isStoredInMemoryOnly else { throw PersistenceRecoveryError.notFileBacked }
         let verification = try verifyArchive(at: archiveURL)
+        guard verification.manifest.legacyMetadataStatus?.requiresManualReview != true else {
+            throw PersistenceRecoveryError.legacyMetadataReviewRequired
+        }
         guard verification.manifest.sourceStoreFilename == descriptor.storeURL.lastPathComponent else {
             throw PersistenceRecoveryError.unsupportedArchive
         }
@@ -320,6 +1147,9 @@ final class PersistenceRecoveryService {
     ) throws {
         guard !descriptor.isStoredInMemoryOnly else { throw PersistenceRecoveryError.notFileBacked }
         let verification = try verifyArchive(at: archiveURL)
+        guard verification.manifest.legacyMetadataStatus?.requiresManualReview != true else {
+            throw PersistenceRecoveryError.legacyMetadataReviewRequired
+        }
         let currentArtifacts = try collectArtifacts(for: descriptor)
         let currentFingerprint = try artifactFingerprint(for: currentArtifacts)
         guard currentFingerprint == verification.manifest.sourceArtifactFingerprint else {
@@ -794,6 +1624,143 @@ final class PersistenceRecoveryService {
         return manifest
     }
 
+    private func validateLegacyMetadataSidecarIfPresent(
+        manifest: PersistenceArchiveManifest,
+        archiveURL: URL
+    ) throws {
+        guard let status = manifest.legacyMetadataStatus else { return }
+        guard status.formatVersion == 1,
+              Self.safeRelativePath(status.sidecarTargetRelativePath),
+              Self.isSHA256Hex(status.sourceArtifactFingerprint),
+              status.transactionRowCount >= 0,
+              status.settlementRowCount >= 0,
+              status.pendingRowCount >= 0 else {
+            throw PersistenceRecoveryError.invalidArchive
+        }
+        guard let sidecarFile = manifest.files.first(where: {
+            $0.targetRelativePath == status.sidecarTargetRelativePath
+        }), sidecarFile.kind == "companion" else {
+            throw PersistenceRecoveryError.incompleteArchive
+        }
+        let sidecarURL = archiveURL.appendingPathComponent(sidecarFile.relativePath)
+        let sidecar = try JSONDecoder.budgetMateDecoder.decode(
+            PersistenceLegacyMetadataSidecar.self,
+            from: Data(contentsOf: sidecarURL)
+        )
+        let allRows = sidecar.transactionRows + sidecar.settlementRows
+        let ids = allRows.map(\.stableID)
+        let pendingRows = allRows.filter { $0.pendingMutationBytesBase64 != nil }
+        guard sidecar.formatVersion == status.formatVersion,
+              sidecar.sourceArtifactFingerprint == status.sourceArtifactFingerprint,
+              status.sourceMetadataFingerprint == nil
+                  || status.sourceMetadataFingerprint == sidecar.sourceMetadataFingerprint,
+              sidecar.sourceMetadataFingerprint == nil
+                  || recoveryLegacyMetadataFingerprint(
+                      transactionRows: sidecar.transactionRows,
+                      settlementRows: sidecar.settlementRows
+                  ) == sidecar.sourceMetadataFingerprint,
+              sidecar.transactionRows.count == status.transactionRowCount,
+              sidecar.settlementRows.count == status.settlementRowCount,
+              pendingRows.count == status.pendingRowCount,
+              status.requiresManualReview == (
+                  !pendingRows.isEmpty && sidecar.reviewedResolution == nil
+              ),
+              status.reviewedResolution == sidecar.reviewedResolution,
+              ids.count == Set(ids).count,
+              allRows.allSatisfy({ row in
+                  guard let pending = row.pendingMutationBytesBase64 else { return true }
+                  return Data(base64Encoded: pending) != nil
+              }) else {
+            throw PersistenceRecoveryError.legacyMetadataMismatch
+        }
+        if let resolution = sidecar.reviewedResolution {
+            guard !pendingRows.isEmpty,
+                  let sourceMetadataFingerprint = sidecar.sourceMetadataFingerprint,
+                  resolution.decision == PersistenceLegacyMetadataResolution.retryWithFreshGateCMutationID,
+                  resolution.sourceArtifactFingerprint == sidecar.sourceArtifactFingerprint,
+                  resolution.sourceMetadataFingerprint == sourceMetadataFingerprint else {
+                throw PersistenceRecoveryError.legacyMetadataMismatch
+            }
+        }
+    }
+
+    private func validateLegacyMetadataPayloadIfPresent(
+        manifest: PersistenceArchiveManifest,
+        archiveURL: URL,
+        primaryURL: URL
+    ) throws {
+        guard let status = manifest.legacyMetadataStatus else { return }
+        guard manifest.schemaVersion == BudgetMateSchema.currentVersionString,
+              let sidecarFile = manifest.files.first(where: {
+                  $0.targetRelativePath == status.sidecarTargetRelativePath
+              }) else {
+            throw PersistenceRecoveryError.legacyMetadataMismatch
+        }
+        let sidecar = try JSONDecoder.budgetMateDecoder.decode(
+            PersistenceLegacyMetadataSidecar.self,
+            from: Data(contentsOf: archiveURL.appendingPathComponent(sidecarFile.relativePath))
+        )
+        let configuration = ModelConfiguration(
+            "BudgetMateLegacyArchiveValidation",
+            schema: BudgetMateSchema.current,
+            url: primaryURL,
+            cloudKitDatabase: .none
+        )
+        let container = try ModelContainer(
+            for: BudgetMateSchema.current,
+            configurations: [configuration]
+        )
+        let context = container.mainContext
+        let transactions = try context.fetch(FetchDescriptor<Transaction>())
+        let settlements = try context.fetch(FetchDescriptor<Settlement>())
+        let transactionMetadata = Dictionary(
+            uniqueKeysWithValues: sidecar.transactionRows.map { ($0.stableID, $0) }
+        )
+        let settlementMetadata = Dictionary(
+            uniqueKeysWithValues: sidecar.settlementRows.map { ($0.stableID, $0) }
+        )
+        guard transactions.count == sidecar.transactionRows.count,
+              settlements.count == sidecar.settlementRows.count else {
+            throw PersistenceRecoveryError.legacyMetadataMismatch
+        }
+        for transaction in transactions {
+            guard let row = transactionMetadata[transaction.id.uuidString] else {
+                throw PersistenceRecoveryError.legacyMetadataMismatch
+            }
+            let expectedRowVersion = try normalizedRowVersion(
+                for: row,
+                reviewedResolution: sidecar.reviewedResolution
+            )
+            let expectedNeedsSync = try normalizedNeedsSync(
+                for: row,
+                reviewedResolution: sidecar.reviewedResolution
+            )
+            guard transaction.rowVersion == expectedRowVersion,
+                  transaction.lastMutationId == nil,
+                  transaction.needsSync == expectedNeedsSync else {
+                throw PersistenceRecoveryError.legacyMetadataMismatch
+            }
+        }
+        for settlement in settlements {
+            guard let row = settlementMetadata[settlement.id.uuidString] else {
+                throw PersistenceRecoveryError.legacyMetadataMismatch
+            }
+            let expectedRowVersion = try normalizedRowVersion(
+                for: row,
+                reviewedResolution: sidecar.reviewedResolution
+            )
+            let expectedNeedsSync = try normalizedNeedsSync(
+                for: row,
+                reviewedResolution: sidecar.reviewedResolution
+            )
+            guard settlement.rowVersion == expectedRowVersion,
+                  settlement.lastMutationId == nil,
+                  settlement.needsSync == expectedNeedsSync else {
+                throw PersistenceRecoveryError.legacyMetadataMismatch
+            }
+        }
+    }
+
     private func validateStore(
         at storeURL: URL,
         schemaVersion: String = BudgetMateSchema.currentVersionString
@@ -922,20 +1889,31 @@ final class PersistenceRecoveryService {
     private func makeProtectedDirectory(_ url: URL) throws {
         try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
         try fileManager.setAttributes(
-            [.protectionKey: FileProtectionType.complete],
+            [
+                .protectionKey: FileProtectionType.complete,
+                .posixPermissions: NSNumber(value: 0o700)
+            ],
             ofItemAtPath: url.path
         )
     }
 
     private func protectTree(at url: URL) throws {
+        let isDirectory = try url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true
         try fileManager.setAttributes(
-            [.protectionKey: FileProtectionType.complete],
+            [
+                .protectionKey: FileProtectionType.complete,
+                .posixPermissions: NSNumber(value: isDirectory ? 0o700 : 0o600)
+            ],
             ofItemAtPath: url.path
         )
         guard let enumerator = fileManager.enumerator(at: url, includingPropertiesForKeys: nil) else { return }
         for case let child as URL in enumerator {
+            let childIsDirectory = try child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true
             try fileManager.setAttributes(
-                [.protectionKey: FileProtectionType.complete],
+                [
+                    .protectionKey: FileProtectionType.complete,
+                    .posixPermissions: NSNumber(value: childIsDirectory ? 0o700 : 0o600)
+                ],
                 ofItemAtPath: child.path
             )
         }
@@ -1128,4 +2106,32 @@ private extension JSONDecoder {
         decoder.dateDecodingStrategy = .iso8601
         return decoder
     }
+}
+
+private func recoveryLegacyMetadataFingerprint(
+    transactionRows: [PersistenceLegacyMetadataRow],
+    settlementRows: [PersistenceLegacyMetadataRow]
+) -> String {
+    let canonical = (transactionRows + settlementRows)
+        .sorted { lhs, rhs in
+            if lhs.stableID == rhs.stableID {
+                return (lhs.pendingMutationBytesBase64 ?? "")
+                    < (rhs.pendingMutationBytesBase64 ?? "")
+            }
+            return lhs.stableID < rhs.stableID
+        }
+        .map { row in
+            [
+                row.stableID,
+                row.cloudRowVersion.map(String.init) ?? "null",
+                row.pendingMutationBytesBase64 ?? "null",
+                row.needsSync ? "1" : "0"
+            ].joined(separator: "|")
+        }
+        .joined(separator: "\n")
+    return recoverySHA256(Data(canonical.utf8))
+}
+
+private func recoverySHA256(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 }

@@ -739,7 +739,9 @@ struct BudgetView: View {
     }
 
     private func monthlySpent(for category: TransactionCategory) -> Double {
-        tabMetrics.spentByCategory[category] ?? 0
+        tabMetrics
+            .categoryBreakdown(for: category, budgetScopeId: budgetScopeId)
+            .total
     }
 
     private func configuredBudget(for category: TransactionCategory) -> Double {

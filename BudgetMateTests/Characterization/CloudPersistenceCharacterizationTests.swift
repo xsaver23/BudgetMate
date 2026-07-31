@@ -532,4 +532,43 @@ final class CloudPersistenceCharacterizationTests: XCTestCase {
             }
         }
     }
+
+    func testCloudTablesMessageRequiresExplicitMissingTableSignal() {
+        let store = CloudSyncStore(userDefaults: BudgetMateTestFixtures.isolatedDefaults())
+        let expected = "Cloud tables are not ready yet. Finish the Supabase setup, then sync again."
+        let missingTableMessages = [
+            "Could not find the table 'public.budget_transactions' in the schema cache",
+            "ERROR: relation \"public.budget_settlements\" does not exist",
+            "PGRST205: Could not find the table 'public.budget_memberships' in the schema cache"
+        ]
+
+        for message in missingTableMessages {
+            XCTAssertEqual(
+                store.userFacingMessage(for: NSError(domain: "PostgREST", code: 404, userInfo: [NSLocalizedDescriptionKey: message])),
+                expected,
+                "Expected explicit missing-table signal to use setup guidance: \(message)"
+            )
+        }
+    }
+
+    func testCloudTablesMessageDoesNotMaskPermissionOrLegacyWriteErrors() {
+        let store = CloudSyncStore(userDefaults: BudgetMateTestFixtures.isolatedDefaults())
+        let permissionError = "permission denied for table public.budget_transactions"
+        let legacyWriteError = "permission denied for function public.save_budget_transaction_cas"
+        let rowLevelSecurityError = "new row violates row-level security policy for table budget_transactions"
+        let setupMessage = "Cloud tables are not ready yet. Finish the Supabase setup, then sync again."
+
+        XCTAssertEqual(
+            store.userFacingMessage(for: NSError(domain: "PostgreSQL", code: 42501, userInfo: [NSLocalizedDescriptionKey: permissionError])),
+            permissionError
+        )
+        XCTAssertEqual(
+            store.userFacingMessage(for: NSError(domain: "PostgreSQL", code: 42501, userInfo: [NSLocalizedDescriptionKey: legacyWriteError])),
+            legacyWriteError
+        )
+        XCTAssertNotEqual(
+            store.userFacingMessage(for: NSError(domain: "PostgREST", code: 403, userInfo: [NSLocalizedDescriptionKey: rowLevelSecurityError])),
+            setupMessage
+        )
+    }
 }

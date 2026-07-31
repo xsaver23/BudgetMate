@@ -88,16 +88,29 @@ final class PersistenceStartupCoordinator: ObservableObject {
         isWorking = true
         defer { isWorking = false }
         do {
-            let result = try recoveryService.createSupportArchive(
-                for: context.descriptor,
-                reason: "persistence startup failure",
-                failureCode: context.reason.rawValue
-            )
+            let result: PersistenceArchiveResult
+            do {
+                result = try recoveryService.createSchema3RecoveryArchive(
+                    for: context.descriptor,
+                    reason: "persistence startup failure",
+                    failureCode: context.reason.rawValue
+                )
+            } catch PersistenceRecoveryError.legacySurfaceNotFound {
+                result = try recoveryService.createSupportArchive(
+                    for: context.descriptor,
+                    reason: "persistence startup failure",
+                    failureCode: context.reason.rawValue
+                )
+            }
             latestArchiveURL = result.archiveURL
             verifiedArchiveURL = result.isRestorable ? result.archiveURL : nil
-            feedbackMessage = result.isRestorable
-                ? "Support archive created and verified."
-                : "Support archive created, but it could not be verified for restore."
+            if result.manifest.legacyMetadataStatus?.requiresManualReview == true {
+                feedbackMessage = "Support archive verified. Restore is blocked until legacy sync metadata is reviewed."
+            } else {
+                feedbackMessage = result.isRestorable
+                    ? "Support archive created and verified."
+                    : "Support archive created, but it could not be verified for restore."
+            }
         } catch {
             feedbackMessage = sanitizedFeedback(for: error)
         }

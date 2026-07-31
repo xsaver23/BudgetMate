@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import SQLite3
 import SwiftData
 import XCTest
 @testable import BudgetMate
@@ -126,6 +127,313 @@ final class PersistenceRecoveryTests: XCTestCase {
         )
     }
 
+    func testLegacyPhysicalMetadataMapsOnlyProvenCloudVersionAndRoundTripsSchema3() throws {
+        let sourceDirectory = testRoot.appendingPathComponent("legacy-physical", isDirectory: true)
+        let targetDirectory = testRoot.appendingPathComponent("legacy-physical-target", isDirectory: true)
+        try fileManager.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: targetDirectory, withIntermediateDirectories: true)
+        let sourceStoreURL = sourceDirectory.appendingPathComponent("BudgetMate.store")
+        try LegacyUnversionedStoreFixture.create(at: sourceStoreURL)
+        try installLegacyPhysicalMetadata(at: sourceStoreURL, pending: false)
+        let sourceBefore = try artifactBytes(for: sourceStoreURL)
+
+        let service = makeService()
+        let result = try service.createSchema3RecoveryArchive(
+            for: PersistenceStoreDescriptor(storeURL: sourceStoreURL, schemaVersion: "1.0.0"),
+            reason: "synthetic legacy metadata contract",
+            failureCode: "test"
+        )
+
+        XCTAssertTrue(result.isRestorable)
+        XCTAssertEqual(result.manifest.schemaVersion, BudgetMateSchema.currentVersionString)
+        let status = try XCTUnwrap(result.manifest.legacyMetadataStatus)
+        XCTAssertEqual(status.transactionRowCount, 2)
+        XCTAssertEqual(status.settlementRowCount, 1)
+        XCTAssertEqual(status.pendingRowCount, 0)
+        XCTAssertFalse(status.requiresManualReview)
+        XCTAssertTrue(status.cloudRowVersionMapping.contains("rowVersion"))
+        XCTAssertTrue(status.pendingMutationMapping.contains("no-v3-mapping"))
+
+        let verification = try service.verifyArchive(at: result.archiveURL)
+        XCTAssertEqual(verification.snapshot.transactionCount, 2)
+        XCTAssertEqual(verification.snapshot.splitCount, 3)
+        XCTAssertEqual(verification.snapshot.settlementCount, 1)
+
+        let restoredURL = targetDirectory.appendingPathComponent("BudgetMate.store")
+        _ = try service.restoreArchive(
+            at: result.archiveURL,
+            to: PersistenceStoreDescriptor(storeURL: restoredURL)
+        )
+        let restored = try PersistenceController(storeURL: restoredURL)
+        let restoredTransactions = try restored.container.mainContext.fetch(
+            FetchDescriptor<Transaction>()
+        ).sorted { $0.id.uuidString < $1.id.uuidString }
+        let restoredSettlements = try restored.container.mainContext.fetch(
+            FetchDescriptor<Settlement>()
+        )
+        XCTAssertEqual(restoredTransactions.map(\.rowVersion), [17, 17])
+        XCTAssertEqual(restoredSettlements.map(\.rowVersion), [19])
+        XCTAssertTrue(restoredTransactions.allSatisfy { $0.lastMutationId == nil })
+        XCTAssertEqual(restoredTransactions.filter(\.needsSync).count, 1)
+        XCTAssertEqual(restoredSettlements.filter(\.needsSync).count, 1)
+        XCTAssertEqual(try artifactBytes(for: sourceStoreURL), sourceBefore)
+        let transactionColumns = try sqliteColumns(for: "ZTRANSACTION", at: sourceStoreURL)
+        let settlementColumns = try sqliteColumns(for: "ZSETTLEMENT", at: sourceStoreURL)
+        for column in ["ZCLOUDROWVERSION", "ZPENDINGMUTATIONID", "ZNEEDSSYNC"] {
+            XCTAssertTrue(transactionColumns.contains(column))
+            XCTAssertTrue(settlementColumns.contains(column))
+        }
+    }
+
+    func testLegacyPendingMetadataIsOpaqueAndRestoreFailsClosedWithoutMutatingTarget() throws {
+        let sourceDirectory = testRoot.appendingPathComponent("legacy-pending", isDirectory: true)
+        let targetDirectory = testRoot.appendingPathComponent("legacy-pending-target", isDirectory: true)
+        try fileManager.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: targetDirectory, withIntermediateDirectories: true)
+        let sourceStoreURL = sourceDirectory.appendingPathComponent("BudgetMate.store")
+        try LegacyUnversionedStoreFixture.create(at: sourceStoreURL)
+        try installLegacyPhysicalMetadata(at: sourceStoreURL, pending: true)
+
+        let service = makeService()
+        let result = try service.createSchema3RecoveryArchive(
+            for: PersistenceStoreDescriptor(storeURL: sourceStoreURL, schemaVersion: "1.0.0"),
+            reason: "synthetic pending metadata contract",
+            failureCode: "test"
+        )
+        XCTAssertFalse(result.isRestorable)
+        let status = try XCTUnwrap(result.manifest.legacyMetadataStatus)
+        XCTAssertEqual(status.pendingRowCount, 1)
+        XCTAssertTrue(status.requiresManualReview)
+        XCTAssertTrue(status.pendingMutationMapping.contains("opaque"))
+        XCTAssertNoThrow(try service.verifyArchive(at: result.archiveURL))
+
+        let targetURL = targetDirectory.appendingPathComponent("BudgetMate.store")
+        let targetMarker = targetDirectory.appendingPathComponent("must-remain-untouched.txt")
+        try Data("untouched".utf8).write(to: targetMarker)
+        XCTAssertThrowsError(
+            try service.restoreArchive(
+                at: result.archiveURL,
+                to: PersistenceStoreDescriptor(storeURL: targetURL)
+            )
+        ) { error in
+            guard case PersistenceRecoveryError.legacyMetadataReviewRequired = error else {
+                return XCTFail("Expected the opaque pending metadata guard")
+            }
+        }
+        XCTAssertFalse(fileManager.fileExists(atPath: targetURL.path))
+        XCTAssertEqual(try Data(contentsOf: targetMarker), Data("untouched".utf8))
+    }
+
+    func testReviewedPendingResolutionRequiresExactDigestsAndPreservesFreshMutationInvariants() throws {
+        let sourceDirectory = testRoot.appendingPathComponent("legacy-reviewed", isDirectory: true)
+        let targetDirectory = testRoot.appendingPathComponent("legacy-reviewed-target", isDirectory: true)
+        try fileManager.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: targetDirectory, withIntermediateDirectories: true)
+        let sourceStoreURL = sourceDirectory.appendingPathComponent("BudgetMate.store")
+        try LegacyUnversionedStoreFixture.create(at: sourceStoreURL)
+        try installLegacyPhysicalMetadata(at: sourceStoreURL, pending: true)
+        try executeSQL(
+            "UPDATE \"ZTRANSACTION\" SET \"ZCLOUDROWVERSION\" = 0, \"ZNEEDSSYNC\" = 1 "
+                + "WHERE \"Z_PK\" = (SELECT MIN(\"Z_PK\") FROM \"ZTRANSACTION\");",
+            at: sourceStoreURL
+        )
+        let sourceBefore = try artifactBytes(for: sourceStoreURL)
+        let service = makeService()
+        let token = try service.legacyMetadataReviewToken(
+            for: PersistenceStoreDescriptor(storeURL: sourceStoreURL, schemaVersion: "1.0.0")
+        )
+        XCTAssertEqual(token.pendingRowCount, 1)
+        XCTAssertEqual(try artifactBytes(for: sourceStoreURL), sourceBefore)
+        let resolution = PersistenceLegacyMetadataResolution(
+            decision: PersistenceLegacyMetadataResolution.retryWithFreshGateCMutationID,
+            sourceArtifactFingerprint: token.sourceArtifactFingerprint,
+            sourceMetadataFingerprint: token.sourceMetadataFingerprint
+        )
+
+        let result = try service.createSchema3RecoveryArchive(
+            for: PersistenceStoreDescriptor(storeURL: sourceStoreURL, schemaVersion: "1.0.0"),
+            reason: "synthetic reviewed pending metadata contract",
+            failureCode: "test",
+            reviewedResolution: resolution
+        )
+        XCTAssertTrue(result.isRestorable)
+        let status = try XCTUnwrap(result.manifest.legacyMetadataStatus)
+        XCTAssertFalse(status.requiresManualReview)
+        XCTAssertEqual(status.reviewedResolution, resolution)
+        XCTAssertEqual(status.sourceMetadataFingerprint, token.sourceMetadataFingerprint)
+        XCTAssertTrue(
+            result.manifest.sanitizedDiagnostics.message.contains("fresh Gate C mutation ID")
+        )
+        _ = try service.verifyArchive(at: result.archiveURL)
+
+        let restoredURL = targetDirectory.appendingPathComponent("BudgetMate.store")
+        _ = try service.restoreArchive(
+            at: result.archiveURL,
+            to: PersistenceStoreDescriptor(storeURL: restoredURL)
+        )
+        let restored = try PersistenceController(storeURL: restoredURL)
+        let restoredTransactions = try restored.container.mainContext.fetch(
+            FetchDescriptor<Transaction>()
+        )
+        let reviewedTransaction = try XCTUnwrap(restoredTransactions.first(where: \.needsSync))
+        XCTAssertNil(reviewedTransaction.rowVersion)
+        XCTAssertNil(reviewedTransaction.lastMutationId)
+        XCTAssertTrue(reviewedTransaction.needsSync)
+        XCTAssertEqual(reviewedTransaction.rowVersion == nil ? "insert" : "update", "insert")
+        XCTAssertTrue(restoredTransactions.allSatisfy { $0.lastMutationId == nil })
+        XCTAssertEqual(try artifactBytes(for: sourceStoreURL), sourceBefore)
+
+        var changedResolution = resolution
+        changedResolution = PersistenceLegacyMetadataResolution(
+            decision: changedResolution.decision,
+            sourceArtifactFingerprint: changedResolution.sourceArtifactFingerprint,
+            sourceMetadataFingerprint: String(repeating: "0", count: 64)
+        )
+        let changedTarget = targetDirectory.appendingPathComponent("changed-digest.store")
+        XCTAssertThrowsError(
+            try service.createSchema3RecoveryArchive(
+                for: PersistenceStoreDescriptor(storeURL: sourceStoreURL, schemaVersion: "1.0.0"),
+                reason: "synthetic changed review digest",
+                failureCode: "test",
+                reviewedResolution: changedResolution
+            )
+        ) { error in
+            guard case PersistenceRecoveryError.legacyMetadataMismatch = error else {
+                return XCTFail("Expected changed digest to refuse the reviewed resolution")
+            }
+        }
+        XCTAssertFalse(fileManager.fileExists(atPath: changedTarget.path))
+        XCTAssertEqual(try artifactBytes(for: sourceStoreURL), sourceBefore)
+    }
+
+    func testReviewedResolutionRefusesNonzeroOrCleanOpaquePendingRows() throws {
+        for invalidCase in ["nonzero-version", "clean-row"] {
+            let sourceDirectory = testRoot.appendingPathComponent(
+                "invalid-reviewed-" + invalidCase,
+                isDirectory: true
+            )
+            try fileManager.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+            let sourceStoreURL = sourceDirectory.appendingPathComponent("BudgetMate.store")
+            try LegacyUnversionedStoreFixture.create(at: sourceStoreURL)
+            try installLegacyPhysicalMetadata(at: sourceStoreURL, pending: true)
+            if invalidCase == "clean-row" {
+                try executeSQL(
+                    "UPDATE \"ZTRANSACTION\" SET \"ZCLOUDROWVERSION\" = 0, \"ZNEEDSSYNC\" = 0 "
+                        + "WHERE \"Z_PK\" = (SELECT MIN(\"Z_PK\") FROM \"ZTRANSACTION\");",
+                    at: sourceStoreURL
+                )
+            }
+            let service = makeService()
+            let descriptor = PersistenceStoreDescriptor(
+                storeURL: sourceStoreURL,
+                schemaVersion: "1.0.0"
+            )
+            let token = try service.legacyMetadataReviewToken(for: descriptor)
+            let resolution = PersistenceLegacyMetadataResolution(
+                decision: PersistenceLegacyMetadataResolution.retryWithFreshGateCMutationID,
+                sourceArtifactFingerprint: token.sourceArtifactFingerprint,
+                sourceMetadataFingerprint: token.sourceMetadataFingerprint
+            )
+            XCTAssertThrowsError(
+                try service.createSchema3RecoveryArchive(
+                    for: descriptor,
+                    reason: "synthetic invalid reviewed pending metadata",
+                    failureCode: "test",
+                    reviewedResolution: resolution
+                )
+            ) { error in
+                guard case PersistenceRecoveryError.legacyMetadataMismatch = error else {
+                    return XCTFail("Expected (invalidCase) pending metadata to refuse resolution")
+                }
+            }
+        }
+    }
+
+    func testAuthorizedLegacyRecoveryRehearsalWhenEnvironmentIsProvided() throws {
+        guard let sourceContainerPath = ProcessInfo.processInfo.environment[
+            "BUDGETMATE_RECOVERY_SOURCE_CONTAINER"
+        ], let outputPath = ProcessInfo.processInfo.environment[
+            "BUDGETMATE_RECOVERY_OUTPUT_DIRECTORY"
+        ] else {
+            throw XCTSkip("Authorized recovery source/output not provided")
+        }
+
+        let sourceContainer = URL(fileURLWithPath: sourceContainerPath, isDirectory: true)
+        let freshCopy = testRoot.appendingPathComponent("authorized-source-copy", isDirectory: true)
+        try fileManager.copyItem(at: sourceContainer, to: freshCopy)
+        let storeURL = freshCopy
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("default.store")
+        let before = try artifactBytes(for: storeURL)
+        let outputDirectory = URL(fileURLWithPath: outputPath, isDirectory: true)
+        try fileManager.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+
+        let service = PersistenceRecoveryService(
+            fileManager: fileManager,
+            archiveDirectory: outputDirectory
+        )
+        let descriptor = PersistenceStoreDescriptor(storeURL: storeURL, schemaVersion: "1.0.0")
+        let reviewToken = try service.legacyMetadataReviewToken(for: descriptor)
+        let reviewedResolution: PersistenceLegacyMetadataResolution?
+        if ProcessInfo.processInfo.environment["BUDGETMATE_RECOVERY_REVIEWED_RESOLUTION"]
+            == PersistenceLegacyMetadataResolution.retryWithFreshGateCMutationID {
+            let expectedArtifact = ProcessInfo.processInfo.environment[
+                "BUDGETMATE_RECOVERY_EXPECTED_SOURCE_ARTIFACT_FINGERPRINT"
+            ]
+            let expectedMetadata = ProcessInfo.processInfo.environment[
+                "BUDGETMATE_RECOVERY_EXPECTED_SOURCE_METADATA_FINGERPRINT"
+            ]
+            guard expectedArtifact == reviewToken.sourceArtifactFingerprint,
+                  expectedMetadata == reviewToken.sourceMetadataFingerprint else {
+                throw PersistenceRecoveryError.legacyMetadataMismatch
+            }
+            reviewedResolution = PersistenceLegacyMetadataResolution(
+                decision: PersistenceLegacyMetadataResolution.retryWithFreshGateCMutationID,
+                sourceArtifactFingerprint: reviewToken.sourceArtifactFingerprint,
+                sourceMetadataFingerprint: reviewToken.sourceMetadataFingerprint
+            )
+        } else {
+            reviewedResolution = nil
+        }
+        let result = try service.createSchema3RecoveryArchive(
+            for: descriptor,
+            reason: "owner-authorized read-only recovery rehearsal",
+            failureCode: "authorized-rehearsal",
+            reviewedResolution: reviewedResolution
+        )
+        let verification = try service.verifyArchive(at: result.archiveURL)
+        XCTAssertEqual(verification.manifest.schemaVersion, BudgetMateSchema.currentVersionString)
+        XCTAssertEqual(try artifactBytes(for: storeURL), before)
+        let status = try XCTUnwrap(verification.manifest.legacyMetadataStatus)
+        XCTAssertEqual(status.reviewedResolution, reviewedResolution)
+        XCTAssertEqual(status.requiresManualReview, reviewToken.pendingRowCount > 0 && reviewedResolution == nil)
+
+        let evidence: [String: Any] = [
+            "status": reviewedResolution == nil ? "PASS_VERIFIED_FAIL_CLOSED" : "PASS_VERIFIED_REVIEWED_RESOLUTION",
+            "schemaVersion": verification.manifest.schemaVersion,
+            "archiveFormatVersion": verification.manifest.archiveFormatVersion,
+            "transactionCount": verification.snapshot.transactionCount,
+            "splitCount": verification.snapshot.splitCount,
+            "settlementCount": verification.snapshot.settlementCount,
+            "pendingRowCount": status.pendingRowCount,
+            "requiresManualReview": status.requiresManualReview,
+            "reviewedResolution": reviewedResolution?.decision ?? "none",
+            "resolutionDigestBound": reviewedResolution.map { $0.sourceArtifactFingerprint == reviewToken.sourceArtifactFingerprint
+                && $0.sourceMetadataFingerprint == reviewToken.sourceMetadataFingerprint } ?? false,
+            "sourceUntouched": true,
+            "originalBackupOpened": false,
+            "ownerDataLogged": false
+        ]
+        let evidenceURL = outputDirectory.appendingPathComponent("recovery-evidence.json")
+        let evidenceData = try JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys])
+        try evidenceData.write(to: evidenceURL, options: [.atomic])
+        try fileManager.setAttributes(
+            [.posixPermissions: NSNumber(value: 0o600)],
+            ofItemAtPath: evidenceURL.path
+        )
+    }
+
     func testCorruptArchiveIsRejectedBeforeActiveStoreChanges() throws {
         let storeURL = try makeStore()
         let descriptor = PersistenceController.descriptor(storeURL: storeURL)
@@ -180,7 +488,8 @@ final class PersistenceRecoveryTests: XCTestCase {
             sourceArtifactFingerprint: traversalManifest.sourceArtifactFingerprint,
             files: files,
             snapshot: traversalManifest.snapshot,
-            sanitizedDiagnostics: traversalManifest.sanitizedDiagnostics
+            sanitizedDiagnostics: traversalManifest.sanitizedDiagnostics,
+            legacyMetadataStatus: traversalManifest.legacyMetadataStatus
         )
         try writeJSON(traversalManifest, to: traversal.appendingPathComponent("manifest.json"))
         XCTAssertThrowsError(try service.verifyArchive(at: traversal))
@@ -608,5 +917,89 @@ final class PersistenceRecoveryTests: XCTestCase {
         SHA256.hash(data: try Data(contentsOf: url))
             .map { String(format: "%02x", $0) }
             .joined()
+    }
+
+    private func installLegacyPhysicalMetadata(at storeURL: URL, pending: Bool) throws {
+        try executeSQL(
+            "ALTER TABLE \"ZTRANSACTION\" ADD COLUMN \"ZCLOUDROWVERSION\" INTEGER; "
+                + "ALTER TABLE \"ZTRANSACTION\" ADD COLUMN \"ZPENDINGMUTATIONID\" BLOB; "
+                + "ALTER TABLE \"ZSETTLEMENT\" ADD COLUMN \"ZCLOUDROWVERSION\" INTEGER; "
+                + "ALTER TABLE \"ZSETTLEMENT\" ADD COLUMN \"ZPENDINGMUTATIONID\" BLOB;",
+            at: storeURL
+        )
+        try executeSQL(
+            "UPDATE \"ZTRANSACTION\" SET \"ZCLOUDROWVERSION\" = 17; "
+                + "UPDATE \"ZSETTLEMENT\" SET \"ZCLOUDROWVERSION\" = 19;",
+            at: storeURL
+        )
+        if pending {
+            try executeSQL(
+                "UPDATE \"ZTRANSACTION\" SET \"ZPENDINGMUTATIONID\" = X'00112233445566778899AABBCCDDEEFF' "
+                    + "WHERE \"Z_PK\" = (SELECT MIN(\"Z_PK\") FROM \"ZTRANSACTION\");",
+                at: storeURL
+            )
+        }
+    }
+
+    private func executeSQL(_ sql: String, at storeURL: URL) throws {
+        var database: OpaquePointer?
+        let openResult = storeURL.path.withCString { path in
+            sqlite3_open_v2(path, &database, SQLITE_OPEN_READWRITE, nil)
+        }
+        guard openResult == SQLITE_OK, let database else {
+            if let database { sqlite3_close(database) }
+            throw PersistenceRecoveryError.fileSystemFailure
+        }
+        defer { sqlite3_close(database) }
+        let result = sql.withCString { sqlPointer in
+            sqlite3_exec(database, sqlPointer, nil, nil, nil)
+        }
+        guard result == SQLITE_OK else { throw PersistenceRecoveryError.fileSystemFailure }
+    }
+
+    private func sqliteColumns(for table: String, at storeURL: URL) throws -> Set<String> {
+        var database: OpaquePointer?
+        let openResult = storeURL.path.withCString { path in
+            sqlite3_open_v2(path, &database, SQLITE_OPEN_READONLY, nil)
+        }
+        guard openResult == SQLITE_OK, let database else {
+            if let database { sqlite3_close(database) }
+            throw PersistenceRecoveryError.fileSystemFailure
+        }
+        defer { sqlite3_close(database) }
+        var statement: OpaquePointer?
+        let sql = "PRAGMA table_info(\"" + table + "\")"
+        let prepareResult = sql.withCString { sqlPointer in
+            sqlite3_prepare_v2(database, sqlPointer, -1, &statement, nil)
+        }
+        guard prepareResult == SQLITE_OK, let statement else {
+            throw PersistenceRecoveryError.fileSystemFailure
+        }
+        defer { sqlite3_finalize(statement) }
+        var result = Set<String>()
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let pointer = sqlite3_column_text(statement, 1) {
+                result.insert(String(cString: pointer).uppercased())
+            }
+        }
+        return result
+    }
+
+    private func artifactBytes(for storeURL: URL) throws -> [String: Data] {
+        let parent = storeURL.deletingLastPathComponent()
+        let names = [
+            storeURL.lastPathComponent,
+            storeURL.lastPathComponent + "-wal",
+            storeURL.lastPathComponent + "-shm",
+            storeURL.lastPathComponent + "-journal"
+        ]
+        var result: [String: Data] = [:]
+        for name in names {
+            let url = parent.appendingPathComponent(name)
+            if fileManager.fileExists(atPath: url.path) {
+                result[name] = try Data(contentsOf: url)
+            }
+        }
+        return result
     }
 }
