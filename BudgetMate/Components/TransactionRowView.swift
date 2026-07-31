@@ -8,7 +8,10 @@ enum TransactionRowPresentation {
         locale: Locale = .current
     ) -> String {
         let sign = type == .income ? "+" : "-"
-        return "\(sign)\(CurrencyFormatter.amountString(abs(amount), symbol: currencySymbol, locale: locale))"
+        let displaySymbol = CurrencyOption.displaySymbol(
+            for: CurrencyOption.code(forLegacySymbol: currencySymbol)
+        )
+        return "\(sign)\(CurrencyFormatter.amountString(abs(amount), symbol: displaySymbol, locale: locale))"
     }
 }
 
