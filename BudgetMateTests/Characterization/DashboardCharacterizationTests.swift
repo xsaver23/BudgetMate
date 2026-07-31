@@ -164,8 +164,7 @@ final class DashboardCharacterizationTests: XCTestCase {
         )
         let breakdown = metrics.categoryBreakdown(
             for: .groceries,
-            budgetScopeId: scope,
-            currencyCode: "CAD"
+            budgetScopeId: scope
         )
 
         XCTAssertEqual(breakdown.transactions.map(\.id), [inScope.id])

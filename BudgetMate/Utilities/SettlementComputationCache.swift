@@ -460,8 +460,7 @@ struct BudgetTabMetrics {
 
     func categoryBreakdown(
         for category: TransactionCategory,
-        budgetScopeId: String,
-        currencyCode: String = CurrencyOption.usd.code
+        budgetScopeId: String
     ) -> BudgetCategoryTransactionBreakdown {
         BudgetCategoryTransactionBreakdown(
             categoryRawValue: category.rawValue,
