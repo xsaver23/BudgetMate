@@ -1,10 +1,11 @@
 # Gate C server rollout
 
 `20260729000300_shared_data_safety.sql` is intentionally disabled by default:
-it inserts `budget_data_safety_config.writes_enabled = false`. It also removes
-client-role direct transaction and settlement writes, so it must not be applied
-until the intended controlled-beta client has the Gate C RPC contract and its
-distribution/enable sequence is ready.
+it inserts `budget_data_safety_config.writes_enabled = false`. The reviewed
+production baseline also includes `20260730000500_gate_c_mutation_lock_timeout.sql`.
+The pending `20260731000600_gate_c_postgrest_conflicts.sql` is a forward-only
+RPC replacement that keeps the switch false and changes only optimistic-version
+conflicts to the PostgREST-compatible custom SQLSTATE `PT409`.
 
 The production project also contains pre-00300 schema drift: both financial
 tables already have `last_mutation_id`, and an older authenticated mutation
@@ -28,14 +29,13 @@ Keep the window short and planned: prepare and review the exact RPC-capable
 build first, but do not install or distribute a configuration that attempts
 Gate C writes until the migration and its disabled postflight are verified.
 Take the backup and dry-run evidence immediately before the maintenance window,
-apply `00300` only when the rollout owner is available to observe it, and
-schedule the separate enable decision at the end of the controlled-beta
-rehearsal. Do not apply `00300` during a period when normal transaction or
-settlement entry must remain available.
+apply `00600` only when the rollout owner is available to observe it, and keep
+the server switch false. Applying 00600 must not be used as a reason to enable
+the server or client flags.
 
-Production has recorded `00100`, `00200`, and `00400`, with `00300` pending.
-Because `00300` sorts before the already-recorded `00400`, the linked-project
-preflight and apply commands require `--include-all`.
+Production has recorded `00100` through `00500`, with `00600` pending. Because
+the pending migration is applied against an ordered-but-out-of-band rollout
+state, the linked-project preflight and apply commands require `--include-all`.
 
 ## Read-only rehearsal
 
@@ -48,8 +48,8 @@ bash scripts/rehearse_gate_c_production_migration.sh
 The script runs only `supabase migration list --linked` and
 `supabase db push --linked --include-all --dry-run`; it has no apply mode.
 Capture its output with the change record. Confirm it plans only
-`20260729000300_shared_data_safety.sql`, and that the recorded history still
-contains `00400`.
+`20260731000600_gate_c_postgrest_conflicts.sql`, and that the recorded history
+contains `00300`, `00400`, and `00500`.
 
 ## Required logical backup and restore verification
 
@@ -132,7 +132,7 @@ Supabase SQL editor:
 ```sql
 select version, name
 from supabase_migrations.schema_migrations
-where version in ('20260729000100', '20260729000200', '20260729000300', '20260729000400', '20260730000500')
+where version in ('20260729000100', '20260729000200', '20260729000300', '20260729000400', '20260730000500', '20260731000600')
 order by version;
 
 select writes_enabled
@@ -140,9 +140,10 @@ from public.budget_data_safety_config
 where id = true;
 ```
 
-The required result is a recorded `00300` and `writes_enabled = false`. Do not
-change that flag during this deployment. Rehearse the RPCs and controlled beta
-while disabled; a separate owner-approved change is required to enable writes.
+The required result after this migration is the exact six-entry ledger through
+`00600` and `writes_enabled = false`. Do not change that flag during this
+deployment. Rehearse the RPCs while disabled; a separate owner-approved change
+is required to enable writes.
 
 ### Bounded Gate C mutation lock waits
 
@@ -152,13 +153,17 @@ row before checking its version; without this bound, a long-lived concurrent
 writer can make a stale request wait until the PostgREST or client timeout.
 Lock contention returns PostgreSQL `55P03` before a financial row or mutation
 receipt is written, so retrying the same mutation ID after the conflicting
-writer finishes remains idempotent. A stale request without contention keeps
-the existing `40001` conflict behavior. Verify this contract with both
-transaction and settlement lock fixtures, then leave `writes_enabled = false`.
+writer finishes remains idempotent. A stale request without contention returns
+custom SQLSTATE `PT409`, which PostgREST exposes as HTTP 409, with the existing
+messages `The transaction changed on another device.` or `The settlement
+changed on another device.`. A nonzero-version insert returns PT409 with the
+existing `An insert must use row version zero.` message. Verify all four
+conflict paths and both lock fixtures, then leave `writes_enabled = false`.
 
 ### Required client compatibility check
 
-iOS **and web** are required Gate C participants. Before applying `00300`,
+iOS **and web** are required Gate C participants. Before enabling writes or
+applying `00600`,
 verify an intended web rollout build passes `cd web && npm test && npm run
 build` and has the Gate C mutation client included. Its three build variables
 must remain `NO`/absent for ordinary deployments; a controlled-beta build may
@@ -184,7 +189,7 @@ through the disabled invitation flow during the rollout.
 
 ## Rollback boundary
 
-There is no down migration. If the migration must be reversed, stop the
+There is no down migration. If either forward migration must be reversed, stop the
 rollout, preserve the incident evidence, and restore the verified pre-`00300`
 backup under the database owner’s change process. If the owner-approved logical
 backup and restore verification are not complete, stop rather than applying

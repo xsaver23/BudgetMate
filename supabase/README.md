@@ -58,8 +58,10 @@ owner authorization, and post-apply verification.
 
 ## Gate C production-order rehearsal
 
-The Gate C CI contract applies `00400` before `00300`, matching production's
-currently recorded migration history, and restores a pre-`00300` backup that
-retains the money-bridge migrations. See `gate-c-rollout.md` for the read-only
-linked-project rehearsal, the temporary write-read-only window created by
-`00300`, and the authorization/rollback checklist.
+The Gate C CI contract applies `00400` before `00300`, then replays `00500` and
+the pending `00600` in production order, matching production's currently
+recorded migration history and restoring a pre-`00300` backup that retains the
+money-bridge migrations. See `gate-c-rollout.md` for the read-only linked-
+project rehearsal, the temporary write-read-only window created by `00300`,
+the PostgREST-compatible PT409 conflict contract, and the authorization/
+rollback checklist.

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Read-only preflight for the Gate C database migration.
 #
-# Production has 00100, 00200, and 00400 applied while 00300 is pending. The
-# --include-all flag is therefore necessary for Supabase CLI to plan 00300.
+# Production has 00100 through 00500 applied while 00600 is pending. The
+# --include-all flag is therefore necessary for Supabase CLI to plan 00600.
 # This script intentionally has no apply mode.
 set -euo pipefail
 
@@ -16,7 +16,9 @@ for migration in \
   supabase/migrations/20260729000100_money_server_bridge.sql \
   supabase/migrations/20260729000200_money_server_bridge_uuid_case_fix.sql \
   supabase/migrations/20260729000300_shared_data_safety.sql \
-  supabase/migrations/20260729000400_money_bridge_trigger_permission_fix.sql; do
+  supabase/migrations/20260729000400_money_bridge_trigger_permission_fix.sql \
+  supabase/migrations/20260730000500_gate_c_mutation_lock_timeout.sql \
+  supabase/migrations/20260731000600_gate_c_postgrest_conflicts.sql; do
   [[ -f "${migration}" ]] || {
     echo "Missing expected migration: ${migration}" >&2
     exit 66
@@ -38,5 +40,6 @@ supabase db push --linked --include-all --dry-run
 cat <<'EOF'
 
 Dry run complete. No migration was applied and writes_enabled remains untouched.
+The expected pending plan is only 20260731000600_gate_c_postgrest_conflicts.sql.
 Do not enable writes_enabled as part of this rehearsal.
 EOF
