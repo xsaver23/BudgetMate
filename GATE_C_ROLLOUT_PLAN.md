@@ -12,14 +12,18 @@ release checks are all green on identified commits.
 
 ## Current state
 
-- Migrations `20260729000100`, `20260729000200`, and
-  `20260729000400` are deployed.
-- Migration `20260729000300_shared_data_safety.sql` is not deployed.
-- The linked project has pre-00300 `last_mutation_id` columns plus an
-  unledgered legacy mutation surface. The pending migration must retire that
-  surface before production application; the older 00300 text is not an
-  acceptable production candidate.
-- The Gate C server configuration does not exist in production yet.
+- Migrations `20260729000100` through `20260730000500` are deployed, with the
+  Gate C server switch still false.
+- Migration `20260731000600_gate_c_postgrest_conflicts.sql` is the pending
+  remediation. It must be applied only after the reviewed 00300/00500 state
+  and changes no client flags or server switch.
+- The linked project previously had pre-00300 `last_mutation_id` columns plus
+  an unledgered legacy mutation surface; corrected 00300 retired that surface.
+- The pending 00600 migration changes only optimistic-version conflict
+  SQLSTATEs from `40001` to `PT409`, preserving the user-facing messages and
+  the security-definer, search-path, grant, idempotency, advisory-lock, and
+  `lock_timeout = 750ms` contracts.
+- The Gate C server configuration exists in production and remains disabled.
 - iOS `MoneyServerBridgeRollout` and `SharedDataSafetyGate` default to
   disabled.
 - The production web client still shares the same Supabase backend and is a
@@ -31,11 +35,11 @@ release checks are all green on identified commits.
 ## Scope guardrails
 
 - No new product feature, UI redesign, schema redesign, or unrelated cleanup.
-- One forward server migration: the already-merged `00300`.
-- The corrected 00300 may remove only the six identified legacy CAS RPCs, their
-  obsolete mutation-ID/tombstone helpers and triggers, and the three identified
-  unmatched transaction/settlement write policies. It must preserve authorized
-  reads and the 00400 trigger contract.
+- One forward server migration in this remediation: `00600`.
+- Do not rewrite applied `00300` or `00500`. The 00600 replacement may change
+  only the four known optimistic-version conflict raises in the two Gate C
+  RPCs; it must preserve authorized reads, the 00400 trigger contract, and all
+  other RPC body behavior.
 - No destructive down migration and no production restore unless a verified
   incident requires the pre-rollout backup.
 - This repository does not claim that a production backup exists. Before any
@@ -64,13 +68,13 @@ Owner: Gate C server track.
    opaque checksum and restricted storage location, and restore it into an
    isolated PostgreSQL rehearsal. A dry-run or an unverified CLI export is not
    a rollback backup.
-3. Rehearse applying `00300` after already-applied `00400`. Supabase requires
-   an explicit `--include-all` because `00300` sorts before the latest remote
-   migration.
+3. Rehearse applying `00600` after already-applied `00300`, `00400`, and
+   `00500`. Supabase requires an explicit `--include-all` because the pending
+   migration is being applied against an out-of-order production ledger.
 4. Prove migration replay/idempotency, PostgreSQL contract tests,
    concurrency tests, old-client read behavior, and rollback restore.
-5. Dry-run the exact production command and prove it selects only `00300`.
-6. With separate owner approval, deploy `00300` while
+5. Dry-run the exact production command and prove it selects only `00600`.
+6. With separate owner approval, deploy `00600` while
    `writes_enabled = false`.
 7. Postflight must prove:
    - Gate C reports disabled.
@@ -79,8 +83,8 @@ Owner: Gate C server track.
    - Gate C RPC writes fail closed with the documented disabled error.
    - Migration `00400` trigger permissions remain correct.
 
-Exit criterion: production has `00300`, the write switch is false, and all
-disabled-state checks pass.
+Exit criterion: production has `00600`, the write switch is false, and all
+disabled-state and bounded-conflict checks pass.
 
 ## Chunk 2 — Fail-closed iOS and web activation
 
@@ -161,7 +165,7 @@ This chunk requires separate owner approval after Chunks 1–3 are green.
 
 ## Definition of done
 
-- Migration `00300` is deployed and recorded.
+- Migrations `00300`, `00500`, and `00600` are deployed and recorded.
 - Gate C server writes are enabled only after the disabled-state postflight.
 - The reviewed iOS and web configurations are enabled on an identified
   commit.

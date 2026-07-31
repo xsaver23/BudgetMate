@@ -315,7 +315,7 @@ begin
     );
     raise exception 'Stale transaction CAS update was accepted';
   exception
-    when sqlstate '40001' then null;
+    when sqlstate 'PT409' then null;
   end;
 
   insert into public.budget_memberships (budget_id, user_id, role, status)
@@ -493,7 +493,7 @@ begin
     );
     raise exception 'Stale settlement CAS update was accepted';
   exception
-    when sqlstate '40001' then null;
+    when sqlstate 'PT409' then null;
   end;
 
   result := public.mutate_budget_settlement(
