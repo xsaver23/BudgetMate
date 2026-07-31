@@ -132,7 +132,7 @@ Supabase SQL editor:
 ```sql
 select version, name
 from supabase_migrations.schema_migrations
-where version in ('20260729000100', '20260729000200', '20260729000300', '20260729000400')
+where version in ('20260729000100', '20260729000200', '20260729000300', '20260729000400', '20260730000500')
 order by version;
 
 select writes_enabled
@@ -143,6 +143,18 @@ where id = true;
 The required result is a recorded `00300` and `writes_enabled = false`. Do not
 change that flag during this deployment. Rehearse the RPCs and controlled beta
 while disabled; a separate owner-approved change is required to enable writes.
+
+### Bounded Gate C mutation lock waits
+
+`20260730000500_gate_c_mutation_lock_timeout.sql` bounds lock waits inside both
+Gate C mutation RPCs at `750ms`. The update/delete path must lock the current
+row before checking its version; without this bound, a long-lived concurrent
+writer can make a stale request wait until the PostgREST or client timeout.
+Lock contention returns PostgreSQL `55P03` before a financial row or mutation
+receipt is written, so retrying the same mutation ID after the conflicting
+writer finishes remains idempotent. A stale request without contention keeps
+the existing `40001` conflict behavior. Verify this contract with both
+transaction and settlement lock fixtures, then leave `writes_enabled = false`.
 
 ### Required client compatibility check
 
