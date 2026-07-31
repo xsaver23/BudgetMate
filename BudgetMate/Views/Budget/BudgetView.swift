@@ -180,8 +180,8 @@ struct BudgetView: View {
                         tint: AppTheme.expense
                     )
                     budgetSummaryTile(
-                        title: "Remaining",
-                        value: remainingBudget,
+                        title: remainingBudget >= 0 ? "Remaining" : "Over by",
+                        value: remainingBudget >= 0 ? remainingBudget : abs(remainingBudget),
                         tint: remainingBudget >= 0 ? AppTheme.income : AppTheme.expense
                     )
                 }
@@ -348,7 +348,7 @@ struct BudgetView: View {
                     .font(.caption)
                     .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.7))
                 Spacer()
-                Text("Remaining: \(formattedAmount(remainingAmount(for: category)))")
+                Text(categoryBalanceText(for: category))
                     .font(.caption)
                     .foregroundStyle(remainingAmount(for: category) >= 0 ? BudgetBeaverPalette.wood.opacity(0.7) : BudgetBeaverPalette.amountRed)
             }
@@ -703,6 +703,14 @@ struct BudgetView: View {
 
     private func remainingAmount(for category: TransactionCategory) -> Double {
         configuredBudget(for: category) - monthlySpent(for: category)
+    }
+
+    private func categoryBalanceText(for category: TransactionCategory) -> String {
+        let remaining = remainingAmount(for: category)
+        if remaining < 0 {
+            return "Over by: \(formattedAmount(abs(remaining)))"
+        }
+        return "Remaining: \(formattedAmount(remaining))"
     }
 
     private func budgetProgress(for category: TransactionCategory) -> Double {
