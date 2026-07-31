@@ -7,7 +7,6 @@ final class MonthSelectionStore: ObservableObject {
 
     private let calendar: Calendar
     private let monthTitleFormatter: DateFormatter
-
     var selectionCalendar: Calendar { calendar }
 
     init(calendar: Calendar = .current, referenceDate: Date = .now) {
@@ -28,12 +27,13 @@ final class MonthSelectionStore: ObservableObject {
         return calendar.date(from: components) ?? .now
     }
 
-    var selectedMonthTitle: String {
-        monthTitleFormatter.string(from: selectedMonthDate)
-    }
-
+    /// Stable year-month identity for derived metrics and navigation state.
     var selectedMonthKey: String {
         BudgetSettings.monthKey(for: selectedMonthDate, calendar: calendar)
+    }
+
+    var selectedMonthTitle: String {
+        monthTitleFormatter.string(from: selectedMonthDate)
     }
 
     var isCurrentMonth: Bool {
@@ -41,7 +41,7 @@ final class MonthSelectionStore: ObservableObject {
     }
 
     func updateMonthIndex(_ newValue: Int) {
-        selectedMonthIndex = max(0, min(11, newValue))
+        moveMonth(by: newValue - selectedMonthIndex)
     }
 
     func moveMonth(by offset: Int) {
@@ -56,5 +56,4 @@ final class MonthSelectionStore: ObservableObject {
     func monthInterval() -> DateInterval? {
         calendar.dateInterval(of: .month, for: selectedMonthDate)
     }
-
 }

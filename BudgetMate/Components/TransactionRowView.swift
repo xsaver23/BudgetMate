@@ -1,5 +1,17 @@
 import SwiftUI
 
+enum TransactionRowPresentation {
+    static func signedAmount(
+        amount: Double,
+        type: TransactionType,
+        currencySymbol: String,
+        locale: Locale = .current
+    ) -> String {
+        let sign = type == .income ? "+" : "-"
+        return "\(sign)\(CurrencyFormatter.amountString(abs(amount), symbol: currencySymbol, locale: locale))"
+    }
+}
+
 struct TransactionRowView: View {
     @EnvironmentObject private var settingsStore: SettingsStore
     let transaction: Transaction
@@ -11,8 +23,11 @@ struct TransactionRowView: View {
     }
 
     private var signedAmount: String {
-        let sign = transaction.type == .income ? "+" : "-"
-        return "\(sign)\(CurrencyFormatter.amountString(transaction.amount, symbol: currencySymbol))"
+        TransactionRowPresentation.signedAmount(
+            amount: transaction.amount,
+            type: transaction.type,
+            currencySymbol: currencySymbol
+        )
     }
 
     private var createdByMember: BudgetMember? {
@@ -86,8 +101,11 @@ struct CompactTransactionRow: View {
     }
 
     private var signedAmount: String {
-        let sign = transaction.type == .income ? "+" : "-"
-        return "\(sign)\(CurrencyFormatter.amountString(transaction.amount, symbol: currencySymbol))"
+        TransactionRowPresentation.signedAmount(
+            amount: transaction.amount,
+            type: transaction.type,
+            currencySymbol: currencySymbol
+        )
     }
 
     private var categoryLine: String {

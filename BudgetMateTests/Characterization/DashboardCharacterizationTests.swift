@@ -204,14 +204,47 @@ final class DashboardCharacterizationTests: XCTestCase {
         ]
 
         XCTAssertTrue(viewModel.isSplitValid)
-        XCTAssertNil(viewModel.splitValidationMessage)
+        XCTAssertNil(viewModel.splitValidationMessage(currencyCode: "CAD", locale: Locale(identifier: "en_CA")))
 
         viewModel.updateCustomAmount("59.98", for: BudgetMateTestFixtures.bobMemberID)
         XCTAssertFalse(viewModel.isSplitValid)
-        XCTAssertEqual(
-            viewModel.splitValidationMessage(currencyCode: "CAD", locale: Locale(identifier: "en_CA")),
-            "Add $0.02 more to match the total."
+        let addMoreMessage = viewModel.splitValidationMessage(
+            currencyCode: "CAD",
+            locale: Locale(identifier: "en_CA")
         )
+        XCTAssertEqual(addMoreMessage, "Add $0.02 more to match the total.")
+        XCTAssertTrue(addMoreMessage?.contains("$") ?? false)
+        XCTAssertFalse(addMoreMessage?.contains("CAD") ?? true)
+        XCTAssertFalse(addMoreMessage?.contains("CA$") ?? true)
+
+        viewModel.updateCustomAmount("60.02", for: BudgetMateTestFixtures.bobMemberID)
+        let overTotalMessage = viewModel.splitValidationMessage(
+            currencyCode: "CAD",
+            locale: Locale(identifier: "fr_CA")
+        )
+        XCTAssertEqual(overTotalMessage, "That's 0,02\u{00A0}$ over the total.")
+        XCTAssertTrue(overTotalMessage?.contains("$") ?? false)
+        XCTAssertFalse(overTotalMessage?.contains("CAD") ?? true)
+        XCTAssertFalse(overTotalMessage?.contains("CA$") ?? true)
+    }
+
+    func testCustomSplitValidationKeepsNonCADCurrencyIdentity() {
+        let viewModel = AddTransactionViewModel()
+        viewModel.isSplit = true
+        viewModel.splitMethod = .custom
+        viewModel.amountText = "100.00"
+        viewModel.participants = [BudgetMateTestFixtures.aliceMemberID, BudgetMateTestFixtures.bobMemberID]
+        viewModel.customAmounts = [
+            BudgetMateTestFixtures.aliceMemberID: "40.00",
+            BudgetMateTestFixtures.bobMemberID: "59.98"
+        ]
+
+        let message = viewModel.splitValidationMessage(
+            currencyCode: "EUR",
+            locale: Locale(identifier: "en_US")
+        )
+
+        XCTAssertEqual(message, "Add €0.02 more to match the total.")
     }
 
     func testSettlementSuggestionsNetOpposingSplitBills() {

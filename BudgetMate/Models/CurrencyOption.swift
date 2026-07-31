@@ -44,7 +44,7 @@ enum CurrencyOption: String, CaseIterable, Identifiable {
     }
 
     var pickerLabel: String {
-        "\(code) - \(displayName) (\(symbol))"
+        "\(code) - \(displayName) (\(displaySymbol))"
     }
 
     static func normalizedCode(_ code: String) -> String {

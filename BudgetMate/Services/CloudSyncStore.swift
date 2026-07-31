@@ -968,8 +968,7 @@ final class CloudSyncStore: ObservableObject {
             return "We found duplicate local rows while syncing. Tap Retry Sync to clean them up and try again."
         }
 
-        if message.localizedCaseInsensitiveContains("Could not find the table") ||
-            message.localizedCaseInsensitiveContains("budget_transactions") {
+        if Self.isMissingCloudTableMessage(message) {
             return "Cloud tables are not ready yet. Finish the Supabase setup, then sync again."
         }
 
@@ -979,6 +978,30 @@ final class CloudSyncStore: ObservableObject {
         }
 
         return message
+    }
+
+    private static func isMissingCloudTableMessage(_ message: String) -> Bool {
+        let normalized = message.lowercased()
+        let knownCloudTableMention = [
+            "budget_transactions",
+            "budget_settlements",
+            "budget_memberships",
+            "budget_members",
+            "budget_settings",
+            "budgets",
+            "budget_invites"
+        ].contains { normalized.contains($0) }
+
+        if normalized.contains("pgrst205") {
+            return true
+        }
+
+        let explicitMissingTablePhrase = normalized.contains("could not find the table") ||
+            normalized.contains("table") && normalized.contains("does not exist")
+        let explicitMissingRelationPhrase = normalized.contains("relation") &&
+            normalized.contains("does not exist")
+
+        return knownCloudTableMention && (explicitMissingTablePhrase || explicitMissingRelationPhrase)
     }
 }
 

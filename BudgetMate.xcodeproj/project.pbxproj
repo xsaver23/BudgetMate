@@ -71,6 +71,7 @@
 		A14343B4630A821EB11EA1EF /* TransactionRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0295C0D6BBB4FA2FAC7AC147 /* TransactionRowView.swift */; };
 		A4E948FDCF31A7DFE0AD9FDE /* TransactionSplit.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA20F8159FBA8CF972CAAA1C /* TransactionSplit.swift */; };
 		A9D7B995031D0849D02FE7EE /* CurrencyFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16A074877590C32F59F707BF /* CurrencyFormatter.swift */; };
+		A7A1D9E10123456789ABCDEF /* TransactionRowPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7A1D9E10123456789ABCD00 /* TransactionRowPresentationTests.swift */; };
 		AA9D5E85D7DE424DE7296BCD /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CEA2B466DF9EF1DBA7F6C3F /* DashboardView.swift */; };
 		AB5DC5D78422735AE3591179 /* BudgetSampleData.swift in Sources */ = {isa = PBXBuildFile; fileRef = B32BF4F258B8F0BAAEAB1A51 /* BudgetSampleData.swift */; };
 		ADB6CCA5855221C181A662EA /* PreviewTransactions.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD715E500CB9F75AFFE3B578 /* PreviewTransactions.swift */; };
@@ -90,6 +91,9 @@
 		CF62A6B68200659F1B630627 /* TransactionFlowCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3820979D6FDC1013E67248AA /* TransactionFlowCoordinator.swift */; };
 		DB908D766CF22D32C9BBC9A4 /* BudgetMember.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F1EF5FDBFF48068877244C2 /* BudgetMember.swift */; };
 		DEAF3D6DF2BFED43F9DD840A /* BudgetMateTestFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8569D45A70F4DCD59339642A /* BudgetMateTestFixtures.swift */; };
+		D7A1D9E10123456789ABCDEF /* CurrencyFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A1D9E10123456789ABCD00 /* CurrencyFormatterTests.swift */; };
+		E7A1D9E10123456789ABCDEF /* MonthSelectionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A1D9E10123456789ABCD00 /* MonthSelectionStoreTests.swift */; };
+		F7A1D9E10123456789ABCDEF /* BudgetCategoryTransactionBreakdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7A1D9E10123456789ABCD00 /* BudgetCategoryTransactionBreakdownTests.swift */; };
 		E273D0915EC98E03DA1FBA75 /* PrimaryButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EE934342C6D2F233C16625B /* PrimaryButton.swift */; };
 		E400EC058305051F2DFA620B /* BudgetMateUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB5D236CB291A66725AE59A8 /* BudgetMateUITests.swift */; };
 		E5070DC803DD223A434DFAED /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 497D554D5BC847116EDEBD79 /* XCTest.framework */; };
@@ -195,6 +199,7 @@
 		9DF2B227204A92A5987F60BD /* SettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettingsView.swift; path = Views/Settings/SettingsView.swift; sourceTree = "<group>"; };
 		9FF669880F12BCB5D3936F4E /* DashboardViewModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DashboardViewModel.swift; path = ViewModels/DashboardViewModel.swift; sourceTree = "<group>"; };
 		A6C1FF8CAF3956F5439C907B /* CloudSyncStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CloudSyncStore.swift; path = Services/CloudSyncStore.swift; sourceTree = "<group>"; };
+		A7A1D9E10123456789ABCD00 /* TransactionRowPresentationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TransactionRowPresentationTests.swift; path = Characterization/TransactionRowPresentationTests.swift; sourceTree = "<group>"; };
 		B1A434383DC2F1DF55F16C51 /* AddTransactionViewModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AddTransactionViewModel.swift; path = ViewModels/AddTransactionViewModel.swift; sourceTree = "<group>"; };
 		B32BF4F258B8F0BAAEAB1A51 /* BudgetSampleData.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BudgetSampleData.swift; path = Utilities/BudgetSampleData.swift; sourceTree = "<group>"; };
 		B8F66C0277D7164356B83D1A /* DashboardCharacterizationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DashboardCharacterizationTests.swift; path = Characterization/DashboardCharacterizationTests.swift; sourceTree = "<group>"; };
@@ -204,6 +209,9 @@
 		CA3286145D7F040FC10A5F36 /* AppTab.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppTab.swift; path = Utilities/AppTab.swift; sourceTree = "<group>"; };
 		CD715E500CB9F75AFFE3B578 /* PreviewTransactions.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PreviewTransactions.swift; path = Models/PreviewTransactions.swift; sourceTree = "<group>"; };
 		D1BD77D94BEAE12A19893BAC /* ScopedPersistenceCharacterizationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ScopedPersistenceCharacterizationTests.swift; path = Characterization/ScopedPersistenceCharacterizationTests.swift; sourceTree = "<group>"; };
+		D7A1D9E10123456789ABCD00 /* CurrencyFormatterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CurrencyFormatterTests.swift; path = Characterization/CurrencyFormatterTests.swift; sourceTree = "<group>"; };
+		E7A1D9E10123456789ABCD00 /* MonthSelectionStoreTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MonthSelectionStoreTests.swift; path = Characterization/MonthSelectionStoreTests.swift; sourceTree = "<group>"; };
+		F7A1D9E10123456789ABCD00 /* BudgetCategoryTransactionBreakdownTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BudgetCategoryTransactionBreakdownTests.swift; path = Characterization/BudgetCategoryTransactionBreakdownTests.swift; sourceTree = "<group>"; };
 		D4F113D0FE2AD56575266EAD /* BudgetMateUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BudgetMateUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		D6E5E0F7490AD5C7D7C0698D /* SampleDataSeeder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SampleDataSeeder.swift; path = Utilities/SampleDataSeeder.swift; sourceTree = "<group>"; };
 		DA20F8159FBA8CF972CAAA1C /* TransactionSplit.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TransactionSplit.swift; path = Models/TransactionSplit.swift; sourceTree = "<group>"; };
@@ -399,6 +407,10 @@
 				02A000000000000000000003 /* MoneyDomainTests.swift */,
 				01B000000000000000000004 /* PersistenceRecoveryTests.swift */,
 				02B000000000000000000003 /* LegacyMoneyBridgeTests.swift */,
+				D7A1D9E10123456789ABCD00 /* CurrencyFormatterTests.swift */,
+				E7A1D9E10123456789ABCD00 /* MonthSelectionStoreTests.swift */,
+				F7A1D9E10123456789ABCD00 /* BudgetCategoryTransactionBreakdownTests.swift */,
+				A7A1D9E10123456789ABCD00 /* TransactionRowPresentationTests.swift */,
 				8569D45A70F4DCD59339642A /* BudgetMateTestFixtures.swift */,
 				9130988E592742604752C25B /* InMemoryModelContainer.swift */,
 				01A000000000000000000003 /* LegacyUnversionedStoreFixture.swift */,
@@ -614,6 +626,10 @@
 				02A000000000000000000013 /* MoneyDomainTests.swift in Sources */,
 				01B000000000000000000014 /* PersistenceRecoveryTests.swift in Sources */,
 				02B000000000000000000004 /* LegacyMoneyBridgeTests.swift in Sources */,
+				D7A1D9E10123456789ABCDEF /* CurrencyFormatterTests.swift in Sources */,
+				E7A1D9E10123456789ABCDEF /* MonthSelectionStoreTests.swift in Sources */,
+				F7A1D9E10123456789ABCDEF /* BudgetCategoryTransactionBreakdownTests.swift in Sources */,
+				A7A1D9E10123456789ABCDEF /* TransactionRowPresentationTests.swift in Sources */,
 				DEAF3D6DF2BFED43F9DD840A /* BudgetMateTestFixtures.swift in Sources */,
 				12A92812F47D366ECF02568A /* InMemoryModelContainer.swift in Sources */,
 				01A000000000000000000004 /* LegacyUnversionedStoreFixture.swift in Sources */,
