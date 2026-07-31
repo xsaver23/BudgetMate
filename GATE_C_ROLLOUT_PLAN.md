@@ -100,6 +100,8 @@ Owner: Gate C client tracks.
    disabled.
 6. Cover insert, update, delete, retry, conflict mapping, capability rules,
    account/budget switching, and accessible read-only messaging.
+   Include bounded lock-wait rejection for stale transaction and settlement
+   RPCs, with no receipt or row mutation on lock timeout.
 7. Run focused tests, full iOS unit/UI suites, iPhone/iPad builds, web tests
    and production builds in disabled and all-enabled configurations, Release
    analyze/archive, secret scan, and project-integrity checks.

@@ -53,8 +53,10 @@ jobs:
           uuid_case_fix="supabase/migrations/20260729000200_money_server_bridge_uuid_case_fix.sql"
           contract="supabase/tests/02c_money_server_bridge_contract.sql"
           shared_data_safety_migration="supabase/migrations/20260729000300_shared_data_safety.sql"
+          shared_data_safety_lock_timeout_migration="supabase/migrations/20260730000500_gate_c_mutation_lock_timeout.sql"
           shared_data_safety_disabled_contract="supabase/tests/03_shared_data_safety_disabled_contract.sql"
           shared_data_safety_contract="supabase/tests/03_shared_data_safety_contract.sql"
+          shared_data_safety_lock_timeout_contract="supabase/tests/03_shared_data_safety_stale_lock_contract.sh"
           trigger_permission_fix="supabase/migrations/20260729000400_money_bridge_trigger_permission_fix.sql"
           trigger_permission_contract="supabase/tests/02c_trigger_permission_contract.sql"
           legacy_surface_rollback_contract="supabase/tests/03_gate_c_legacy_surface_rollback_contract.sql"
@@ -159,7 +161,10 @@ jobs:
           # exact state, including an idempotent retry of the pending migration.
           psql --dbname budgetmate_02c --file "${shared_data_safety_migration}"
           psql --dbname budgetmate_02c --file "${shared_data_safety_migration}"
+          psql --set ON_ERROR_STOP=1 --dbname budgetmate_02c --file "${shared_data_safety_lock_timeout_migration}"
+          psql --set ON_ERROR_STOP=1 --dbname budgetmate_02c --file "${shared_data_safety_lock_timeout_migration}"
           psql --dbname budgetmate_02c --file "${shared_data_safety_disabled_contract}"
+          bash "${shared_data_safety_lock_timeout_contract}"
           psql --dbname budgetmate_02c --file "${shared_data_safety_contract}"
           bash supabase/tests/03_shared_data_safety_concurrency.sh
           psql --dbname budgetmate_02c --file "${trigger_permission_contract}"
