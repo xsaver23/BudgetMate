@@ -51,6 +51,12 @@ final class BudgetMateUITests: XCTestCase {
         app.buttons["tab.settings"].tap()
         XCTAssertTrue(app.staticTexts["Currency"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Sync"].waitForExistence(timeout: 5))
+        let advancedSupport = app.buttons["Advanced & Support"]
+        XCTAssertTrue(advancedSupport.waitForExistence(timeout: 5))
+        advancedSupport.tap()
+        app.swipeUp()
+        XCTAssertTrue(app.descendants(matching: .any)["settings.privacyPolicy"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["settings.support"].exists)
 
         app.buttons["Add Transaction"].tap()
         XCTAssertTrue(app.buttons["transactionEditor.date"].waitForExistence(timeout: 5))
