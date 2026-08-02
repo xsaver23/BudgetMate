@@ -592,6 +592,12 @@ struct SettingsView: View {
     /// another forced full sync. Only request a passive refresh when the app
     /// has not observed its initial cloud baseline yet.
     private func prepareSettingsScreen() async {
+#if DEBUG
+        // The synthetic UI fixture is intentionally offline. Keep its local
+        // capability surface deterministic and prevent invite/membership
+        // preparation from reaching the Supabase service.
+        guard !SyntheticUITestScenario.isRequested else { return }
+#endif
         let userScopeId = authStore.currentUserScopeId
         let activeBudgetScopeId = authStore.currentBudgetScopeId
         guard activeBudgetScopeId == budgetScopeId else { return }
