@@ -306,11 +306,29 @@ struct SettingsView: View {
                                     .fixedSize(horizontal: false, vertical: true)
                                     .accessibilityIdentifier("settings.privacySupportDisclosure")
 
-                                Text("Privacy policy and support contact links are not configured in this beta. Do not include sensitive data when sharing a support archive.")
+                                Link(destination: URL(string: "https://budgetmate.pages.dev/privacy.html")!) {
+                                    Label("Privacy Policy", systemImage: "hand.raised")
+                                        .font(settingsRowLabelFont)
+                                        .foregroundStyle(AppTheme.brand)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .accessibilityIdentifier("settings.privacyPolicy")
+
+                                Divider()
+
+                                Link(destination: URL(string: "https://budgetmate.pages.dev/support.html")!) {
+                                    Label("Support", systemImage: "questionmark.circle")
+                                        .font(settingsRowLabelFont)
+                                        .foregroundStyle(AppTheme.brand)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .accessibilityIdentifier("settings.support")
+
+                                Text("Do not include financial details, credentials, or an unreviewed support archive in a public support request.")
                                     .font(settingsHelperFont)
                                     .foregroundStyle(AppTheme.warningText)
                                     .fixedSize(horizontal: false, vertical: true)
-                                    .accessibilityIdentifier("settings.missingPrivacySupportLinks")
+                                    .accessibilityIdentifier("settings.supportPrivacyWarning")
                             }
 
                             settingsSection("Data") {
@@ -345,7 +363,6 @@ struct SettingsView: View {
                         RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous)
                             .stroke(AppTheme.surfaceStroke, lineWidth: 1)
                     )
-                    .accessibilityIdentifier("settings.advancedSupportDisclosure")
                     }
                     .padding(.horizontal)
                     .padding(.bottom, 24)
