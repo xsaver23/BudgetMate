@@ -122,7 +122,10 @@ struct BudgetMateApp: App {
                             .transition(.opacity)
                             .preferredColorScheme(settingsStore.settings.appearance.colorScheme)
                             .task(id: "\(authStore.currentUserScopeId)|\(authStore.currentBudgetScopeId)|\(memberViewModel.isProfileComplete)") {
-                                applyUserScope(authStore.currentUserScopeId, budgetScopeId: authStore.currentBudgetScopeId)
+                                // Profile state must be internally consistent in
+                                // the personal scope before a shared budget can
+                                // become the selected local model.
+                                applyUserScope(authStore.currentUserScopeId, budgetScopeId: authStore.currentUserScopeId)
                                 await restoreCloudProfileIfNeeded(authStore.currentUserScopeId)
                                 guard !Task.isCancelled else { return }
                                 // Reveal the app with on-device data as soon as the
@@ -292,11 +295,47 @@ struct BudgetMateApp: App {
                 userScopeId: userScopeId,
                 budgetScopeId: userScopeId
             )
-            _ = memberViewModel.restoreProfileIfPresent(
+            if memberViewModel.restoreProfileIfPresent(
                 from: cloudMembers,
                 userScopeId: userScopeId,
                 email: authStore.userEmail
-            )
+            ) {
+                checkedCloudProfileUserScopeId = userScopeId
+                return
+            }
+
+            var sharedScopeIds: [String] = []
+            let selectedScopeId = authStore.currentBudgetScopeId
+            if selectedScopeId != userScopeId {
+                sharedScopeIds.append(selectedScopeId)
+            }
+            if let memberships = try? await cloudSyncStore.fetchMemberships(userScopeId: userScopeId) {
+                for sharedScopeId in memberships.map({ $0.budgetId.uuidString })
+                where sharedScopeId != userScopeId && !sharedScopeIds.contains(sharedScopeId) {
+                    sharedScopeIds.append(sharedScopeId)
+                }
+            }
+
+            for sharedScopeId in sharedScopeIds {
+                do {
+                    let sharedMembers = try await cloudSyncStore.fetchMembers(
+                        userScopeId: userScopeId,
+                        budgetScopeId: sharedScopeId
+                    )
+                    if memberViewModel.restoreProfileIfPresent(
+                        from: sharedMembers,
+                        userScopeId: userScopeId,
+                        email: authStore.userEmail
+                    ) {
+                        checkedCloudProfileUserScopeId = userScopeId
+                        return
+                    }
+                } catch {
+                    // A stale or inaccessible membership should not prevent
+                    // recovery from another active shared budget.
+                }
+            }
+
             checkedCloudProfileUserScopeId = userScopeId
         } catch {
             cloudSyncStore.recordSyncIssue(error, context: "Restoring cloud profile")

@@ -440,6 +440,20 @@ final class CloudSyncStore: ObservableObject {
         )
     }
 
+    func saveProfile(
+        _ member: BudgetMember,
+        userScopeId: String,
+        onSuccess: (() -> Void)? = nil
+    ) {
+        let request = ProfileCloudSyncRequest(member: member, userScopeId: userScopeId)
+        saveMembers(
+            request.members,
+            userScopeId: request.userScopeId,
+            budgetScopeId: request.budgetScopeId,
+            onSuccess: onSuccess
+        )
+    }
+
     func deleteMember(_ member: BudgetMember, userScopeId: String, budgetScopeId: String? = nil) {
         let deletion = PendingCloudDeletion(
             entity: .member,
