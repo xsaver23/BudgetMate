@@ -59,6 +59,7 @@ import {
   uniqueTransactions
 } from "./domain/budgetMath";
 import { defaultBudgetSettings } from "./domain/defaults";
+import { memberFilterLabels, organizeCategoryBudgetRows } from "./domain/uxClarity";
 import type {
   AppState,
   BudgetInvite,
@@ -1365,6 +1366,8 @@ function MemberFilter({
   selectedMemberId: string;
   onSelect: (memberId: string) => void;
 }) {
+  const labelsByMemberId = new Map(memberFilterLabels(members).map((label) => [label.memberId, label]));
+
   return (
     <div className="member-strip" aria-label="Member filter">
       <button
@@ -1376,19 +1379,25 @@ function MemberFilter({
         <Users size={16} aria-hidden="true" />
         Everyone
       </button>
-      {members.map((member) => (
-        <button
-          key={member.id}
-          className={selectedMemberId === member.id ? "member-chip active" : "member-chip"}
-          onClick={() => onSelect(member.id)}
-          aria-pressed={selectedMemberId === member.id}
-          style={{ "--member-color": member.color } as CSSProperties}
-          type="button"
-        >
-          <MemberBadge member={member} />
-          <span>{firstName(member.displayName)}</span>
-        </button>
-      ))}
+      {members.map((member) => {
+        const label = labelsByMemberId.get(member.id);
+        const fullName = label?.fullName ?? member.displayName;
+        return (
+          <button
+            key={member.id}
+            className={selectedMemberId === member.id ? "member-chip active" : "member-chip"}
+            onClick={() => onSelect(member.id)}
+            aria-pressed={selectedMemberId === member.id}
+            aria-label={`Filter transactions by ${fullName}`}
+            style={{ "--member-color": member.color } as CSSProperties}
+            title={fullName}
+            type="button"
+          >
+            <MemberBadge member={member} />
+            <span>{label?.displayLabel ?? fullName}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -1910,7 +1919,6 @@ function BudgetView({
   selectedMonth: string;
   onSettingsChange: (settings: BudgetSettings) => void;
 }) {
-  const [showUnbudgeted, setShowUnbudgeted] = useState(false);
   const spending = categoryBreakdown(transactions, memberId);
   const spendingByCategory = new Map(spending.map((item) => [item.category, item.amount]));
   const memberSpending = memberExpenseTotals(transactions, members);
@@ -1922,9 +1930,8 @@ function BudgetView({
     const spent = spendingByCategory.get(category.id) ?? 0;
     return { category, budget, spent };
   });
-  const budgetedRows = visibleCategoryRows.filter((row) => row.budget > 0 || row.spent > 0);
-  const unbudgetedRows = visibleCategoryRows.filter((row) => row.budget <= 0 && row.spent <= 0);
-  const rowsToShow = showUnbudgeted ? visibleCategoryRows : budgetedRows;
+  const { visibleRows, unbudgetedRows } = organizeCategoryBudgetRows(visibleCategoryRows);
+  const budgetedCategoryCount = visibleCategoryRows.filter((row) => row.budget > 0).length;
   const maxMemberSpend = Math.max(...memberSpending.map((item) => item.amount), 0);
 
   function updateCategoryBudget(category: string, value: string) {
@@ -1937,6 +1944,38 @@ function BudgetView({
     });
   }
 
+  function renderBudgetRow({ category, spent, budget }: (typeof visibleCategoryRows)[number]) {
+    const ratio = budget > 0 ? Math.min(1, spent / budget) : 0;
+    const tone = budgetPaceTone(spent, budget);
+    return (
+      <div key={category.id} className={`budget-row ${tone}`}>
+        <div>
+          <strong>
+            {settings.categoryEmojis[category.id] ? `${settings.categoryEmojis[category.id]} ` : ""}
+            {category.name}
+          </strong>
+          <span>
+            {formatMoney(spent, settings.currencyCode)} of {formatMoney(budget, settings.currencyCode)}
+          </span>
+          <div className="budget-progress" aria-hidden="true">
+            <b style={{ width: `${ratio * 100}%` }} />
+          </div>
+        </div>
+        <label className="budget-input">
+          <span>{currencySymbol(settings.currencyCode)}</span>
+          <input
+            type="number"
+            min="0"
+            step="10"
+            value={activeCategoryBudgets[category.id] ?? 0}
+            onChange={(event) => updateCategoryBudget(category.id, event.target.value)}
+            aria-label={`${category.name} budget`}
+          />
+        </label>
+      </div>
+    );
+  }
+
   return (
     <section className="budget-layout">
       <section className="panel">
@@ -1945,45 +1984,21 @@ function BudgetView({
           <span>{formatMoney(totals.remainingBudget, settings.currencyCode)} left</span>
         </div>
         <p className="panel-intro">
-          {budgetedRows.length} of {expenseCategoryOptions.length} categories budgeted this month.
+          {budgetedCategoryCount} of {expenseCategoryOptions.length} categories have a budget for {formatMonthLabel(selectedMonth)}. Category budget changes save automatically.
         </p>
         <div className="budget-list">
-          {rowsToShow.map(({ category, spent, budget }) => {
-            const ratio = budget > 0 ? Math.min(1, spent / budget) : 0;
-            const tone = budgetPaceTone(spent, budget);
-            return (
-            <div key={category.id} className={`budget-row ${tone}`}>
-              <div>
-                <strong>
-                  {settings.categoryEmojis[category.id] ? `${settings.categoryEmojis[category.id]} ` : ""}
-                  {category.name}
-                </strong>
-                <span>
-                  {formatMoney(spent, settings.currencyCode)} of {formatMoney(budget, settings.currencyCode)}
-                </span>
-                <div className="budget-progress" aria-hidden="true">
-                  <b style={{ width: `${ratio * 100}%` }} />
-                </div>
-              </div>
-              <label className="budget-input">
-                <span>{currencySymbol(settings.currencyCode)}</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="10"
-                  value={activeCategoryBudgets[category.id] ?? 0}
-                  onChange={(event) => updateCategoryBudget(category.id, event.target.value)}
-                  aria-label={`${category.name} budget`}
-                />
-              </label>
-            </div>
-            );
-          })}
+          {visibleRows.map(renderBudgetRow)}
         </div>
-        {!showUnbudgeted && unbudgetedRows.length > 0 && (
-          <button className="dashed-action" type="button" onClick={() => setShowUnbudgeted(true)}>
-            Show {unbudgetedRows.length} unbudgeted categories
-          </button>
+        {unbudgetedRows.length > 0 && (
+          <details className="category-budget-disclosure" key={selectedMonth}>
+            <summary>
+              <strong>Add category budgets</strong>
+              <span>{unbudgetedRows.length} available</span>
+            </summary>
+            <div className="budget-list">
+              {unbudgetedRows.map(renderBudgetRow)}
+            </div>
+          </details>
         )}
       </section>
 

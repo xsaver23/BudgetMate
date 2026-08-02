@@ -1446,6 +1446,51 @@ textarea::placeholder {
   font-weight: 700;
 }
 
+.category-budget-disclosure {
+  margin-top: 18px;
+  border-top: 1px solid #f2f0e7;
+}
+
+.category-budget-disclosure summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  color: var(--slate);
+  font-size: 13px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.category-budget-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.category-budget-disclosure summary::after {
+  content: "+";
+  color: var(--green-900);
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.category-budget-disclosure[open] summary::after {
+  content: "−";
+}
+
+.category-budget-disclosure summary strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.category-budget-disclosure summary span {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .budget-rail {
   display: grid;
   min-width: 0;
