@@ -3,6 +3,7 @@ import SwiftUI
 struct AppTopBar: View {
     let member: BudgetMember
     var onProfileTap: () -> Void = {}
+    var onSyncIssueTap: (() -> Void)? = nil
 
     private var firstName: String {
         let first = member.displayName
@@ -29,7 +30,7 @@ struct AppTopBar: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(todayLabel)
                     .font(.subheadline.weight(.bold))
@@ -38,24 +39,31 @@ struct AppTopBar: View {
                 Text(greeting)
                     .font(.roundedBold(30))
                     .foregroundStyle(BudgetBeaverPalette.ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.78)
+                    .allowsTightening(true)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer(minLength: 12)
-
-            SyncStatusButton(action: onProfileTap)
-
-            Button(action: onProfileTap) {
-                MemberInitialsBadge(
-                    initials: member.displayInitials,
-                    colorHex: member.colorHex,
-                    size: 48,
-                    accessibilityLabel: "Open settings. Active member \(member.displayName)"
+            HStack(spacing: 8) {
+                SyncStatusButton(
+                    action: onProfileTap,
+                    issueAction: onSyncIssueTap ?? onProfileTap
                 )
+
+                Button(action: onProfileTap) {
+                    MemberInitialsBadge(
+                        initials: member.displayInitials,
+                        colorHex: member.colorHex,
+                        size: 48,
+                        accessibilityLabel: "Open settings. Active member \(member.displayName)"
+                    )
+                }
+                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle(scale: 0.94))
             }
-            .buttonStyle(.plain)
-            .buttonStyle(PressableButtonStyle(scale: 0.94))
         }
         .padding(.horizontal, 20)
         .padding(.top, 8)
@@ -67,10 +75,11 @@ struct AppTopBar: View {
 private struct SyncStatusButton: View {
     @EnvironmentObject private var cloudSyncStore: CloudSyncStore
     let action: () -> Void
+    let issueAction: () -> Void
 
     var body: some View {
         if cloudSyncStore.isSyncing || cloudSyncStore.hasSyncIssue {
-            Button(action: action) {
+            Button(action: cloudSyncStore.hasSyncIssue ? issueAction : action) {
                 Label(
                     cloudSyncStore.hasSyncIssue ? "Needs attention" : "Syncing",
                     systemImage: cloudSyncStore.hasSyncIssue ? "exclamationmark.triangle.fill" : "arrow.triangle.2.circlepath"
@@ -86,6 +95,14 @@ private struct SyncStatusButton: View {
             }
             .buttonStyle(PressableButtonStyle(scale: 0.96))
             .accessibilityLabel(cloudSyncStore.hasSyncIssue ? "Sync needs attention. Open settings." : "Syncing. Open settings.")
+            .accessibilityHint(
+                cloudSyncStore.hasSyncIssue
+                    ? "Opens Settings to show the sync explanation and Retry Sync action."
+                    : "Opens Settings."
+            )
+            .accessibilityIdentifier(
+                cloudSyncStore.hasSyncIssue ? "syncStatus.needsAttention" : "syncStatus.syncing"
+            )
         }
     }
 }

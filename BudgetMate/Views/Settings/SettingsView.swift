@@ -9,12 +9,14 @@ struct SettingsView: View {
     @EnvironmentObject private var appRefreshStore: AppRefreshStore
     @Environment(\.modelContext) private var modelContext
     let budgetScopeId: String
+    private let syncScrollRequest: Int
     @Query private var transactions: [Transaction]
     @Query private var settlementRecords: [Settlement]
     @Query private var transactionSplits: [TransactionSplit]
 
-    init(budgetScopeId: String) {
+    init(budgetScopeId: String, syncScrollRequest: Int = 0) {
         self.budgetScopeId = budgetScopeId
+        self.syncScrollRequest = syncScrollRequest
     }
 
     @State private var isShowingProfileEditor = false
@@ -23,6 +25,8 @@ struct SettingsView: View {
     @State private var memberships: [BudgetMembership] = []
     @State private var isLoadingInvites = false
     @State private var currencyHistoryValidatedBudgetScopeId: String?
+    @State private var isAdvancedSupportExpanded = false
+    @State private var localSyncScrollRequest = 0
 
     private var scopedTransactions: [Transaction] {
         transactions.filter { $0.ownerUserId == budgetScopeId }
@@ -77,9 +81,13 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 18) {
-                    AppTopBar(member: memberViewModel.activeMember)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 18) {
+                    AppTopBar(
+                        member: memberViewModel.activeMember,
+                        onSyncIssueTap: { localSyncScrollRequest += 1 }
+                    )
                         .padding(.horizontal, -16)
 
                     settingsSection("Currency") {
@@ -134,18 +142,20 @@ struct SettingsView: View {
 
                     settingsSection("Account") {
                         settingsRow("Signed in as") {
-                            Text(authStore.userEmail ?? "Unknown")
-                                .font(settingsCompactValueFont)
-                                .foregroundStyle(BudgetBeaverPalette.wood)
-                                .multilineTextAlignment(.trailing)
+                            settingsLongValue(
+                                authStore.userEmail ?? "Unknown",
+                                font: settingsCompactValueFont
+                            )
                         }
 
                         Divider()
 
                         settingsRow("Profile name") {
-                            Text(profileDisplayName)
-                                .font(settingsRowValueFont)
-                                .foregroundStyle(BudgetBeaverPalette.ink)
+                            settingsLongValue(
+                                profileDisplayName,
+                                font: settingsRowValueFont,
+                                color: BudgetBeaverPalette.ink
+                            )
                         }
 
                         Divider()
@@ -206,9 +216,6 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.plain)
 
-                        Divider()
-                        unavailableActionRow(DestructiveActionGuardrails.leaveSharedBudget)
-
                         if isLoadingInvites {
                             Divider()
                             HStack {
@@ -231,32 +238,6 @@ struct SettingsView: View {
                         }
                     }
 
-                    settingsSection("Recurring Expenses") {
-                        if recurringExpenses.isEmpty {
-                            Text("No recurring expenses right now.")
-                                .font(settingsRowLabelFont)
-                                .foregroundStyle(BudgetBeaverPalette.wood)
-                        } else {
-                            ForEach(recurringExpenses) { transaction in
-                                recurringExpenseRow(transaction)
-                            }
-                        }
-                    }
-
-                    settingsSection("Privacy & Support") {
-                        Text("BudgetMate keeps local budget data on this device. Shared-budget data syncs only when cloud sync is configured. Support archives can contain budget data; review an archive before sharing it.")
-                            .font(settingsHelperFont)
-                            .foregroundStyle(BudgetBeaverPalette.wood)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityIdentifier("settings.privacySupportDisclosure")
-
-                        Text("Privacy policy and support contact links are not configured in this beta. Do not include sensitive data when sharing a support archive.")
-                            .font(settingsHelperFont)
-                            .foregroundStyle(AppTheme.warningText)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityIdentifier("settings.missingPrivacySupportLinks")
-                    }
-
                     settingsSection("Sync") {
                         settingsRow("Device data") {
                             Text(memberViewModel.syncMode.displayName)
@@ -273,11 +254,18 @@ struct SettingsView: View {
                             Text(cloudSyncStore.statusText())
                                 .font(settingsCompactValueFont)
                                 .foregroundStyle(cloudSyncStore.hasSyncIssue ? AppTheme.danger : BudgetBeaverPalette.wood)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                                .multilineTextAlignment(.trailing)
+                                .frame(maxWidth: 180, alignment: .trailing)
+                                .accessibilityLabel(cloudSyncStore.statusText())
                         }
 
                         Text(cloudSyncStore.syncHelpText)
                             .font(settingsHelperFont)
                             .foregroundStyle(cloudSyncStore.hasSyncIssue ? AppTheme.danger : BudgetBeaverPalette.wood)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("settings.syncExplanation")
 
                         Button {
                             Task {
@@ -292,54 +280,119 @@ struct SettingsView: View {
                         }
                         .buttonStyle(PressableButtonStyle(scale: 0.98))
                         .disabled(cloudSyncStore.isSyncing)
+                        .accessibilityIdentifier("settings.syncRetry")
+                    }
+                    .id("settings.sync")
+                    .accessibilityIdentifier("settings.syncSection")
+
+                    settingsSection("Recurring Expenses") {
+                        if recurringExpenses.isEmpty {
+                            Text("No recurring expenses right now.")
+                                .font(settingsRowLabelFont)
+                                .foregroundStyle(BudgetBeaverPalette.wood)
+                        } else {
+                            ForEach(recurringExpenses) { transaction in
+                                recurringExpenseRow(transaction)
+                            }
+                        }
                     }
 
-                    settingsSection("Data") {
-                        rowButton("Reset Settings", tint: AppTheme.brand) {
-                            let currentDecision = freshCurrencyChangeDecision()
-                            settingsStore.resetSettings(
-                                preservingCurrencyCode: !currentDecision.isAllowed
-                            )
-                            syncFieldsFromStore()
-                            saveCurrentSettingsToCloud()
+                    DisclosureGroup(isExpanded: $isAdvancedSupportExpanded) {
+                        VStack(spacing: 18) {
+                            settingsSection("Privacy & Support") {
+                                Text("BudgetMate keeps local budget data on this device. Shared-budget data syncs only when cloud sync is configured. Support archives can contain budget data; review an archive before sharing it.")
+                                    .font(settingsHelperFont)
+                                    .foregroundStyle(BudgetBeaverPalette.wood)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .accessibilityIdentifier("settings.privacySupportDisclosure")
+
+                                Text("Privacy policy and support contact links are not configured in this beta. Do not include sensitive data when sharing a support archive.")
+                                    .font(settingsHelperFont)
+                                    .foregroundStyle(AppTheme.warningText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .accessibilityIdentifier("settings.missingPrivacySupportLinks")
+                            }
+
+                            settingsSection("Data") {
+                                rowButton("Reset Settings", tint: AppTheme.brand) {
+                                    let currentDecision = freshCurrencyChangeDecision()
+                                    settingsStore.resetSettings(
+                                        preservingCurrencyCode: !currentDecision.isAllowed
+                                    )
+                                    syncFieldsFromStore()
+                                    saveCurrentSettingsToCloud()
+                                }
+
+                                Divider()
+
+                                unavailableActionRow(DestructiveActionGuardrails.clearAll)
+
+                                Divider()
+
+                                unavailableActionRow(DestructiveActionGuardrails.leaveSharedBudget)
+                            }
                         }
-
-                        Divider()
-
-                        unavailableActionRow(DestructiveActionGuardrails.clearAll)
+                        .padding(.top, 12)
+                    } label: {
+                        Text("Advanced & Support")
+                            .font(settingsSectionTitleFont)
+                            .foregroundStyle(BudgetBeaverPalette.wood)
+                    }
+                    .padding(18)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous)
+                            .stroke(AppTheme.surfaceStroke, lineWidth: 1)
+                    )
+                    .accessibilityIdentifier("settings.advancedSupportDisclosure")
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom, 24)
+                }
+                .refreshable {
+                    await refreshAllData(showFeedback: false, forceSync: true)
+                }
+                .background(AppTheme.background)
+                .statusBarScrim()
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar(.hidden, for: .navigationBar)
+                .onAppear {
+                    syncFieldsFromStore()
+                    if cloudSyncStore.hasSyncIssue {
+                        scrollToSync(using: proxy, animated: false)
                     }
                 }
-                .padding(.horizontal)
-                .padding(.bottom, 24)
-            }
-            .refreshable {
-                await refreshAllData(showFeedback: false, forceSync: true)
-            }
-            .background(AppTheme.background)
-            .statusBarScrim()
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar(.hidden, for: .navigationBar)
-            .onAppear {
-                syncFieldsFromStore()
-            }
-            .task(id: "\(authStore.userEmail ?? "")-\(authStore.currentBudgetScopeId)") {
-                await prepareSettingsScreen()
-            }
-            .sheet(isPresented: $isShowingProfileEditor) {
-                EditProfileNameView(
-                    currentName: profileDisplayName,
-                    onCancel: {
-                        isShowingProfileEditor = false
-                    },
-                    onSave: { name in
-                        updateProfileName(name)
+                .onChange(of: syncScrollRequest) { _, _ in
+                    scrollToSync(using: proxy, animated: true)
+                }
+                .onChange(of: localSyncScrollRequest) { _, _ in
+                    scrollToSync(using: proxy, animated: true)
+                }
+                .onChange(of: cloudSyncStore.hasSyncIssue) { _, hasSyncIssue in
+                    if hasSyncIssue {
+                        scrollToSync(using: proxy, animated: true)
                     }
-                )
-            }
-            .alert("BudgetMate", isPresented: clearFeedbackAlertBinding) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text(clearFeedbackMessage ?? "")
+                }
+                .task(id: "\(authStore.userEmail ?? "")-\(authStore.currentBudgetScopeId)") {
+                    await prepareSettingsScreen()
+                }
+                .sheet(isPresented: $isShowingProfileEditor) {
+                    EditProfileNameView(
+                        currentName: profileDisplayName,
+                        onCancel: {
+                            isShowingProfileEditor = false
+                        },
+                        onSave: { name in
+                            updateProfileName(name)
+                        }
+                    )
+                }
+                .alert("BudgetMate", isPresented: clearFeedbackAlertBinding) {
+                    Button("OK", role: .cancel) { }
+                } message: {
+                    Text(clearFeedbackMessage ?? "")
+                }
             }
         }
     }
@@ -349,6 +402,16 @@ struct SettingsView: View {
             return "Syncing…"
         }
         return cloudSyncStore.hasSyncIssue ? "Retry Sync" : "Sync Now"
+    }
+
+    private func scrollToSync(using proxy: ScrollViewProxy, animated: Bool) {
+        if animated {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                proxy.scrollTo("settings.sync", anchor: .top)
+            }
+        } else {
+            proxy.scrollTo("settings.sync", anchor: .top)
+        }
     }
 
     private var settingsSectionTitleFont: Font {
@@ -406,13 +469,29 @@ struct SettingsView: View {
         _ title: String,
         @ViewBuilder trailing: () -> Trailing
     ) -> some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
             Text(title)
                 .font(settingsRowLabelFont)
                 .foregroundStyle(BudgetBeaverPalette.wood)
-            Spacer(minLength: 12)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
             trailing()
         }
+    }
+
+    private func settingsLongValue(
+        _ value: String,
+        font: Font,
+        color: Color = BudgetBeaverPalette.wood
+    ) -> some View {
+        Text(value)
+            .font(font)
+            .foregroundStyle(color)
+            .multilineTextAlignment(.trailing)
+            .lineLimit(2)
+            .truncationMode(.middle)
+            .frame(maxWidth: 180, alignment: .trailing)
+            .accessibilityLabel(value)
     }
 
     private func settingsValue(_ value: String) -> some View {
@@ -428,11 +507,11 @@ struct SettingsView: View {
     }
 
     private func settingsStaticValue(_ value: String) -> some View {
-        Text(value)
-            .font(settingsRowValueFont)
-            .foregroundStyle(BudgetBeaverPalette.ink)
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
+        settingsLongValue(
+            value,
+            font: settingsRowValueFont,
+            color: BudgetBeaverPalette.ink
+        )
     }
 
     private func rowButton(

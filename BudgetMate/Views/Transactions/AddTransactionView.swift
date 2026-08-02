@@ -181,12 +181,9 @@ struct AddTransactionView: View {
                     }
 
                     Section(viewModel.type == .expense ? "Paid By" : "Income For") {
-                        Picker(viewModel.type == .expense ? "Paid By" : "Income For", selection: $selectedMemberId) {
-                            ForEach(memberViewModel.members) { member in
-                                Text(member.displayName).tag(Optional(member.id))
-                            }
-                        }
-                        .pickerStyle(.menu)
+                        memberSelectionMenu(
+                            label: viewModel.type == .expense ? "Paid By" : "Income For"
+                        )
                     }
 
                     if viewModel.isSplittable {
@@ -589,6 +586,48 @@ struct AddTransactionView: View {
         }
         selectedMemberId = transactionToEdit?.createdByMemberId ?? defaultTransactionMember.id
     }
+
+    private var selectedMemberForDisplay: BudgetMember {
+        memberViewModel.members.first(where: { $0.id == payerId }) ?? defaultTransactionMember
+    }
+
+    private func memberSelectionMenu(label: String) -> some View {
+        Menu {
+            ForEach(memberViewModel.members) { member in
+                Button {
+                    selectedMemberId = member.id
+                } label: {
+                    if member.id == payerId {
+                        Label(member.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(member.displayName)
+                    }
+                }
+            }
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(label)
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 8)
+                Text(selectedMemberForDisplay.displayName)
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 150, alignment: .trailing)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.brand)
+            }
+            .contentShape(Rectangle())
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(selectedMemberForDisplay.displayName)
+        .accessibilityHint("Choose the member for this transaction.")
+        .accessibilityIdentifier(
+            label == "Paid By" ? "transactionEditor.paidBy" : "transactionEditor.incomeFor"
+        )
+    }
 }
 
 /// A calendar that closes as soon as the user chooses a different day. SwiftUI's
@@ -603,28 +642,40 @@ private struct AutoDismissDatePicker: View {
 
     var body: some View {
         NavigationStack {
-            DatePicker(title, selection: $selection, displayedComponents: .date)
-                .datePickerStyle(.graphical)
-                .labelsHidden()
-                .padding()
-                .onChange(of: selection) { oldValue, newValue in
-                    guard TransactionDatePickerBehavior.shouldDismiss(
-                        afterChangingFrom: oldValue,
-                        to: newValue,
-                        calendar: calendar
-                    ) else { return }
-                    dismiss()
-                }
-                .navigationTitle(title)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
+            VStack(spacing: 0) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(BudgetBeaverPalette.ink)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 10)
+                    .padding(.bottom, 4)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("transactionDatePicker.title")
+
+                DatePicker(title, selection: $selection, displayedComponents: .date)
+                    .datePickerStyle(.graphical)
+                    .labelsHidden()
+                    .padding(.horizontal)
+                    .onChange(of: selection) { oldValue, newValue in
+                        guard TransactionDatePickerBehavior.shouldDismiss(
+                            afterChangingFrom: oldValue,
+                            to: newValue,
+                            calendar: calendar
+                        ) else { return }
+                        dismiss()
                     }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
-                    }
+            }
+            .background(AppTheme.background)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("transactionDatePicker.cancel")
                 }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .accessibilityIdentifier("transactionDatePicker.done")
+                }
+            }
         }
         .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
