@@ -284,6 +284,35 @@ final class ScopedPersistenceCharacterizationTests: XCTestCase {
         )
     }
 
+    func testActiveHouseholdMemberCanCreateSharedRecordsWhenGateIsEnabled() {
+        let decision = SharedRecordMutationCapability.decision(
+            currentUserScopeId: BudgetMateTestFixtures.bobUserID.uuidString,
+            activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            recordBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            members: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob],
+            operation: .create,
+            serverGateEnabled: true
+        )
+
+        XCTAssertTrue(decision.isAllowed)
+        XCTAssertEqual(decision.reason, .activeHouseholdMemberCreating)
+        XCTAssertNil(decision.readOnlyMessage)
+    }
+
+    func testSharedRecordCreationStillFailsClosedWhenGateIsDisabled() {
+        let decision = SharedRecordMutationCapability.decision(
+            currentUserScopeId: BudgetMateTestFixtures.bobUserID.uuidString,
+            activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            recordBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            members: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob],
+            operation: .create,
+            serverGateEnabled: false
+        )
+
+        XCTAssertFalse(decision.isAllowed)
+        XCTAssertEqual(decision.reason, .sharedDataSafetyDisabled)
+    }
+
     func testSharedDataSafetyGateFailsClosedBeforeServerActivation() {
         let decision = SharedRecordMutationCapability.decision(
             currentUserScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,

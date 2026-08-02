@@ -3,7 +3,7 @@ import SwiftUI
 
 struct RootTabView: View {
     @EnvironmentObject private var authStore: AuthSessionStore
-    @State private var selectedTab: AppTab = .dashboard
+    @State private var tabState = AppTabSelectionState()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,19 +23,40 @@ struct RootTabView: View {
     @ViewBuilder
     private var selectedContent: some View {
         let scope = authStore.currentBudgetScopeId
-        switch selectedTab {
-        case .dashboard:
-            DashboardView(
-                budgetScopeId: scope,
-                onOpenSettings: { selectedTab = .settings },
-                onOpenBudget: { selectedTab = .budget }
-            )
-        case .transactions:
-            TransactionsView(budgetScopeId: scope, onOpenSettings: { selectedTab = .settings })
-        case .budget:
-            BudgetView(budgetScopeId: scope, onOpenSettings: { selectedTab = .settings })
-        case .settings:
-            SettingsView(budgetScopeId: scope)
+        ZStack {
+            retainedTab(.dashboard) {
+                DashboardView(
+                    budgetScopeId: scope,
+                    onOpenSettings: { select(.settings) },
+                    onOpenBudget: { select(.budget) }
+                )
+            }
+            retainedTab(.transactions) {
+                TransactionsView(budgetScopeId: scope, onOpenSettings: { select(.settings) })
+            }
+            retainedTab(.budget) {
+                BudgetView(budgetScopeId: scope, onOpenSettings: { select(.settings) })
+            }
+            retainedTab(.settings) {
+                SettingsView(budgetScopeId: scope)
+            }
+        }
+    }
+
+    /// Keep a tab's view hierarchy alive after its first visit. The previous
+    /// switch rebuilt Dashboard and Settings every time, resetting their
+    /// derived values and restarting network/metrics work during navigation.
+    @ViewBuilder
+    private func retainedTab<Content: View>(
+        _ tab: AppTab,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        if tabState.visitedTabs.contains(tab) {
+            content()
+                .opacity(tabState.selectedTab == tab ? 1 : 0)
+                .allowsHitTesting(tabState.selectedTab == tab)
+                .accessibilityHidden(tabState.selectedTab != tab)
+                .zIndex(tabState.selectedTab == tab ? 1 : 0)
         }
     }
 
@@ -66,10 +87,10 @@ struct RootTabView: View {
 
     private func tabButton(for tab: AppTab, title: String, icon: String) -> some View {
         Button {
-            selectedTab = tab
+            select(tab)
         } label: {
             VStack(spacing: 3) {
-                Image(systemName: selectedTab == tab ? "\(icon).fill" : icon)
+                Image(systemName: tabState.selectedTab == tab ? "\(icon).fill" : icon)
                     .font(.system(size: 21, weight: .semibold))
                 Text(title)
                     .font(.system(size: 10, weight: .bold, design: .rounded))
@@ -77,13 +98,18 @@ struct RootTabView: View {
                     .minimumScaleFactor(0.72)
                     .allowsTightening(true)
             }
-                .foregroundStyle(selectedTab == tab ? AppTheme.brand : BudgetBeaverPalette.wood)
+                .foregroundStyle(tabState.selectedTab == tab ? AppTheme.brand : BudgetBeaverPalette.wood)
                 .frame(height: 50)
                 .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle(scale: 0.97, pressedOpacity: 0.86))
         .accessibilityLabel(title)
+        .accessibilityIdentifier("tab.\(String(describing: tab))")
+    }
+
+    private func select(_ tab: AppTab) {
+        tabState.select(tab)
     }
 }
 

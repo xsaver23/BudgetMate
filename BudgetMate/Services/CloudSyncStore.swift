@@ -900,6 +900,7 @@ final class CloudSyncStore: ObservableObject {
              .mutationRecordNotFound,
              .invalidMemberReference,
              .memberReferenceForbidden,
+             .invalidLocalMoneyAmount,
              .sharedDataMutationConflict,
              .sharedDataSafetyDisabled,
              .unsafePendingDeletion,

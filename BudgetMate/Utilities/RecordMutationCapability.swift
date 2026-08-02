@@ -91,6 +91,7 @@ struct RecordMutationDecision: Equatable {
         case personalBudget
         case householdOwner
         case householdCreator
+        case activeHouseholdMemberCreating
         case restrictedSharedMember
         case sharedDataSafetyDisabled
     }
@@ -99,7 +100,7 @@ struct RecordMutationDecision: Equatable {
 
     var isAllowed: Bool {
         switch reason {
-        case .personalBudget, .householdOwner, .householdCreator:
+        case .personalBudget, .householdOwner, .householdCreator, .activeHouseholdMemberCreating:
             return true
         case .restrictedSharedMember, .sharedDataSafetyDisabled:
             return false
@@ -115,6 +116,11 @@ struct RecordMutationDecision: Equatable {
     }
 }
 
+enum RecordMutationOperation: Equatable {
+    case create
+    case modifyExisting
+}
+
 enum SharedRecordMutationCapability {
     static func decision(
         currentUserScopeId: String,
@@ -122,6 +128,7 @@ enum SharedRecordMutationCapability {
         recordBudgetScopeId: String,
         members: [BudgetMember],
         recordCreatorUserId: UUID? = nil,
+        operation: RecordMutationOperation = .modifyExisting,
         serverGateEnabled: Bool = SharedDataSafetyGate.isEnabled
     ) -> RecordMutationDecision {
         guard activeBudgetScopeId == recordBudgetScopeId else {
@@ -149,6 +156,9 @@ enum SharedRecordMutationCapability {
             return RecordMutationDecision(reason: .restrictedSharedMember)
         }
 
+        if operation == .create {
+            return RecordMutationDecision(reason: .activeHouseholdMemberCreating)
+        }
         if authenticatedMember.role == .owner {
             return RecordMutationDecision(reason: .householdOwner)
         }

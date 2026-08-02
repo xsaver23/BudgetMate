@@ -245,6 +245,7 @@ final class AddTransactionViewModel: ObservableObject {
 
     func buildTransaction(
         addedBy member: BudgetMember,
+        createdByUserId: UUID? = nil,
         currencyCode: String = CurrencyOption.usd.code,
         date: Date? = nil
     ) -> Transaction? {
@@ -260,6 +261,7 @@ final class AddTransactionViewModel: ObservableObject {
             category: category,
             paymentMethod: paymentMethod,
             createdByMemberId: member.id,
+            createdByUserId: createdByUserId,
             date: date ?? self.date,
             recurrenceRule: recurrenceRule
         )

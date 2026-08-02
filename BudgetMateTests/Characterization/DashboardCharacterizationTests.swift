@@ -3,6 +3,57 @@ import XCTest
 
 @MainActor
 final class DashboardCharacterizationTests: XCTestCase {
+    func testTabSelectionRetainsEveryPreviouslyVisitedScreen() {
+        var state = AppTabSelectionState()
+
+        state.select(.settings)
+        state.select(.transactions)
+        state.select(.dashboard)
+
+        XCTAssertEqual(state.selectedTab, .dashboard)
+        XCTAssertEqual(state.visitedTabs, [.dashboard, .settings, .transactions])
+    }
+
+    func testTransactionCalendarDismissesOnlyAfterSelectingAnotherDay() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Toronto"))
+        let morning = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 7, day: 31, hour: 9)))
+        let evening = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 7, day: 31, hour: 20)))
+        let nextDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 8, day: 1, hour: 9)))
+
+        XCTAssertFalse(
+            TransactionDatePickerBehavior.shouldDismiss(
+                afterChangingFrom: morning,
+                to: evening,
+                calendar: calendar
+            )
+        )
+        XCTAssertTrue(
+            TransactionDatePickerBehavior.shouldDismiss(
+                afterChangingFrom: morning,
+                to: nextDay,
+                calendar: calendar
+            )
+        )
+    }
+
+    func testNewTransactionPreservesAuthenticatedCreatorIdentity() throws {
+        let viewModel = AddTransactionViewModel()
+        viewModel.title = "Paycheque"
+        viewModel.amountText = "100"
+        viewModel.type = .income
+
+        let transaction = try XCTUnwrap(
+            viewModel.buildTransaction(
+                addedBy: BudgetMateTestFixtures.bob,
+                createdByUserId: BudgetMateTestFixtures.bobUserID,
+                currencyCode: "CAD"
+            )
+        )
+
+        XCTAssertEqual(transaction.createdByUserId, BudgetMateTestFixtures.bobUserID)
+    }
+
     func testDashboardTotalsIncludeIncomeExpensesAndRemainingBudget() {
         let transactions = [
             BudgetMateTestFixtures.income(amount: 2_500),

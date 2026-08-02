@@ -17,6 +17,7 @@ struct AddTransactionView: View {
     private let hasInitialSettings: Bool
     @State private var selectedMemberId: UUID?
     @State private var saveErrorMessage: String?
+    @State private var isShowingTransactionDatePicker = false
     @State private var editorAppearedAtUptime: TimeInterval?
     @State private var hasLoggedFirstKeyboard = false
     @FocusState private var focusedInput: FocusedInput?
@@ -87,7 +88,8 @@ struct AddTransactionView: View {
             activeBudgetScopeId: authStore.currentBudgetScopeId,
             recordBudgetScopeId: transactionToEdit?.ownerUserId ?? authStore.currentBudgetScopeId,
             members: memberViewModel.members,
-            recordCreatorUserId: transactionToEdit?.createdByUserId
+            recordCreatorUserId: transactionToEdit?.createdByUserId,
+            operation: transactionToEdit == nil ? .create : .modifyExisting
         )
     }
 
@@ -148,7 +150,22 @@ struct AddTransactionView: View {
                             }
                         }
 
-                        DatePicker("Date", selection: $viewModel.date, displayedComponents: .date)
+                        Button {
+                            focusedInput = nil
+                            isShowingTransactionDatePicker = true
+                        } label: {
+                            HStack {
+                                Text("Date")
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                Text(viewModel.date.formatted(date: .abbreviated, time: .omitted))
+                                    .foregroundStyle(AppTheme.textSecondary)
+                                Image(systemName: "calendar")
+                                    .foregroundStyle(AppTheme.brand)
+                            }
+                        }
+                        .accessibilityIdentifier("transactionEditor.date")
+                        .accessibilityValue(viewModel.date.formatted(date: .long, time: .omitted))
                     }
 
                     Section("Payment Method") {
@@ -202,6 +219,12 @@ struct AddTransactionView: View {
             }
             .onDisappear {
                 focusedInput = nil
+            }
+            .sheet(isPresented: $isShowingTransactionDatePicker) {
+                AutoDismissDatePicker(
+                    title: "Transaction Date",
+                    selection: $viewModel.date
+                )
             }
             .onChange(of: settingsStore.settings) { _, settings in
                 viewModel.updateAvailableExpenseCategories(from: settings)
@@ -268,18 +291,6 @@ struct AddTransactionView: View {
                 }
             }
             .background(TransactionEditorActivityReporter())
-            .task {
-                // New transactions start with the amount. Requesting focus
-                // after the sheet has mounted lets iOS prepare the keyboard
-                // before a user's first tap, while never stealing focus from
-                // a field they have already selected.
-                guard transactionToEdit == nil else { return }
-                try? await Task.sleep(for: .milliseconds(250))
-                guard !Task.isCancelled,
-                      scenePhase == .active,
-                      focusedInput == nil else { return }
-                focusedInput = .amount
-            }
         }
     }
 
@@ -522,6 +533,7 @@ struct AddTransactionView: View {
 
         guard let transaction = viewModel.buildTransaction(
             addedBy: member,
+            createdByUserId: UUID(uuidString: authStore.currentUserScopeId),
             currencyCode: settingsStore.settings.currencyCode
         ) else { return }
         transaction.ownerUserId = authStore.currentBudgetScopeId
@@ -576,6 +588,56 @@ struct AddTransactionView: View {
             return
         }
         selectedMemberId = transactionToEdit?.createdByMemberId ?? defaultTransactionMember.id
+    }
+}
+
+/// A calendar that closes as soon as the user chooses a different day. SwiftUI's
+/// compact DatePicker leaves its calendar open until another control is tapped,
+/// which made the editor feel stuck after a selection.
+private struct AutoDismissDatePicker: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.calendar) private var calendar
+
+    let title: String
+    @Binding var selection: Date
+
+    var body: some View {
+        NavigationStack {
+            DatePicker(title, selection: $selection, displayedComponents: .date)
+                .datePickerStyle(.graphical)
+                .labelsHidden()
+                .padding()
+                .onChange(of: selection) { oldValue, newValue in
+                    guard TransactionDatePickerBehavior.shouldDismiss(
+                        afterChangingFrom: oldValue,
+                        to: newValue,
+                        calendar: calendar
+                    ) else { return }
+                    dismiss()
+                }
+                .navigationTitle(title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
+                }
+        }
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+enum TransactionDatePickerBehavior {
+    static func shouldDismiss(
+        afterChangingFrom oldValue: Date,
+        to newValue: Date,
+        calendar: Calendar
+    ) -> Bool {
+        !calendar.isDate(oldValue, inSameDayAs: newValue)
     }
 }
 

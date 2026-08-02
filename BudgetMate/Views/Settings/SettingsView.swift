@@ -323,8 +323,7 @@ struct SettingsView: View {
                 syncFieldsFromStore()
             }
             .task(id: "\(authStore.userEmail ?? "")-\(authStore.currentBudgetScopeId)") {
-                currencyHistoryValidatedBudgetScopeId = nil
-                await refreshAllData(showFeedback: false, forceSync: true)
+                await prepareSettingsScreen()
             }
             .sheet(isPresented: $isShowingProfileEditor) {
                 EditProfileNameView(
@@ -507,6 +506,39 @@ struct SettingsView: View {
         saveCurrentMembersToCloud()
         isShowingProfileEditor = false
         clearFeedbackMessage = "Profile name updated."
+    }
+
+    /// Settings is a local-first view. App bootstrap and the background loop
+    /// already own cloud synchronization, so entering this tab must not start
+    /// another forced full sync. Only request a passive refresh when the app
+    /// has not observed its initial cloud baseline yet.
+    private func prepareSettingsScreen() async {
+        let userScopeId = authStore.currentUserScopeId
+        let activeBudgetScopeId = authStore.currentBudgetScopeId
+        guard activeBudgetScopeId == budgetScopeId else { return }
+
+        currencyHistoryValidatedBudgetScopeId = nil
+        syncFieldsFromStore()
+
+        if !settingsStore.hasObservedCloudSettingsBaseline {
+            await appRefreshStore.refreshCurrentBudget(forceSync: false)
+            guard authStore.currentUserScopeId == userScopeId,
+                  authStore.currentBudgetScopeId == activeBudgetScopeId,
+                  activeBudgetScopeId == budgetScopeId else { return }
+            syncFieldsFromStore()
+        }
+
+        await refreshSharedBudgetSection()
+        guard authStore.currentUserScopeId == userScopeId,
+              authStore.currentBudgetScopeId == activeBudgetScopeId,
+              activeBudgetScopeId == budgetScopeId else { return }
+
+        recordFinancialHistoryIfPresent()
+        if settingsStore.hasObservedCloudSettingsBaseline,
+           settingsStore.pendingCloudSyncToken == nil,
+           !cloudSyncStore.hasSyncIssue {
+            currencyHistoryValidatedBudgetScopeId = budgetScopeId
+        }
     }
 
     @discardableResult

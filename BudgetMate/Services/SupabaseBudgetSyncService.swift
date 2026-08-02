@@ -104,9 +104,9 @@ private struct SharedDataSafetyMutationParameters<Payload: Encodable>: Encodable
 
 private struct EmptySharedDataSafetyPayload: Encodable {}
 
-private struct TransactionMutationPayload: Encodable {
+struct TransactionMutationPayload: Encodable {
     let title: String
-    let amount: Double
+    let amount: Decimal
     let amountMinorUnits: Int64?
     let currencyCode: String?
     let type: String
@@ -117,7 +117,7 @@ private struct TransactionMutationPayload: Encodable {
     let occurredOn: String
     let createdAt: String
     let recurrenceRule: String?
-    let splits: [CloudTransactionSplitRow]
+    let splits: [TransactionMutationSplitPayload]
     let splitsMinorUnits: [CloudTransactionSplitMoneyRow]?
 
     enum CodingKeys: String, CodingKey {
@@ -134,10 +134,15 @@ private struct TransactionMutationPayload: Encodable {
     }
 
     init(transaction: Transaction, memberAliases: [UUID: UUID] = [:]) {
+        let normalizedAmount = ServerMoneyPayloadNormalizer.canonicalMoney(
+            transaction.amount,
+            minorUnits: transaction.amountMinorUnits,
+            currencyCode: transaction.currencyCode
+        )
         title = transaction.title
-        amount = transaction.amount
-        amountMinorUnits = transaction.amountMinorUnits
-        currencyCode = transaction.currencyCode
+        amount = normalizedAmount.amount
+        amountMinorUnits = normalizedAmount.minorUnits
+        currencyCode = normalizedAmount.currencyCode
         type = transaction.type.rawValue
         category = transaction.category.rawValue
         paymentMethod = transaction.paymentMethod?.rawValue
@@ -146,16 +151,26 @@ private struct TransactionMutationPayload: Encodable {
         occurredOn = CloudISO8601DateCodec.localDateString(from: transaction.date)
         createdAt = CloudISO8601DateCodec.string(from: transaction.createdAt)
         recurrenceRule = transaction.recurrenceRule
-        splits = transaction.splits.map {
-            CloudTransactionSplitRow(
-                id: $0.id,
-                memberId: CloudTransactionRow.resolvedMemberId($0.memberId, aliases: memberAliases),
-                amount: $0.amount
+        let normalizedSplits = transaction.splits.map { split in
+            (
+                split,
+                ServerMoneyPayloadNormalizer.canonicalMoney(
+                    split.amount,
+                    minorUnits: split.amountMinorUnits,
+                    currencyCode: split.currencyCode ?? normalizedAmount.currencyCode
+                )
             )
         }
-        let exactSplits = transaction.splits.compactMap { split -> CloudTransactionSplitMoneyRow? in
-            guard let amountMinorUnits = split.amountMinorUnits,
-                  let currencyCode = split.currencyCode else { return nil }
+        splits = normalizedSplits.map { split, money in
+            TransactionMutationSplitPayload(
+                id: split.id,
+                memberId: CloudTransactionRow.resolvedMemberId(split.memberId, aliases: memberAliases),
+                amount: money.amount
+            )
+        }
+        let exactSplits = normalizedSplits.compactMap { split, money -> CloudTransactionSplitMoneyRow? in
+            guard let amountMinorUnits = money.minorUnits,
+                  let currencyCode = money.currencyCode else { return nil }
             return CloudTransactionSplitMoneyRow(
                 id: split.id,
                 memberId: CloudTransactionRow.resolvedMemberId(split.memberId, aliases: memberAliases),
@@ -167,10 +182,26 @@ private struct TransactionMutationPayload: Encodable {
     }
 }
 
-private struct SettlementMutationPayload: Encodable {
+/// The mutation RPC validates that compatibility amounts have no fractional
+/// precision beyond a cent. Encoding a Swift `Double` can expose its binary
+/// approximation (for example, 22.58 as 22.580000000000002), so mutation
+/// payloads use `Decimal` even while local legacy models still store `Double`.
+struct TransactionMutationSplitPayload: Encodable {
+    let id: UUID
+    let memberId: UUID
+    let amount: Decimal
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case memberId = "member_id"
+        case amount
+    }
+}
+
+struct SettlementMutationPayload: Encodable {
     let fromMemberId: UUID
     let toMemberId: UUID
-    let amount: Double
+    let amount: Decimal
     let amountMinorUnits: Int64?
     let currencyCode: String?
     let date: String
@@ -186,13 +217,116 @@ private struct SettlementMutationPayload: Encodable {
     }
 
     init(settlement: Settlement, memberAliases: [UUID: UUID] = [:]) {
+        let normalizedAmount = ServerMoneyPayloadNormalizer.canonicalMoney(
+            settlement.amount,
+            minorUnits: settlement.amountMinorUnits,
+            currencyCode: settlement.currencyCode
+        )
         fromMemberId = CloudTransactionRow.resolvedMemberId(settlement.fromMemberId, aliases: memberAliases)
         toMemberId = CloudTransactionRow.resolvedMemberId(settlement.toMemberId, aliases: memberAliases)
-        amount = settlement.amount
-        amountMinorUnits = settlement.amountMinorUnits
-        currencyCode = settlement.currencyCode
+        amount = normalizedAmount.amount
+        amountMinorUnits = normalizedAmount.minorUnits
+        currencyCode = normalizedAmount.currencyCode
         date = CloudISO8601DateCodec.string(from: settlement.date)
         occurredOn = CloudISO8601DateCodec.localDateString(from: settlement.date)
+    }
+}
+
+/// Produces the compatibility numeric value required by the server while the
+/// exact-money and legacy columns coexist. Exact minor units are authoritative;
+/// older rows are rounded through Decimal rather than binary floating point.
+enum ServerMoneyPayloadNormalizer {
+    private static let legacyFractionDigits = ValidatedLegacyFractionDigits(2)!
+
+    struct CanonicalMoney {
+        let amount: Decimal
+        let minorUnits: Int64?
+        let currencyCode: String?
+    }
+
+    /// Repairs the compatibility and exact fields as one unit. Some upgraded
+    /// local rows can contain a positive legacy amount alongside a stale zero
+    /// exact value. Trusting that zero would turn a valid expense into a zero
+    /// server write and violate the production positive-amount constraint.
+    static func canonicalMoney(
+        _ legacyAmount: Double,
+        minorUnits: Int64?,
+        currencyCode: String?
+    ) -> CanonicalMoney {
+        if let minorUnits,
+           minorUnits > 0,
+           let currencyCode,
+           let exact = try? Money(minorUnits: minorUnits, currencyCode: currencyCode) {
+            return CanonicalMoney(
+                amount: decimalAmount(
+                    minorUnits: exact.minorUnits,
+                    fractionDigits: (try? CurrencyMetadata(code: exact.currencyCode))?.fractionDigits ?? 2
+                ),
+                minorUnits: exact.minorUnits,
+                currencyCode: exact.currencyCode
+            )
+        }
+
+        if let currencyCode,
+           let metadata = try? CurrencyMetadata(code: currencyCode),
+           let fractionDigits = ValidatedLegacyFractionDigits(metadata.fractionDigits),
+           case .success(let repairedMinorUnits) = LegacyDoubleMoneyConverter.convert(
+                legacyAmount,
+                fractionDigits: fractionDigits
+           ),
+           repairedMinorUnits > 0,
+           let repaired = try? Money(
+                minorUnits: repairedMinorUnits,
+                currencyCode: metadata.code
+           ) {
+            return CanonicalMoney(
+                amount: decimalAmount(
+                    minorUnits: repaired.minorUnits,
+                    fractionDigits: metadata.fractionDigits
+                ),
+                minorUnits: repaired.minorUnits,
+                currencyCode: repaired.currencyCode
+            )
+        }
+
+        guard case .success(let cents) = LegacyDoubleMoneyConverter.convert(
+            legacyAmount,
+            fractionDigits: legacyFractionDigits
+        ) else {
+            return CanonicalMoney(
+                amount: Decimal(string: String(legacyAmount), locale: Locale(identifier: "en_US_POSIX")) ?? 0,
+                minorUnits: nil,
+                currencyCode: nil
+            )
+        }
+        return CanonicalMoney(
+            amount: decimalAmount(minorUnits: cents, fractionDigits: 2),
+            minorUnits: nil,
+            currencyCode: nil
+        )
+    }
+
+    static func canonicalLegacyAmount(
+        _ legacyAmount: Double,
+        minorUnits: Int64?,
+        currencyCode: String?
+    ) -> Double {
+        NSDecimalNumber(decimal: canonicalMoney(
+            legacyAmount,
+            minorUnits: minorUnits,
+            currencyCode: currencyCode
+        ).amount).doubleValue
+    }
+
+    private static func decimalAmount(
+        minorUnits: Int64,
+        fractionDigits: Int
+    ) -> Decimal {
+        var divisor = Decimal(1)
+        for _ in 0..<fractionDigits {
+            divisor *= 10
+        }
+        return Decimal(minorUnits) / divisor
     }
 }
 
@@ -208,6 +342,7 @@ enum SupabaseBudgetSyncError: LocalizedError {
     case sharedBudgetLeaveUnavailable
     case invalidCloudDate(String)
     case invalidCloudMoneyContract
+    case invalidLocalMoneyAmount
     case sharedDataSafetyDisabled
     case sharedDataMutationConflict
     case idempotencyMismatch
@@ -231,6 +366,8 @@ enum SupabaseBudgetSyncError: LocalizedError {
             return "Cloud data has an invalid date: \(value)."
         case .invalidCloudMoneyContract:
             return "Cloud data has inconsistent exact-money fields."
+        case .invalidLocalMoneyAmount:
+            return "A saved transaction had an amount format the cloud could not accept. BudgetMate normalized it; tap Retry Sync."
         case .sharedDataSafetyDisabled:
             return "Shared-data writes are temporarily disabled while household safety is being enabled."
         case .sharedDataMutationConflict:
@@ -1898,13 +2035,17 @@ final class SupabaseBudgetSyncService {
         }
         let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
         try transaction.validateForSync()
+        let payload = TransactionMutationPayload(
+            transaction: transaction,
+            memberAliases: memberAliases
+        )
         let params = SharedDataSafetyMutationParameters(
             budgetId: budgetId,
             recordId: transaction.id,
             expectedRowVersion: transaction.rowVersion ?? 0,
             clientMutationId: mutationId,
             operation: operation,
-            payload: TransactionMutationPayload(transaction: transaction, memberAliases: memberAliases)
+            payload: payload
         )
         do {
             return try await client
@@ -2088,6 +2229,10 @@ final class SupabaseBudgetSyncService {
 
     private static func mapMutationError(_ error: Error) -> Error {
         let message = error.localizedDescription.lowercased()
+        if message.contains("budget_transactions_positive_cent_amount") ||
+            message.contains("budget_transactions_valid_splits") {
+            return SupabaseBudgetSyncError.invalidLocalMoneyAmount
+        }
         if message.contains("idempotency_mismatch") {
             return SupabaseBudgetSyncError.idempotencyMismatch
         }
