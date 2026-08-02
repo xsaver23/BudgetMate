@@ -207,7 +207,8 @@ struct DashboardView: View {
             currentUserScopeId: authStore.currentUserScopeId,
             activeBudgetScopeId: authStore.currentBudgetScopeId,
             recordBudgetScopeId: authStore.currentBudgetScopeId,
-            members: memberViewModel.members
+            members: memberViewModel.members,
+            operation: .create
         )
         guard mutationDecision.isAllowed else {
             cloudSyncStore.recordSyncIssue(
@@ -223,6 +224,7 @@ struct DashboardView: View {
             amount: settlement.amount,
             amountMinorUnits: settlement.amountMinorUnits,
             currencyCode: settlement.currencyCode,
+            createdByUserId: UUID(uuidString: authStore.currentUserScopeId),
             ownerUserId: authStore.currentBudgetScopeId
         )
         record.needsSync = true

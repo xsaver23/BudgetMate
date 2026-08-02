@@ -113,6 +113,92 @@ final class ScopedPersistenceCharacterizationTests: XCTestCase {
         ])
     }
 
+    func testCompletingMemberProfilePreservesRoleAndDoesNotDirtyHouseholdMembers() {
+        let defaults = BudgetMateTestFixtures.isolatedDefaults()
+        let viewModel = MemberViewModel(
+            repository: LocalBudgetRepository(
+                userDefaults: defaults,
+                userScopeId: BudgetMateTestFixtures.bobUserID.uuidString,
+                fallbackBudget: BudgetMateTestFixtures.personalBudget
+            ),
+            userDefaults: defaults,
+            userScopeId: BudgetMateTestFixtures.bobUserID.uuidString
+        )
+
+        viewModel.switchUser(
+            to: BudgetMateTestFixtures.bobUserID.uuidString,
+            budgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            email: BudgetMateTestFixtures.bob.email
+        )
+        viewModel.replaceMembers(with: [
+            BudgetMateTestFixtures.alice,
+            BudgetMateTestFixtures.bob
+        ])
+
+        let profile = viewModel.completeProfile(displayName: "Bob Brown")
+
+        XCTAssertEqual(profile?.role, .member)
+        XCTAssertEqual(viewModel.activeMember.role, .member)
+        XCTAssertNil(viewModel.pendingCloudSyncToken)
+        XCTAssertEqual(viewModel.members.count, 2)
+    }
+
+    func testProfileRecoveryUsesMatchingSharedMemberWithoutImportingHouseholdRows() {
+        let defaults = BudgetMateTestFixtures.isolatedDefaults()
+        let viewModel = MemberViewModel(
+            repository: LocalBudgetRepository(
+                userDefaults: defaults,
+                userScopeId: BudgetMateTestFixtures.bobUserID.uuidString,
+                fallbackBudget: BudgetMateTestFixtures.personalBudget
+            ),
+            userDefaults: defaults,
+            userScopeId: BudgetMateTestFixtures.bobUserID.uuidString
+        )
+
+        viewModel.replaceMembers(with: [
+            BudgetMember(
+                displayName: "Bob",
+                email: "bob@example.com",
+                initials: "B",
+                color: "#F97316",
+                authUserId: BudgetMateTestFixtures.bobUserID,
+                role: .member
+            )
+        ])
+
+        let restored = viewModel.restoreProfileIfPresent(
+            from: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob],
+            userScopeId: BudgetMateTestFixtures.bobUserID.uuidString,
+            email: "bob@example.com"
+        )
+
+        XCTAssertTrue(restored)
+        XCTAssertTrue(viewModel.isProfileComplete)
+        XCTAssertEqual(viewModel.activeMember.id, BudgetMateTestFixtures.bobMemberID)
+        XCTAssertEqual(viewModel.activeMember.role, .member)
+        XCTAssertEqual(viewModel.members.map(\.id), [BudgetMateTestFixtures.bobMemberID])
+        XCTAssertNil(viewModel.pendingCloudSyncToken)
+    }
+
+    func testProfileCloudSyncRequestContainsOnlySignedInMember() {
+        let request = ProfileCloudSyncRequest(
+            member: BudgetMateTestFixtures.bob,
+            userScopeId: BudgetMateTestFixtures.bobUserID.uuidString
+        )
+
+        XCTAssertEqual(request.members, [BudgetMateTestFixtures.bob])
+    }
+
+    func testProfileCloudSyncRequestAlwaysTargetsPersonalScope() {
+        let request = ProfileCloudSyncRequest(
+            member: BudgetMateTestFixtures.bob,
+            userScopeId: BudgetMateTestFixtures.bobUserID.uuidString
+        )
+
+        XCTAssertEqual(request.userScopeId, BudgetMateTestFixtures.bobUserID.uuidString)
+        XCTAssertEqual(request.budgetScopeId, BudgetMateTestFixtures.bobUserID.uuidString)
+    }
+
     func testClearAllGuardrailHasNoEnabledActionAndExplainsRecoveryRequirement() {
         let restriction = DestructiveActionGuardrails.clearAll
 
@@ -282,6 +368,35 @@ final class ScopedPersistenceCharacterizationTests: XCTestCase {
             decision.readOnlyMessage,
             "Only the household owner or the authenticated record creator can edit or delete shared records right now."
         )
+    }
+
+    func testActiveHouseholdMemberCanCreateSharedRecordsWhenGateIsEnabled() {
+        let decision = SharedRecordMutationCapability.decision(
+            currentUserScopeId: BudgetMateTestFixtures.bobUserID.uuidString,
+            activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            recordBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            members: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob],
+            operation: .create,
+            serverGateEnabled: true
+        )
+
+        XCTAssertTrue(decision.isAllowed)
+        XCTAssertEqual(decision.reason, .activeHouseholdMemberCreating)
+        XCTAssertNil(decision.readOnlyMessage)
+    }
+
+    func testSharedRecordCreationStillFailsClosedWhenGateIsDisabled() {
+        let decision = SharedRecordMutationCapability.decision(
+            currentUserScopeId: BudgetMateTestFixtures.bobUserID.uuidString,
+            activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            recordBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            members: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob],
+            operation: .create,
+            serverGateEnabled: false
+        )
+
+        XCTAssertFalse(decision.isAllowed)
+        XCTAssertEqual(decision.reason, .sharedDataSafetyDisabled)
     }
 
     func testSharedDataSafetyGateFailsClosedBeforeServerActivation() {

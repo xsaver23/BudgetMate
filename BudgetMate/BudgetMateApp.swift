@@ -51,12 +51,25 @@ struct BudgetMateApp: App {
 
     var body: some Scene {
         WindowGroup {
+#if DEBUG
+            if let scenario = SyntheticUITestScenario.fromProcessArguments {
+                SyntheticUITestFixtureView(scenario: scenario)
+            } else {
+                persistenceGatedContent
+                    .onAppear {
+                        appRefreshStore.configure { forceSync in
+                            await refreshCurrentBudget(forceSync: forceSync)
+                        }
+                    }
+            }
+#else
             persistenceGatedContent
                 .onAppear {
                     appRefreshStore.configure { forceSync in
                         await refreshCurrentBudget(forceSync: forceSync)
                     }
                 }
+#endif
         }
         .environmentObject(settingsStore)
         .environmentObject(memberViewModel)
@@ -122,7 +135,10 @@ struct BudgetMateApp: App {
                             .transition(.opacity)
                             .preferredColorScheme(settingsStore.settings.appearance.colorScheme)
                             .task(id: "\(authStore.currentUserScopeId)|\(authStore.currentBudgetScopeId)|\(memberViewModel.isProfileComplete)") {
-                                applyUserScope(authStore.currentUserScopeId, budgetScopeId: authStore.currentBudgetScopeId)
+                                // Profile state must be internally consistent in
+                                // the personal scope before a shared budget can
+                                // become the selected local model.
+                                applyUserScope(authStore.currentUserScopeId, budgetScopeId: authStore.currentUserScopeId)
                                 await restoreCloudProfileIfNeeded(authStore.currentUserScopeId)
                                 guard !Task.isCancelled else { return }
                                 // Reveal the app with on-device data as soon as the
@@ -187,7 +203,11 @@ struct BudgetMateApp: App {
     }
 
     private static func makePersistenceFactory() -> any PersistenceContainerFactory {
-        #if DEBUG
+#if DEBUG
+        if SyntheticUITestScenario.fromProcessArguments != nil {
+            return LivePersistenceContainerFactory(inMemory: true)
+        }
+
         if ProcessInfo.processInfo.arguments.contains("-ui-testing-persistence-failure") {
             let descriptor = PersistenceController.descriptor()
             return ClosurePersistenceContainerFactory {
@@ -292,11 +312,47 @@ struct BudgetMateApp: App {
                 userScopeId: userScopeId,
                 budgetScopeId: userScopeId
             )
-            _ = memberViewModel.restoreProfileIfPresent(
+            if memberViewModel.restoreProfileIfPresent(
                 from: cloudMembers,
                 userScopeId: userScopeId,
                 email: authStore.userEmail
-            )
+            ) {
+                checkedCloudProfileUserScopeId = userScopeId
+                return
+            }
+
+            var sharedScopeIds: [String] = []
+            let selectedScopeId = authStore.currentBudgetScopeId
+            if selectedScopeId != userScopeId {
+                sharedScopeIds.append(selectedScopeId)
+            }
+            if let memberships = try? await cloudSyncStore.fetchMemberships(userScopeId: userScopeId) {
+                for sharedScopeId in memberships.map({ $0.budgetId.uuidString })
+                where sharedScopeId != userScopeId && !sharedScopeIds.contains(sharedScopeId) {
+                    sharedScopeIds.append(sharedScopeId)
+                }
+            }
+
+            for sharedScopeId in sharedScopeIds {
+                do {
+                    let sharedMembers = try await cloudSyncStore.fetchMembers(
+                        userScopeId: userScopeId,
+                        budgetScopeId: sharedScopeId
+                    )
+                    if memberViewModel.restoreProfileIfPresent(
+                        from: sharedMembers,
+                        userScopeId: userScopeId,
+                        email: authStore.userEmail
+                    ) {
+                        checkedCloudProfileUserScopeId = userScopeId
+                        return
+                    }
+                } catch {
+                    // A stale or inaccessible membership should not prevent
+                    // recovery from another active shared budget.
+                }
+            }
+
             checkedCloudProfileUserScopeId = userScopeId
         } catch {
             cloudSyncStore.recordSyncIssue(error, context: "Restoring cloud profile")
@@ -651,3 +707,182 @@ struct BudgetMateApp: App {
         }
     }
 }
+
+#if DEBUG
+enum SyntheticUITestScenario: String {
+    case owner
+    case member
+
+    static var fromProcessArguments: Self? {
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-ui-testing-synthetic-owner") {
+            return .owner
+        }
+        if arguments.contains("-ui-testing-synthetic-member") {
+            return .member
+        }
+        return nil
+    }
+
+    static var isRequested: Bool {
+        fromProcessArguments != nil
+    }
+}
+
+@MainActor
+struct SyntheticUITestFixtureView: View {
+    private let seed: SyntheticUITestSeed
+    private let modelContainer: ModelContainer
+    @StateObject private var settingsStore: SettingsStore
+    @StateObject private var memberViewModel: MemberViewModel
+    @StateObject private var transactionFlow = TransactionFlowCoordinator()
+    @StateObject private var monthSelectionStore = MonthSelectionStore()
+    @StateObject private var authStore: AuthSessionStore
+    @StateObject private var cloudSyncStore: CloudSyncStore
+    @StateObject private var appRefreshStore = AppRefreshStore()
+
+    init(scenario: SyntheticUITestScenario) {
+        let seed = SyntheticUITestSeed(scenario: scenario)
+        let repository = LocalBudgetRepository(
+            userDefaults: seed.userDefaults,
+            userScopeId: seed.budget.id.uuidString,
+            fallbackBudget: seed.budget
+        )
+        repository.saveCurrentBudget(seed.budget)
+
+        self.seed = seed
+        modelContainer = try! PersistenceController(inMemory: true).container
+        _settingsStore = StateObject(wrappedValue: SettingsStore(userDefaults: seed.userDefaults))
+        _memberViewModel = StateObject(
+            wrappedValue: MemberViewModel(
+                repository: repository,
+                userDefaults: seed.userDefaults,
+                userScopeId: seed.userId.uuidString
+            )
+        )
+        _authStore = StateObject(
+            wrappedValue: AuthSessionStore(
+                syntheticUserId: seed.userId.uuidString,
+                email: seed.email,
+                budgetScopeId: seed.budget.id.uuidString
+            )
+        )
+        _cloudSyncStore = StateObject(
+            wrappedValue: CloudSyncStore(userDefaults: seed.userDefaults)
+        )
+    }
+
+    var body: some View {
+        SyntheticUITestSeededContent(
+            seed: seed,
+            settingsStore: settingsStore,
+            memberViewModel: memberViewModel,
+            transactionFlow: transactionFlow,
+            monthSelectionStore: monthSelectionStore,
+            authStore: authStore,
+            cloudSyncStore: cloudSyncStore,
+            appRefreshStore: appRefreshStore
+        )
+        .modelContainer(modelContainer)
+    }
+}
+
+private struct SyntheticUITestSeed {
+    let userId: UUID
+    let email: String
+    let activeMemberName: String
+    let budget: Budget
+    let userDefaults: UserDefaults
+
+    init(scenario: SyntheticUITestScenario) {
+        let ownerId = UUID(uuidString: "10101010-1010-1010-1010-101010101010")!
+        let memberId = UUID(uuidString: "20202020-2020-2020-2020-202020202020")!
+        let budgetId = UUID(uuidString: "30303030-3030-3030-3030-303030303030")!
+        let owner = BudgetMember(
+            id: ownerId,
+            displayName: "Synthetic Owner",
+            email: "synthetic.owner@example.invalid",
+            initials: "SO",
+            color: "#3B82F6",
+            authUserId: ownerId,
+            role: .owner,
+            inviteStatus: .active
+        )
+        let member = BudgetMember(
+            id: memberId,
+            displayName: "Synthetic Member",
+            email: "synthetic.member@example.invalid",
+            initials: "SM",
+            color: "#F97316",
+            authUserId: memberId,
+            role: .member,
+            inviteStatus: .active
+        )
+
+        userId = scenario == .owner ? ownerId : memberId
+        email = scenario == .owner ? owner.email! : member.email!
+        activeMemberName = scenario == .owner ? owner.displayName : member.displayName
+        budget = Budget(
+            id: budgetId,
+            name: "Synthetic Household",
+            createdByUserId: ownerId,
+            members: [owner, member]
+        )
+        userDefaults = UserDefaults(
+            suiteName: "BudgetMate.synthetic-ui-testing.\(scenario.rawValue).\(UUID().uuidString)"
+        )!
+    }
+}
+
+@MainActor
+private struct SyntheticUITestSeededContent: View {
+    @Environment(\.modelContext) private var modelContext
+    let seed: SyntheticUITestSeed
+    @ObservedObject var settingsStore: SettingsStore
+    @ObservedObject var memberViewModel: MemberViewModel
+    @ObservedObject var transactionFlow: TransactionFlowCoordinator
+    @ObservedObject var monthSelectionStore: MonthSelectionStore
+    @ObservedObject var authStore: AuthSessionStore
+    @ObservedObject var cloudSyncStore: CloudSyncStore
+    @ObservedObject var appRefreshStore: AppRefreshStore
+    @State private var isSeeded = false
+
+    var body: some View {
+        Group {
+            if isSeeded {
+                RootTabView()
+                    .environmentObject(settingsStore)
+                    .environmentObject(memberViewModel)
+                    .environmentObject(transactionFlow)
+                    .environmentObject(monthSelectionStore)
+                    .environmentObject(authStore)
+                    .environmentObject(cloudSyncStore)
+                    .environmentObject(appRefreshStore)
+            } else {
+                ProgressView("Preparing synthetic budget")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(AppTheme.background)
+            }
+        }
+        .task {
+            guard !isSeeded else { return }
+            settingsStore.switchUser(to: seed.budget.id.uuidString)
+            settingsStore.updateCategoryBudgets(BudgetSampleData.categoryBudgets)
+            memberViewModel.switchUser(
+                to: seed.userId.uuidString,
+                budgetScopeId: seed.budget.id.uuidString,
+                email: seed.email
+            )
+            _ = memberViewModel.completeProfile(displayName: seed.activeMemberName)
+            SampleDataSeeder.seed(
+                into: modelContext,
+                members: memberViewModel.members,
+                ownerUserId: seed.budget.id.uuidString,
+                mode: .household
+            )
+            try? modelContext.save()
+            isSeeded = true
+        }
+    }
+}
+#endif

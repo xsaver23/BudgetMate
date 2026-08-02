@@ -47,7 +47,12 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  overflow-x: hidden;
   background: var(--canvas);
+}
+
+#root {
+  min-width: 0;
 }
 
 button,
@@ -145,7 +150,9 @@ h2 {
 .auth-shell {
   display: grid;
   place-items: center;
+  width: 100%;
   min-height: 100vh;
+  min-height: 100svh;
   padding: 24px;
 }
 
@@ -153,10 +160,19 @@ h2 {
   display: grid;
   gap: 22px;
   width: min(460px, 100%);
+  min-width: 0;
+  margin-inline: auto;
   padding: 24px;
   border: 1px solid var(--hairline);
   border-radius: 12px;
   background: var(--panel);
+}
+
+.auth-panel .brand-lockup > div:last-child,
+.auth-panel .form-error,
+.auth-panel .form-note {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .auth-form {
@@ -199,6 +215,7 @@ h2 {
   display: grid;
   grid-template-columns: 228px minmax(0, 1fr);
   min-height: 100vh;
+  min-width: 0;
   width: 100%;
 }
 
@@ -363,6 +380,21 @@ h2 {
   max-width: none;
   width: 100%;
   padding: 0;
+}
+
+.topbar-title,
+.topbar-actions {
+  min-width: 0;
+}
+
+.topbar-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.context-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .topbar {
@@ -556,6 +588,8 @@ textarea::placeholder {
 
 .member-strip {
   display: flex;
+  min-width: 0;
+  max-width: 100%;
   gap: 7px;
   overflow-x: auto;
   scrollbar-width: none;
@@ -1310,9 +1344,14 @@ textarea::placeholder {
 
 .budget-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(320px, 1fr);
+  grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
   gap: 16px;
   align-items: start;
+}
+
+.budget-layout > *,
+.settings-grid > * {
+  min-width: 0;
 }
 
 .panel-intro {
@@ -1325,6 +1364,7 @@ textarea::placeholder {
   gap: 16px;
   align-items: center;
   min-height: 62px;
+  min-width: 0;
   padding: 12px 0;
   border-bottom: 1px solid #f2f0e7;
 }
@@ -1342,6 +1382,7 @@ textarea::placeholder {
   color: var(--ink);
   font-size: 13.5px;
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .budget-row span {
@@ -1405,8 +1446,54 @@ textarea::placeholder {
   font-weight: 700;
 }
 
+.category-budget-disclosure {
+  margin-top: 18px;
+  border-top: 1px solid #f2f0e7;
+}
+
+.category-budget-disclosure summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  color: var(--slate);
+  font-size: 13px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.category-budget-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.category-budget-disclosure summary::after {
+  content: "+";
+  color: var(--green-900);
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.category-budget-disclosure[open] summary::after {
+  content: "−";
+}
+
+.category-budget-disclosure summary strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.category-budget-disclosure summary span {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .budget-rail {
   display: grid;
+  min-width: 0;
   gap: 16px;
 }
 
@@ -1454,18 +1541,22 @@ textarea::placeholder {
 
 .member-spend-row {
   display: grid;
+  min-width: 0;
   gap: 7px;
 }
 
 .member-spend-row > div:first-child {
   gap: 10px;
+  min-width: 0;
 }
 
 .member-spend-row strong {
+  min-width: 0;
   flex: 1;
   color: var(--ink);
   font-size: 13px;
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .member-spend-row span {
@@ -1491,6 +1582,7 @@ textarea::placeholder {
 
 .settings-panel {
   display: grid;
+  min-width: 0;
   gap: 13px;
 }
 
@@ -1562,6 +1654,7 @@ textarea::placeholder {
   color: var(--ink);
   font-size: 13.5px;
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .status-row span,
@@ -1618,6 +1711,11 @@ textarea::placeholder {
 .invite-row {
   gap: 11px;
   min-height: 44px;
+  min-width: 0;
+}
+
+.member-list {
+  min-width: 0;
 }
 
 .household-mark {

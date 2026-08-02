@@ -44,11 +44,6 @@ struct BudgetView: View {
         monthlyBudget - totalExpenses
     }
 
-    private var budgetProgress: Double {
-        guard monthlyBudget > 0 else { return 0 }
-        return min(max(totalExpenses / monthlyBudget, 0), 1)
-    }
-
     private var monthlyBudget: Double {
         settingsStore.monthlyBudget(in: monthSelectionStore.selectedMonthDate)
     }
@@ -58,7 +53,8 @@ struct BudgetView: View {
             transactions: scopedTransactions,
             settlements: scopedSettlementRecords
         )
-        return "\(dataHash)-\(monthSelectionStore.selectedMonthKey)-\(authStore.currentBudgetScopeId)"
+        return "\(dataHash)-\(monthSelectionStore.selectedMonthKey)-" +
+            "\(authStore.currentBudgetScopeId)-\(settingsStore.settings.currencyCode)"
     }
 
     private var categories: [TransactionCategory] {
@@ -112,7 +108,6 @@ struct BudgetView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         monthlyBudgetCard
-                        monthlySpentCard
                         categoryBudgetsCard
                         memberSpendingCard
                     }
@@ -155,73 +150,41 @@ struct BudgetView: View {
 
     private var monthlyBudgetCard: some View {
         beaverCard {
-            HStack(alignment: .top, spacing: 14) {
-                Image(systemName: "calendar.badge.clock")
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(AppTheme.brand)
-                    .frame(width: 44, height: 44)
-                    .background(AppTheme.brandSoft, in: Circle())
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .top, spacing: 14) {
+                    Image(systemName: "calendar.badge.clock")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.brand)
+                        .frame(width: 44, height: 44)
+                        .background(AppTheme.brandSoft, in: Circle())
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("MONTHLY BUDGET")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.6))
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("MONTHLY BUDGET")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.6))
 
-                    Text(formattedAmount(monthlyBudget))
-                        .font(.largeTitle.weight(.black))
-                        .foregroundStyle(BudgetBeaverPalette.ink)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                }
-
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private var monthlySpentCard: some View {
-        beaverCard {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    HStack(spacing: 8) {
-                        Image(systemName: "chart.line.uptrend.xyaxis")
-                            .foregroundStyle(BudgetBeaverPalette.wood)
-
-                        Text("This Month")
-                            .font(.headline.weight(.bold))
+                        Text(formattedAmount(monthlyBudget))
+                            .font(.largeTitle.weight(.black))
                             .foregroundStyle(BudgetBeaverPalette.ink)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
                     }
 
-                    Spacer()
-
-                    Text(remainingBudget >= 0 ? "ON TRACK" : "OVER")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(remainingBudget >= 0 ? AppTheme.brand : BudgetBeaverPalette.amountRed)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(remainingBudget >= 0 ? AppTheme.incomeTint : AppTheme.expenseTint, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    Spacer(minLength: 0)
                 }
 
                 HStack(spacing: 12) {
                     budgetSummaryTile(
                         title: "Spent",
                         value: totalExpenses,
-                        tint: AppTheme.expense,
-                        systemImage: "arrow.up.right"
+                        tint: AppTheme.expense
                     )
                     budgetSummaryTile(
-                        title: "Remaining",
-                        value: remainingBudget,
-                        tint: remainingBudget >= 0 ? AppTheme.income : AppTheme.expense,
-                        systemImage: remainingBudget >= 0 ? "checkmark" : "exclamationmark"
+                        title: remainingBudget >= 0 ? "Remaining" : "Over by",
+                        value: remainingBudget >= 0 ? remainingBudget : abs(remainingBudget),
+                        tint: remainingBudget >= 0 ? AppTheme.income : AppTheme.expense
                     )
                 }
-
-                ProgressView(value: budgetProgress)
-                    .tint(remainingBudget >= 0 ? BudgetBeaverPalette.wood : BudgetBeaverPalette.amountRed)
-                    .accessibilityLabel("Monthly budget progress")
-                    .accessibilityValue(budgetProgressAccessibilityValue)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -385,7 +348,7 @@ struct BudgetView: View {
                     .font(.caption)
                     .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.7))
                 Spacer()
-                Text("Remaining: \(formattedAmount(remainingAmount(for: category)))")
+                Text(categoryBalanceText(for: category))
                     .font(.caption)
                     .foregroundStyle(remainingAmount(for: category) >= 0 ? BudgetBeaverPalette.wood.opacity(0.7) : BudgetBeaverPalette.amountRed)
             }
@@ -408,8 +371,7 @@ struct BudgetView: View {
                 emoji: settingsStore.categoryEmoji(for: category),
                 breakdown: tabMetrics.categoryBreakdown(
                     for: category,
-                    budgetScopeId: budgetScopeId,
-                    currencyCode: settingsStore.settings.currencyCode
+                    budgetScopeId: budgetScopeId
                 ),
                 currencyCode: settingsStore.settings.currencyCode
             )
@@ -500,30 +462,21 @@ struct BudgetView: View {
     private func budgetSummaryTile(
         title: String,
         value: Double,
-        tint: Color,
-        systemImage: String
+        tint: Color
     ) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Image(systemName: systemImage)
-                .font(.headline.weight(.black))
-                .foregroundStyle(AppTheme.brand)
-                .frame(width: 40, height: 40)
-                .background(AppTheme.brandSoft, in: Circle())
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(BudgetBeaverPalette.ink)
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(BudgetBeaverPalette.ink)
-
-                Text(formattedAmount(value))
-                    .font(.title3.weight(.black))
-                    .foregroundStyle(BudgetBeaverPalette.ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.55)
-            }
+            Text(formattedAmount(value))
+                .font(.title3.weight(.black))
+                .foregroundStyle(BudgetBeaverPalette.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
         }
         .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 88, alignment: .leading)
         .background(tint.opacity(0.16), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -752,14 +705,18 @@ struct BudgetView: View {
         configuredBudget(for: category) - monthlySpent(for: category)
     }
 
+    private func categoryBalanceText(for category: TransactionCategory) -> String {
+        let remaining = remainingAmount(for: category)
+        if remaining < 0 {
+            return "Over by: \(formattedAmount(abs(remaining)))"
+        }
+        return "Remaining: \(formattedAmount(remaining))"
+    }
+
     private func budgetProgress(for category: TransactionCategory) -> Double {
         let budget = configuredBudget(for: category)
         guard budget > 0 else { return 0 }
         return min(max(monthlySpent(for: category) / budget, 0), 1)
-    }
-
-    private var budgetProgressAccessibilityValue: String {
-        (budgetProgress * 100).formatted(.number.precision(.fractionLength(0...1))) + "%"
     }
 
     private func categoryProgressAccessibilityValue(for category: TransactionCategory) -> String {

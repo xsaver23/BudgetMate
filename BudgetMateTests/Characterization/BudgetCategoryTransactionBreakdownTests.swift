@@ -148,6 +148,39 @@ final class BudgetCategoryTransactionBreakdownTests: XCTestCase {
         XCTAssertEqual(emptyBreakdown.total, 0)
     }
 
+    func testCADCategorySummaryMatchesItsVisibleTransactionBreakdown() throws {
+        let scope = BudgetMateTestFixtures.sharedBudgetID.uuidString
+        let date = BudgetMateTestFixtures.makeDate(year: 2026, month: 7, day: 18)
+        let interval = try XCTUnwrap(BudgetMateTestFixtures.utcCalendar.dateInterval(of: .month, for: date))
+        let billsExpense = BudgetMateTestFixtures.expense(
+            title: "Internet",
+            amount: 270.99,
+            category: .bills,
+            date: date
+        )
+        billsExpense.amountMinorUnits = 27_099
+        billsExpense.currencyCode = "CAD"
+
+        let metrics = BudgetTabMetrics.compute(
+            transactions: [billsExpense],
+            settlements: [],
+            members: [],
+            monthInterval: interval,
+            currencyCode: "CAD",
+            budgetScopeId: scope,
+            calendar: BudgetMateTestFixtures.utcCalendar
+        )
+        let breakdown = metrics.categoryBreakdown(for: .bills, budgetScopeId: scope)
+        let categorySpent = try XCTUnwrap(metrics.spentByCategory[.bills])
+
+        XCTAssertEqual(metrics.currencyCode, "CAD")
+        XCTAssertEqual(categorySpent, 270.99, accuracy: 0.001)
+        XCTAssertEqual(breakdown.total, 270.99, accuracy: 0.001)
+        XCTAssertEqual(breakdown.total, categorySpent, accuracy: 0.001)
+        XCTAssertEqual(breakdown.transactions.map(\.id), [billsExpense.id])
+        XCTAssertTrue(metrics.anomalies.isEmpty)
+    }
+
     func testBreakdownUsesNewestFirstAndStableIdentifierTieBreak() throws {
         let scope = BudgetMateTestFixtures.sharedBudgetID.uuidString
         let date = BudgetMateTestFixtures.makeDate(year: 2025, month: 1, day: 10)

@@ -502,6 +502,84 @@ final class CloudPersistenceCharacterizationTests: XCTestCase {
         )
     }
 
+    func testTransactionMutationPayloadCanonicalizesLegacyAmountFromExactMoney() throws {
+        let transaction = BudgetMateTestFixtures.expense(amount: 12.345)
+        transaction.amountMinorUnits = 1_235
+        transaction.currencyCode = "CAD"
+
+        let payload = TransactionMutationPayload(transaction: transaction)
+        let encodedPayload = try JSONEncoder().encode(payload)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encodedPayload) as? [String: Any]
+        )
+
+        XCTAssertEqual((object["amount"] as? NSNumber)?.doubleValue ?? 0, 12.35, accuracy: 0.000_001)
+        XCTAssertEqual((object["amount_minor_units"] as? NSNumber)?.int64Value, 1_235)
+        XCTAssertEqual(object["currency_code"] as? String, "CAD")
+    }
+
+    func testTransactionMutationPayloadRoundsLegacyOnlyAmountToServerPrecision() throws {
+        let transaction = BudgetMateTestFixtures.expense(amount: 12.345)
+        transaction.amountMinorUnits = nil
+        transaction.currencyCode = nil
+
+        let payload = TransactionMutationPayload(transaction: transaction)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as? [String: Any]
+        )
+
+        XCTAssertEqual((object["amount"] as? NSNumber)?.doubleValue ?? 0, 12.35, accuracy: 0.000_001)
+        XCTAssertNil(object["amount_minor_units"])
+        XCTAssertNil(object["currency_code"])
+    }
+
+    func testTransactionMutationPayloadRepairsStaleZeroExactAmountAndSplit() throws {
+        let transaction = BudgetMateTestFixtures.expense(amount: 22.58)
+        transaction.amountMinorUnits = 0
+        transaction.currencyCode = "CAD"
+        let split = TransactionSplit(
+            memberId: BudgetMateTestFixtures.aliceMemberID,
+            amount: 22.58,
+            amountMinorUnits: 0,
+            currencyCode: "CAD",
+            transaction: transaction
+        )
+        transaction.splits = [split]
+
+        let payload = TransactionMutationPayload(transaction: transaction)
+        let encodedPayload = try JSONEncoder().encode(payload)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encodedPayload) as? [String: Any]
+        )
+        let splits = try XCTUnwrap(object["splits"] as? [[String: Any]])
+        let exactSplits = try XCTUnwrap(object["splits_minor_units"] as? [[String: Any]])
+
+        XCTAssertEqual((object["amount"] as? NSNumber)?.doubleValue ?? 0, 22.58, accuracy: 0.000_001)
+        XCTAssertEqual((object["amount_minor_units"] as? NSNumber)?.int64Value, 2_258)
+        XCTAssertEqual(object["currency_code"] as? String, "CAD")
+        XCTAssertEqual((splits.first?["amount"] as? NSNumber)?.doubleValue ?? 0, 22.58, accuracy: 0.000_001)
+        XCTAssertEqual((exactSplits.first?["amount_minor_units"] as? NSNumber)?.int64Value, 2_258)
+        XCTAssertEqual(exactSplits.first?["currency_code"] as? String, "CAD")
+        let encodedText = try XCTUnwrap(String(data: encodedPayload, encoding: .utf8))
+        XCTAssertTrue(encodedText.contains("\"amount\":22.58"))
+        XCTAssertFalse(encodedText.contains("22.580000000000002"))
+    }
+
+    func testSettlementMutationPayloadUsesCurrencyFractionDigits() throws {
+        let settlement = BudgetMateTestFixtures.settlement(amount: 12.6)
+        settlement.amountMinorUnits = 13
+        settlement.currencyCode = "JPY"
+
+        let payload = SettlementMutationPayload(settlement: settlement)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as? [String: Any]
+        )
+
+        XCTAssertEqual((object["amount"] as? NSNumber)?.doubleValue, 13)
+        XCTAssertEqual((object["amount_minor_units"] as? NSNumber)?.int64Value, 13)
+        XCTAssertEqual(object["currency_code"] as? String, "JPY")
+    }
+
     func testEnabledMoneyServerBridgeRejectsContradictoryExactFields() throws {
         let transaction = BudgetMateTestFixtures.expense(amount: 12.34)
         transaction.amountMinorUnits = 1_234

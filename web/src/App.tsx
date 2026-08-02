@@ -38,6 +38,13 @@ import {
 import { currencyOptions, currencySymbol, formatAmountNumber, formatMoney } from "./domain/currency";
 import { localDateKey, localNoonISOString } from "./domain/dates";
 import {
+  authEntryIsVisible,
+  deriveHouseholdCapabilities,
+  householdOwnerOnlyMessage,
+  modeAfterSignOut,
+  type HouseholdCapabilities
+} from "./domain/householdCapabilities";
+import {
   categoryBreakdown,
   currentMonthKey,
   dashboardTotals,
@@ -52,6 +59,7 @@ import {
   uniqueTransactions
 } from "./domain/budgetMath";
 import { defaultBudgetSettings } from "./domain/defaults";
+import { memberFilterLabels, organizeCategoryBudgetRows } from "./domain/uxClarity";
 import type {
   AppState,
   BudgetInvite,
@@ -139,19 +147,6 @@ function memberInitials(name: string): string {
 
 function normalizedEmail(email: string) {
   return email.trim().toLowerCase();
-}
-
-function signedInBudgetMember(members: BudgetMember[], user?: User | null) {
-  if (!user) {
-    return members[0];
-  }
-
-  const email = user.email ? normalizedEmail(user.email) : "";
-  return (
-    members.find((member) => member.id === user.id || member.authUserId === user.id) ??
-    members.find((member) => member.email && normalizedEmail(member.email) === email) ??
-    members[0]
-  );
 }
 
 function firstName(name: string): string {
@@ -278,7 +273,13 @@ function App() {
     () => state.members.filter((member) => member.budgetId === currentBudget.id),
     [state.members, currentBudget.id]
   );
-  const currentBudgetMember = signedInBudgetMember(budgetMembers, session?.user);
+  const householdIdentity = session?.user
+    ? { id: session.user.id, email: session.user.email }
+    : syncMode === "local"
+      ? { id: state.currentUserId }
+      : undefined;
+  const householdCapabilities = deriveHouseholdCapabilities(currentBudget, budgetMembers, householdIdentity);
+  const currentBudgetMember = householdCapabilities.currentMember;
   const budgetTransactions = useMemo(
     () => uniqueTransactions(state.transactions.filter((transaction) => transaction.budgetId === currentBudget.id)),
     [state.transactions, currentBudget.id]
@@ -361,7 +362,7 @@ function App() {
       }
       if (!nextSession) {
         setPendingInvites([]);
-        setCloudMessage("Saved on this device");
+        setCloudMessage("You are signed out. Sign in to continue, or use this computer for local mode.");
       }
       setAuthLoading(false);
     });
@@ -641,6 +642,13 @@ function App() {
   }
 
   function updateSettings(nextSettings: BudgetSettings) {
+    const changesCurrentHouseholdCurrency =
+      nextSettings.budgetId === currentBudget.id && nextSettings.currencyCode !== settings.currencyCode;
+    if (changesCurrentHouseholdCurrency && !householdCapabilities.canEditCurrency) {
+      setToastMessage(householdOwnerOnlyMessage);
+      return;
+    }
+
     setState((current) => ({
       ...current,
       settingsByBudgetId: {
@@ -811,6 +819,11 @@ function App() {
   }
 
   function addMember(name: string, email: string) {
+    if (!householdCapabilities.canManageMembers) {
+      setCloudMessage(householdOwnerOnlyMessage);
+      return false;
+    }
+
     if (!name.trim()) {
       return false;
     }
@@ -907,11 +920,16 @@ function App() {
       await signOut();
       activeUserId.current = null;
       sessionUser.current = null;
-      syncModeRef.current = "local";
+      const nextSyncMode = modeAfterSignOut(supabaseConfigStatus === "configured");
+      syncModeRef.current = nextSyncMode;
       setSession(null);
-      setState(loadState(localStateStorageKey));
-      setSyncMode("local");
-      setCloudMessage("Saved on this device");
+      setSyncMode(nextSyncMode);
+      if (nextSyncMode === "local") {
+        setState(loadState(localStateStorageKey));
+        setCloudMessage("Local mode is active on this computer.");
+      } else {
+        setCloudMessage("You are signed out. Sign in to continue, or use this computer for local mode.");
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Sign out failed.";
       setCloudError(message);
@@ -971,7 +989,7 @@ function App() {
     return <LoadingScreen message="Checking your BudgetMate session" />;
   }
 
-  if (syncMode === "cloud" && !session && supabase) {
+  if (authEntryIsVisible(syncMode, !!session, supabaseConfigStatus === "configured") && supabase) {
     return (
       <AuthGate
         errorMessage={cloudError}
@@ -982,7 +1000,7 @@ function App() {
           setState(loadState(localStateStorageKey));
           setSyncMode("local");
           setCloudError("");
-      setCloudMessage("Saved on this device");
+          setCloudMessage("Local mode is active on this computer.");
         }}
       />
     );
@@ -1036,7 +1054,14 @@ function App() {
               </button>
             )}
             {syncMode === "local" && supabase && (
-              <button className="secondary-action compact" onClick={() => setSyncMode("cloud")}>
+              <button
+                className="secondary-action compact"
+                onClick={() => {
+                  syncModeRef.current = "cloud";
+                  setSyncMode("cloud");
+                  setCloudMessage("Sign in to sync with Supabase.");
+                }}
+              >
                 <Cloud size={17} aria-hidden="true" />
                 Cloud
               </button>
@@ -1117,6 +1142,7 @@ function App() {
             settings={settings}
             state={state}
             members={budgetMembers}
+            capabilities={householdCapabilities}
             importText={importText}
             importError={importError}
             onSettingsChange={updateSettings}
@@ -1340,6 +1366,8 @@ function MemberFilter({
   selectedMemberId: string;
   onSelect: (memberId: string) => void;
 }) {
+  const labelsByMemberId = new Map(memberFilterLabels(members).map((label) => [label.memberId, label]));
+
   return (
     <div className="member-strip" aria-label="Member filter">
       <button
@@ -1351,19 +1379,25 @@ function MemberFilter({
         <Users size={16} aria-hidden="true" />
         Everyone
       </button>
-      {members.map((member) => (
-        <button
-          key={member.id}
-          className={selectedMemberId === member.id ? "member-chip active" : "member-chip"}
-          onClick={() => onSelect(member.id)}
-          aria-pressed={selectedMemberId === member.id}
-          style={{ "--member-color": member.color } as CSSProperties}
-          type="button"
-        >
-          <MemberBadge member={member} />
-          <span>{firstName(member.displayName)}</span>
-        </button>
-      ))}
+      {members.map((member) => {
+        const label = labelsByMemberId.get(member.id);
+        const fullName = label?.fullName ?? member.displayName;
+        return (
+          <button
+            key={member.id}
+            className={selectedMemberId === member.id ? "member-chip active" : "member-chip"}
+            onClick={() => onSelect(member.id)}
+            aria-pressed={selectedMemberId === member.id}
+            aria-label={`Filter transactions by ${fullName}`}
+            style={{ "--member-color": member.color } as CSSProperties}
+            title={fullName}
+            type="button"
+          >
+            <MemberBadge member={member} />
+            <span>{label?.displayLabel ?? fullName}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -1885,7 +1919,6 @@ function BudgetView({
   selectedMonth: string;
   onSettingsChange: (settings: BudgetSettings) => void;
 }) {
-  const [showUnbudgeted, setShowUnbudgeted] = useState(false);
   const spending = categoryBreakdown(transactions, memberId);
   const spendingByCategory = new Map(spending.map((item) => [item.category, item.amount]));
   const memberSpending = memberExpenseTotals(transactions, members);
@@ -1897,9 +1930,8 @@ function BudgetView({
     const spent = spendingByCategory.get(category.id) ?? 0;
     return { category, budget, spent };
   });
-  const budgetedRows = visibleCategoryRows.filter((row) => row.budget > 0 || row.spent > 0);
-  const unbudgetedRows = visibleCategoryRows.filter((row) => row.budget <= 0 && row.spent <= 0);
-  const rowsToShow = showUnbudgeted ? visibleCategoryRows : budgetedRows;
+  const { visibleRows, unbudgetedRows } = organizeCategoryBudgetRows(visibleCategoryRows);
+  const budgetedCategoryCount = visibleCategoryRows.filter((row) => row.budget > 0).length;
   const maxMemberSpend = Math.max(...memberSpending.map((item) => item.amount), 0);
 
   function updateCategoryBudget(category: string, value: string) {
@@ -1912,6 +1944,38 @@ function BudgetView({
     });
   }
 
+  function renderBudgetRow({ category, spent, budget }: (typeof visibleCategoryRows)[number]) {
+    const ratio = budget > 0 ? Math.min(1, spent / budget) : 0;
+    const tone = budgetPaceTone(spent, budget);
+    return (
+      <div key={category.id} className={`budget-row ${tone}`}>
+        <div>
+          <strong>
+            {settings.categoryEmojis[category.id] ? `${settings.categoryEmojis[category.id]} ` : ""}
+            {category.name}
+          </strong>
+          <span>
+            {formatMoney(spent, settings.currencyCode)} of {formatMoney(budget, settings.currencyCode)}
+          </span>
+          <div className="budget-progress" aria-hidden="true">
+            <b style={{ width: `${ratio * 100}%` }} />
+          </div>
+        </div>
+        <label className="budget-input">
+          <span>{currencySymbol(settings.currencyCode)}</span>
+          <input
+            type="number"
+            min="0"
+            step="10"
+            value={activeCategoryBudgets[category.id] ?? 0}
+            onChange={(event) => updateCategoryBudget(category.id, event.target.value)}
+            aria-label={`${category.name} budget`}
+          />
+        </label>
+      </div>
+    );
+  }
+
   return (
     <section className="budget-layout">
       <section className="panel">
@@ -1920,45 +1984,21 @@ function BudgetView({
           <span>{formatMoney(totals.remainingBudget, settings.currencyCode)} left</span>
         </div>
         <p className="panel-intro">
-          {budgetedRows.length} of {expenseCategoryOptions.length} categories budgeted this month.
+          {budgetedCategoryCount} of {expenseCategoryOptions.length} categories have a budget for {formatMonthLabel(selectedMonth)}. Category budget changes save automatically.
         </p>
         <div className="budget-list">
-          {rowsToShow.map(({ category, spent, budget }) => {
-            const ratio = budget > 0 ? Math.min(1, spent / budget) : 0;
-            const tone = budgetPaceTone(spent, budget);
-            return (
-            <div key={category.id} className={`budget-row ${tone}`}>
-              <div>
-                <strong>
-                  {settings.categoryEmojis[category.id] ? `${settings.categoryEmojis[category.id]} ` : ""}
-                  {category.name}
-                </strong>
-                <span>
-                  {formatMoney(spent, settings.currencyCode)} of {formatMoney(budget, settings.currencyCode)}
-                </span>
-                <div className="budget-progress" aria-hidden="true">
-                  <b style={{ width: `${ratio * 100}%` }} />
-                </div>
-              </div>
-              <label className="budget-input">
-                <span>{currencySymbol(settings.currencyCode)}</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="10"
-                  value={activeCategoryBudgets[category.id] ?? 0}
-                  onChange={(event) => updateCategoryBudget(category.id, event.target.value)}
-                  aria-label={`${category.name} budget`}
-                />
-              </label>
-            </div>
-            );
-          })}
+          {visibleRows.map(renderBudgetRow)}
         </div>
-        {!showUnbudgeted && unbudgetedRows.length > 0 && (
-          <button className="dashed-action" type="button" onClick={() => setShowUnbudgeted(true)}>
-            Show {unbudgetedRows.length} unbudgeted categories
-          </button>
+        {unbudgetedRows.length > 0 && (
+          <details className="category-budget-disclosure" key={selectedMonth}>
+            <summary>
+              <strong>Add category budgets</strong>
+              <span>{unbudgetedRows.length} available</span>
+            </summary>
+            <div className="budget-list">
+              {unbudgetedRows.map(renderBudgetRow)}
+            </div>
+          </details>
         )}
       </section>
 
@@ -2006,6 +2046,7 @@ function SettingsView({
   settings,
   state,
   members,
+  capabilities,
   importText,
   importError,
   syncMode,
@@ -2027,6 +2068,7 @@ function SettingsView({
   settings: BudgetSettings;
   state: AppState;
   members: BudgetMember[];
+  capabilities: HouseholdCapabilities;
   importText: string;
   importError: string;
   syncMode: SyncMode;
@@ -2083,27 +2125,27 @@ function SettingsView({
     const trimmedName = sharedBudgetName.trim();
 
     if (syncMode !== "cloud") {
-      setSharedBudgetMessage("Cloud sync is required to create shared budgets.");
+      setSharedBudgetMessage("Cloud sync is required to create a new household.");
       return;
     }
 
     if (!trimmedName) {
-      setSharedBudgetMessage("Enter a shared budget name before creating it.");
+      setSharedBudgetMessage("Enter a household name before creating it.");
       return;
     }
 
     onCreateSharedBudget(trimmedName);
     setSharedBudgetName("");
-    setSharedBudgetMessage("Creating shared budget.");
+    setSharedBudgetMessage("Creating your new household.");
   }
 
   const sharedBudgetNote =
     sharedBudgetMessage ||
     (syncMode !== "cloud"
-      ? "Turn on cloud sync to create shared budgets."
+      ? "Sign in to create a new household you will own."
       : sharedBudgetName.trim()
-        ? "Ready to create a shared household budget."
-        : "Enter a name to create a shared budget.");
+        ? "Ready to create a separate household you will own."
+        : "Enter a name to create a separate household.");
   const memberNote =
     memberMessage ||
     (memberName.trim()
@@ -2114,6 +2156,7 @@ function SettingsView({
         ? "Enter a name to add someone. Email is optional."
         : "Enter a name to add someone locally.");
   const currentBudget = state.budgets.find((budget) => budget.id === state.currentBudgetId) ?? state.budgets[0];
+  const currencyName = currencyOptions.find((currency) => currency.code === settings.currencyCode)?.name ?? settings.currencyCode;
 
   return (
     <section className="settings-grid">
@@ -2147,19 +2190,29 @@ function SettingsView({
           <h2>Preferences</h2>
           <SlidersHorizontal size={18} aria-hidden="true" />
         </div>
-        <label className="field-row">
-          <span>Currency</span>
-          <select
-            value={settings.currencyCode}
-            onChange={(event) => onSettingsChange({ ...settings, currencyCode: event.target.value })}
-          >
-            {currencyOptions.map((currency) => (
-              <option key={currency.code} value={currency.code}>
-                {currency.code} - {currency.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        {capabilities.canEditCurrency ? (
+          <label className="field-row">
+            <span>Currency</span>
+            <select
+              value={settings.currencyCode}
+              onChange={(event) => onSettingsChange({ ...settings, currencyCode: event.target.value })}
+            >
+              {currencyOptions.map((currency) => (
+                <option key={currency.code} value={currency.code}>
+                  {currency.code} - {currency.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <div className="field-row" role="group" aria-label="Household currency">
+            <span>Currency</span>
+            <div>
+              <strong>{settings.currencyCode} - {currencyName}</strong>
+              <p className="form-note">{householdOwnerOnlyMessage}</p>
+            </div>
+          </div>
+        )}
         <div className="status-row compact-status">
           <RefreshCcw size={18} aria-hidden="true" />
           <div>
@@ -2200,6 +2253,9 @@ function SettingsView({
             );
           })}
         </div>
+        <p className="panel-intro">
+          Create a separate household that you will own. This does not add a member to the current household.
+        </p>
         <form className="member-form household-form" onSubmit={handleCreateSharedBudget}>
           <input
             value={sharedBudgetName}
@@ -2207,13 +2263,13 @@ function SettingsView({
               setSharedBudgetName(event.target.value);
               setSharedBudgetMessage("");
             }}
-            placeholder="Shared budget name"
-            aria-label="Shared budget name"
+            placeholder="New household name"
+            aria-label="New household name"
             aria-describedby="shared-budget-note"
           />
           <button className="secondary-action" type="submit" disabled={syncMode !== "cloud" || !sharedBudgetName.trim()}>
             <Plus size={17} aria-hidden="true" />
-            Create
+            Create household
           </button>
         </form>
         <p className="form-note" id="shared-budget-note" role="status" aria-live="polite">
@@ -2238,35 +2294,43 @@ function SettingsView({
             </div>
           ))}
         </div>
-        <form className="member-form" onSubmit={handleAddMember}>
-          <input
-            value={memberName}
-            onChange={(event) => {
-              setMemberName(event.target.value);
-              setMemberMessage("");
-            }}
-            placeholder="Member name"
-            aria-label="Member name"
-            aria-describedby="member-form-note"
-          />
-          <input
-            value={memberEmail}
-            onChange={(event) => {
-              setMemberEmail(event.target.value);
-              setMemberMessage("");
-            }}
-            placeholder="Email"
-            aria-label="Member email"
-            aria-describedby="member-form-note"
-          />
-          <button className="secondary-action" type="submit" disabled={!memberName.trim()}>
-            <Plus size={17} aria-hidden="true" />
-            Add
-          </button>
-        </form>
-        <p className="form-note" id="member-form-note" role="status" aria-live="polite">
-          {memberNote}
-        </p>
+        {capabilities.canManageMembers ? (
+          <form className="member-form" onSubmit={handleAddMember}>
+            <input
+              value={memberName}
+              onChange={(event) => {
+                setMemberName(event.target.value);
+                setMemberMessage("");
+              }}
+              placeholder="Member name"
+              aria-label="Member name"
+              aria-describedby="member-form-note"
+            />
+            <input
+              value={memberEmail}
+              onChange={(event) => {
+                setMemberEmail(event.target.value);
+                setMemberMessage("");
+              }}
+              placeholder="Email"
+              aria-label="Member email"
+              aria-describedby="member-form-note"
+            />
+            <button className="secondary-action" type="submit" disabled={!memberName.trim()}>
+              <Plus size={17} aria-hidden="true" />
+              Add member
+            </button>
+          </form>
+        ) : (
+          <p className="form-note" id="member-permission-note">
+            {householdOwnerOnlyMessage}
+          </p>
+        )}
+        {capabilities.canManageMembers && (
+          <p className="form-note" id="member-form-note" role="status" aria-live="polite">
+            {memberNote}
+          </p>
+        )}
       </section>
 
       {syncMode === "cloud" && (

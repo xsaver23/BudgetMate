@@ -24,6 +24,22 @@ struct MemberCloudSyncToken: Equatable {
     let revision: Int
 }
 
+struct ProfileCloudSyncRequest: Equatable {
+    let member: BudgetMember
+    let userScopeId: String
+    let budgetScopeId: String
+
+    init(member: BudgetMember, userScopeId: String) {
+        self.member = member
+        self.userScopeId = userScopeId
+        budgetScopeId = userScopeId
+    }
+
+    var members: [BudgetMember] {
+        [member]
+    }
+}
+
 @MainActor
 final class MemberViewModel: ObservableObject {
     @Published private(set) var currentBudget: Budget
@@ -186,12 +202,26 @@ final class MemberViewModel: ObservableObject {
 
     @discardableResult
     func restoreProfileIfPresent(from cloudMembers: [BudgetMember], userScopeId: String, email: String?) -> Bool {
-        let normalizedMembers = BudgetMember.deduplicatedForBudget(cloudMembers)
-        guard let cloudProfile = signedInMember(in: normalizedMembers, userScopeId: userScopeId, email: email) else {
+        guard let cloudProfile = signedInMember(in: cloudMembers, userScopeId: userScopeId, email: email) else {
             return false
         }
 
-        replaceMembers(with: normalizedMembers)
+        var restoredMembers = members
+        if let localProfile = signedInMember(in: members, userScopeId: userScopeId, email: email),
+           let localIndex = restoredMembers.firstIndex(where: { $0.id == localProfile.id }) {
+            restoredMembers[localIndex] = cloudProfile
+        } else if let cloudIndex = restoredMembers.firstIndex(where: { $0.id == cloudProfile.id }) {
+            restoredMembers[cloudIndex] = cloudProfile
+        } else {
+            restoredMembers.insert(cloudProfile, at: 0)
+        }
+
+        // Profile recovery may read a shared household while the local model
+        // is still scoped to the personal budget. Merge only the signed-in
+        // profile; unrelated household members must not become local pending
+        // writes for the personal budget.
+        applyScopedMembers(restoredMembers)
+        markMembersClean(for: currentBudgetScopeId)
         activeMemberId = cloudProfile.id
         isProfileComplete = true
         persistProfileCompleted()
@@ -242,12 +272,23 @@ final class MemberViewModel: ObservableObject {
         )
     }
 
-    func completeProfile(displayName: String) {
+    @discardableResult
+    func completeProfile(displayName: String) -> BudgetMember? {
         let trimmedName = BudgetMember.normalizedDisplayName(displayName)
-        guard !trimmedName.isEmpty else { return }
-        guard !displayName.containsEmoji else { return }
+        guard !trimmedName.isEmpty else { return nil }
+        guard !displayName.containsEmoji else { return nil }
 
-        let current = activeMember
+        let current = signedInMember(in: members) ?? BudgetMember(
+            id: UUID(uuidString: currentUserScopeId) ?? UUID(),
+            displayName: trimmedName,
+            email: currentUserEmail,
+            initials: BudgetMember.initials(from: trimmedName),
+            color: nextColor(),
+            authUserId: UUID(uuidString: currentUserScopeId),
+            role: currentBudgetScopeId == currentUserScopeId ? .owner : .member,
+            inviteStatus: .active,
+            joinedDate: .now
+        )
         let profileMember = BudgetMember(
             id: current.id,
             displayName: trimmedName,
@@ -255,9 +296,9 @@ final class MemberViewModel: ObservableObject {
             initials: BudgetMember.initials(from: trimmedName),
             color: current.color,
             authUserId: UUID(uuidString: currentUserScopeId) ?? current.authUserId,
-            role: .owner,
-            inviteStatus: .active,
-            joinedDate: current.joinedDate ?? .now,
+            role: current.role,
+            inviteStatus: current.inviteStatus,
+            joinedDate: current.joinedDate,
             createdDate: current.createdDate
         )
 
@@ -269,9 +310,13 @@ final class MemberViewModel: ObservableObject {
         }
 
         activeMemberId = profileMember.id
-        members = updatedMembers
+        // Profile setup has its own single-row cloud write. Do not mark the
+        // whole household member collection dirty and let a later full sync
+        // bulk-upsert unrelated rows.
+        applyScopedMembers(updatedMembers)
         isProfileComplete = true
         persistProfileCompleted()
+        return profileMember
     }
 
     @discardableResult
@@ -403,9 +448,13 @@ final class MemberViewModel: ObservableObject {
     }
 
     private func signedInMember(in members: [BudgetMember], userScopeId: String, email: String?) -> BudgetMember? {
-        if let userId = UUID(uuidString: userScopeId),
-           let member = members.first(where: { $0.id == userId || $0.authUserId == userId }) {
-            return member
+        if let userId = UUID(uuidString: userScopeId) {
+            if let member = members.first(where: { $0.authUserId == userId }) {
+                return member
+            }
+            if let member = members.first(where: { $0.id == userId }) {
+                return member
+            }
         }
 
         guard let normalizedEmail = Self.normalizedEmail(email) else { return nil }

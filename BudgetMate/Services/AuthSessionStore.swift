@@ -24,6 +24,15 @@ final class AuthSessionStore: ObservableObject {
         self.client = client
         configurationIssue = isCloudConfigured ? nil : SupabaseConfig.userFacingConfigurationMessage
 
+#if DEBUG
+        // Synthetic UI tests own their in-memory session and must not restore
+        // a developer's cached Supabase session or start a network request.
+        if SyntheticUITestScenario.fromProcessArguments != nil {
+            isLoading = false
+            return
+        }
+#endif
+
         guard configurationIssue == nil else {
             isLoading = false
             return
@@ -33,6 +42,19 @@ final class AuthSessionStore: ObservableObject {
             await restoreSession()
         }
     }
+
+#if DEBUG
+    init(syntheticUserId: String, email: String, budgetScopeId: String) {
+        client = SupabaseClientProvider.shared
+        configurationIssue = nil
+        isLoading = false
+        isAuthenticated = true
+        userId = syntheticUserId
+        userEmail = email
+        activeBudgetScopeId = budgetScopeId
+        errorMessage = nil
+    }
+#endif
 
     var currentUserScopeId: String {
         userId ?? "local"
