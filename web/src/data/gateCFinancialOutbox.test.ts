@@ -3,7 +3,8 @@ import {
   buildSettlementDeleteGateCMutation,
   buildSettlementGateCMutation,
   buildTransactionDeleteGateCMutation,
-  buildTransactionGateCMutation
+  buildTransactionGateCMutation,
+  mapTransaction
 } from "./cloudRepository";
 import {
   GateCFinancialOutbox,
@@ -36,6 +37,8 @@ function transaction(rowVersion?: number) {
     userId: userA,
     title: "Lunch",
     amount: 12.5,
+    amountMinorUnits: 1250,
+    currencyCode: "USD",
     type: "expense" as const,
     category: "food",
     createdByMemberId: memberId,
@@ -68,7 +71,13 @@ describe("Gate C durable financial outbox", () => {
       p_expected_row_version: 0,
       p_client_mutation_id: "00000000-0000-0000-0000-000000000006",
       p_operation: "insert",
-      p_payload: { title: "Lunch", created_by_member_id: memberId, amount: 12.5 }
+      p_payload: {
+        title: "Lunch",
+        created_by_member_id: memberId,
+        amount: 12.5,
+        amount_minor_units: 1250,
+        currency_code: "USD"
+      }
     });
     expect(update.parameters).toMatchObject({ p_expected_row_version: 7, p_operation: "update" });
     expect(deletion.parameters).toEqual({
@@ -81,6 +90,53 @@ describe("Gate C durable financial outbox", () => {
     });
   });
 
+  it("dual-writes exact split units while preserving the legacy split payload", () => {
+    const mutation = buildTransactionGateCMutation({
+      ...transaction(),
+      amount: 10.01,
+      amountMinorUnits: 1001,
+      splits: [
+        { id: "00000000-0000-0000-0000-000000000013", memberId, amount: 3.34, amountMinorUnits: 334, currencyCode: "USD" },
+        { id: "00000000-0000-0000-0000-000000000014", memberId: userB, amount: 6.67, amountMinorUnits: 667, currencyCode: "USD" }
+      ]
+    }, userA, "00000000-0000-0000-0000-000000000015");
+
+    expect(mutation.parameters.p_payload).toMatchObject({
+      splits: [
+        { id: "00000000-0000-0000-0000-000000000013", member_id: memberId, amount: 3.34 },
+        { id: "00000000-0000-0000-0000-000000000014", member_id: userB, amount: 6.67 }
+      ],
+      splits_minor_units: [
+        { id: "00000000-0000-0000-0000-000000000013", member_id: memberId, amount_minor_units: 334, currency_code: "USD" },
+        { id: "00000000-0000-0000-0000-000000000014", member_id: userB, amount_minor_units: 667, currency_code: "USD" }
+      ]
+    });
+  });
+
+  it("prefers exact transaction and split amounts when legacy values differ", () => {
+    const mapped = mapTransaction({
+      id: recordId,
+      user_id: userA,
+      budget_id: budgetId,
+      title: "Lunch",
+      amount: 99,
+      amount_minor_units: 1001,
+      currency_code: "USD",
+      type: "expense",
+      category: "food",
+      payment_method: "card",
+      created_by_member_id: memberId,
+      date: "2026-07-30T12:00:00Z",
+      created_at: "2026-07-30T12:00:00Z",
+      recurrence_rule: null,
+      splits: [{ id: recordId, member_id: memberId, amount: 88 }],
+      splits_minor_units: [{ id: recordId, member_id: memberId, amount_minor_units: 1001, currency_code: "USD" }]
+    });
+
+    expect(mapped.amount).toBe(10.01);
+    expect(mapped.splits[0].amount).toBe(10.01);
+  });
+
   it("builds settlement RPC requests with the same CAS/delete contract", () => {
     const settlement = {
       id: recordId,
@@ -89,6 +145,8 @@ describe("Gate C durable financial outbox", () => {
       fromMemberId: memberId,
       toMemberId: userB,
       amount: 3.75,
+      amountMinorUnits: 375,
+      currencyCode: "CAD",
       date: "2026-07-30T12:00:00Z",
       rowVersion: 4
     };
@@ -103,7 +161,13 @@ describe("Gate C durable financial outbox", () => {
         p_expected_row_version: 4,
         p_client_mutation_id: "00000000-0000-0000-0000-000000000012",
         p_operation: "update",
-        p_payload: { from_member_id: memberId, to_member_id: userB, amount: 3.75 }
+        p_payload: {
+          from_member_id: memberId,
+          to_member_id: userB,
+          amount: 3.75,
+          amount_minor_units: 375,
+          currency_code: "CAD"
+        }
       }
     });
     expect(deletion.parameters).toMatchObject({

@@ -25,17 +25,26 @@ import {
   X
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, FormEvent } from "react";
+import type { CSSProperties, FormEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import {
+  addCategorySettings,
   categoryColor,
+  categoryIdFromDisplayName,
   categoryName,
   contrastTextColor,
   expenseCategories,
+  hiddenExpenseCategoryIds,
   incomeCategories,
+  isSingleEmoji,
+  normalizedCategoryEmoji,
+  removeCategorySettings,
+  renameCategorySettings,
+  unhideCategorySettings,
+  updateCategoryEmojiSettings,
   visibleExpenseCategories
 } from "./domain/categories";
-import { currencyOptions, currencySymbol, formatAmountNumber, formatMoney } from "./domain/currency";
+import { amountFromMinorUnits, amountMinorUnits, currencyOptions, currencySymbol, formatAmountNumber, formatMoney, normalizedCurrencyCode } from "./domain/currency";
 import { localDateKey, localNoonISOString } from "./domain/dates";
 import {
   authEntryIsVisible,
@@ -44,6 +53,12 @@ import {
   modeAfterSignOut,
   type HouseholdCapabilities
 } from "./domain/householdCapabilities";
+import {
+  currencyChangeDecision,
+  currencyFinancialHistoryState,
+  recordMutationDecision,
+  sharedRecordMutationReadOnlyMessage
+} from "./domain/financialSafety";
 import {
   categoryBreakdown,
   currentMonthKey,
@@ -54,12 +69,16 @@ import {
   monthlyBudget,
   normalizeAmount,
   selectedCategoryBudgets,
+  settlementExplanation,
   settlementSuggestions,
   transactionsForMonth,
   uniqueTransactions
 } from "./domain/budgetMath";
 import { defaultBudgetSettings } from "./domain/defaults";
 import { memberFilterLabels, organizeCategoryBudgetRows } from "./domain/uxClarity";
+import { activeRecurringExpenses, buildMonthlyRecurrence, parseMonthlyRecurrence, previousLocalDate } from "./domain/recurrence";
+import { validateProfileName } from "./domain/profile";
+import { allocateEqualSplitMinorUnits, validateCustomSplitAmounts } from "./domain/splits";
 import type {
   AppState,
   BudgetInvite,
@@ -67,11 +86,13 @@ import type {
   BudgetSettings,
   BudgetTransaction,
   Settlement,
+  TransactionSplit,
   TransactionType
 } from "./domain/types";
 import {
   acceptCloudInvite,
   buildSettlementGateCMutation,
+  buildSettlementDeleteGateCMutation,
   buildTransactionDeleteGateCMutation,
   buildTransactionGateCMutation,
   createCloudInvite,
@@ -105,22 +126,78 @@ import { supabase, supabaseConfigStatus } from "./data/supabaseClient";
 
 type Tab = "dashboard" | "transactions" | "budget" | "settings";
 type SyncMode = "cloud" | "local";
+type SplitMethod = "equal" | "custom";
+
+type CategorySaveInput = {
+  oldCategoryId?: string;
+  displayName: string;
+  emoji?: string;
+};
 
 type TransactionFormState = {
   type: TransactionType;
   title: string;
   amount: string;
   category: string;
-  paymentMethod: "cash" | "card" | "paypal";
+  paymentMethod?: "cash" | "card" | "paypal";
   createdByMemberId: string;
   date: string;
-  splitWithHousehold: boolean;
+  splitEnabled: boolean;
+  splitMethod: SplitMethod;
+  splitMemberIds: string[];
+  splitAmounts: Record<string, string>;
+  recurrenceEnabled: boolean;
+  recurrenceEndDate: string;
 };
 
 const todayInputValue = () => localDateKey();
 const makeId = () => crypto.randomUUID();
 const CLOUD_FALLBACK_REFRESH_INTERVAL_MS = 60_000;
 const CLOUD_INVALIDATION_DEBOUNCE_MS = 250;
+
+function transactionSplitsForForm(
+  form: TransactionFormState,
+  totalMinorUnits: number,
+  currencyCode: string,
+  existingSplits: TransactionSplit[] = []
+): TransactionSplit[] | undefined {
+  if (form.type !== "expense" || !form.splitEnabled) {
+    return [];
+  }
+
+  let allocations;
+  if (form.splitMethod === "equal") {
+    allocations = allocateEqualSplitMinorUnits(totalMinorUnits, form.splitMemberIds, form.createdByMemberId);
+  } else {
+    const validation = validateCustomSplitAmounts(totalMinorUnits, form.splitMemberIds, form.splitAmounts, currencyCode);
+    if (validation.status !== "valid") {
+      return undefined;
+    }
+    allocations = form.splitMemberIds.map((memberId) => ({
+      memberId,
+      amountMinorUnits: amountMinorUnits(form.splitAmounts[memberId] ?? "", currencyCode)
+    }));
+  }
+
+  if (!allocations || allocations.some((allocation) => allocation.amountMinorUnits === undefined)) {
+    return undefined;
+  }
+  const positiveAllocations = allocations.filter(
+    (allocation): allocation is typeof allocation & { amountMinorUnits: number } =>
+      typeof allocation.amountMinorUnits === "number" && allocation.amountMinorUnits > 0
+  );
+  if (positiveAllocations.length !== allocations.length) {
+    return undefined;
+  }
+  const existingByMemberId = new Map(existingSplits.map((split) => [split.memberId, split]));
+  return positiveAllocations.map((allocation) => ({
+    id: existingByMemberId.get(allocation.memberId)?.id ?? makeId(),
+    memberId: allocation.memberId,
+    amountMinorUnits: allocation.amountMinorUnits,
+    currencyCode,
+    amount: amountFromMinorUnits(allocation.amountMinorUnits, currencyCode)
+  }));
+}
 
 type CloudRefreshRequest = {
   preferredBudgetId: string;
@@ -183,6 +260,17 @@ function formatShortDate(value: string): string {
   });
 }
 
+function recurrenceSummary(rule?: string): string {
+  if (!rule) {
+    return "Does not repeat";
+  }
+  const recurrence = parseMonthlyRecurrence(rule);
+  if (!recurrence) {
+    return rule;
+  }
+  return recurrence.until ? `Monthly · through ${formatDateLabel(`${recurrence.until}T12:00:00`)}` : "Monthly";
+}
+
 function daysLeftInMonth(monthKeyValue: string): number {
   const [year, month] = monthKeyValue.split("-").map(Number);
   if (!year || !month) {
@@ -220,6 +308,16 @@ function budgetPaceTone(spent: number, budget: number): "good" | "watch" | "over
   return "good";
 }
 
+function activateTransactionOnKeyDown(event: ReactKeyboardEvent, onOpen: () => void) {
+  if (event.target !== event.currentTarget) {
+    return;
+  }
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    onOpen();
+  }
+}
+
 function App() {
   const [state, setState] = useState<AppState>(() => loadState());
   const [syncMode, setSyncMode] = useState<SyncMode>(supabaseConfigStatus === "configured" ? "cloud" : "local");
@@ -231,10 +329,16 @@ function App() {
   );
   const [cloudError, setCloudError] = useState("");
   const [pendingInvites, setPendingInvites] = useState<BudgetInvite[]>([]);
+  const [verifiedCloudBudgetIds, setVerifiedCloudBudgetIds] = useState<string[]>([]);
+  const [isCloudSyncing, setIsCloudSyncing] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
   const [selectedMonth, setSelectedMonth] = useState(currentMonthKey());
   const [selectedMemberId, setSelectedMemberId] = useState<string>("all");
   const [isAddingTransaction, setIsAddingTransaction] = useState(false);
+  const [selectedTransaction, setSelectedTransaction] = useState<BudgetTransaction | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [isSettlementHistoryOpen, setIsSettlementHistoryOpen] = useState(false);
+  const [editingTransaction, setEditingTransaction] = useState<BudgetTransaction | null>(null);
   const [transactionSearch, setTransactionSearch] = useState("");
   const [importText, setImportText] = useState("");
   const [importError, setImportError] = useState("");
@@ -269,6 +373,12 @@ function App() {
       updatedAt: new Date().toISOString()
     };
   const settings = state.settingsByBudgetId[currentBudget.id] ?? defaultBudgetSettings(currentBudget.id);
+  useEffect(() => {
+    document.documentElement.dataset.theme = settings.appearance;
+    return () => {
+      delete document.documentElement.dataset.theme;
+    };
+  }, [settings.appearance]);
   const budgetMembers = useMemo(
     () => state.members.filter((member) => member.budgetId === currentBudget.id),
     [state.members, currentBudget.id]
@@ -297,6 +407,12 @@ function App() {
     () => monthTransactions.filter((transaction) => (memberFilter ? involvesMember(transaction, memberFilter) : true)),
     [monthTransactions, memberFilter]
   );
+  const categoryTransactions = useMemo(
+    () => selectedCategory
+      ? displayedTransactions.filter((transaction) => transaction.type === "expense" && transaction.category === selectedCategory)
+      : [],
+    [displayedTransactions, selectedCategory]
+  );
   const totals = useMemo(
     () => dashboardTotals(monthTransactions, monthlyBudget(settings, selectedMonth), memberFilter),
     [monthTransactions, settings, selectedMonth, memberFilter]
@@ -311,6 +427,69 @@ function App() {
   );
   const cloudFinancialWritesReadOnly = syncMode === "cloud" && !gateCFinancialWritesEnabled;
   const financialMutationUserId = session?.user.id ?? state.currentUserId;
+  const currencyHistoryVerification =
+    syncMode === "local"
+      ? "verified"
+      : cloudError
+        ? "unverified"
+        : isCloudSyncing ||
+            !verifiedCloudBudgetIds.includes(currentBudget.id) ||
+            settingsWrites.current.has(currentBudget.id)
+          ? "loading"
+          : "verified";
+  const currentCurrencyChangeDecision = currencyChangeDecision({
+    activeBudgetId: currentBudget.id,
+    presentedBudgetId: currentBudget.id,
+    history: currencyFinancialHistoryState({
+      transactionCount: budgetTransactions.length,
+      settlementCount: budgetSettlements.length,
+      categoryBudgetKeys: Object.keys(settings.categoryBudgets)
+    }),
+    verification: currencyHistoryVerification
+  });
+  const currencyCanChange = householdCapabilities.canEditCurrency && currentCurrencyChangeDecision.isAllowed;
+  const currencyRestrictionMessage = householdCapabilities.canEditCurrency
+    ? currentCurrencyChangeDecision.restrictionMessage ?? "Choose the household currency before adding financial activity. Saved amounts are not converted later."
+    : householdOwnerOnlyMessage;
+  function recordCapability(
+    recordBudgetId: string,
+    operation: "create" | "modifyExisting",
+    recordCreatorUserId?: string,
+    legacyRecordCreatorUserId?: string
+  ) {
+    return recordMutationDecision({
+      currentUserId: financialMutationUserId,
+      activeBudgetId: currentBudget.id,
+      recordBudgetId,
+      ownerUserId: currentBudget.ownerUserId,
+      members: budgetMembers,
+      recordCreatorUserId,
+      legacyRecordCreatorUserId,
+      operation,
+      serverGateEnabled: !cloudFinancialWritesReadOnly
+    });
+  }
+  const canCreateFinancialRecord = recordCapability(currentBudget.id, "create").isAllowed;
+  const financialMutationReadOnlyMessage = cloudFinancialWritesReadOnly
+    ? gateCFinancialWritesReadOnlyMessage
+    : sharedRecordMutationReadOnlyMessage;
+
+  function transactionMutationDecision(transaction: BudgetTransaction) {
+    return recordCapability(
+      transaction.budgetId,
+      "modifyExisting",
+      transaction.createdByUserId,
+      transaction.userId
+    );
+  }
+  function settlementMutationDecision(settlement: Settlement) {
+    return recordCapability(
+      settlement.budgetId,
+      "modifyExisting",
+      settlement.createdByUserId,
+      settlement.userId
+    );
+  }
   const activeTabTitle: Record<Tab, string> = {
     dashboard: "Dashboard",
     transactions: "Transactions",
@@ -338,6 +517,7 @@ function App() {
       sessionUser.current = data.session?.user ?? null;
       setSession(data.session);
       if (data.session?.user && isAccountTransition) {
+        setVerifiedCloudBudgetIds([]);
         setState(loadCloudState(data.session.user.id));
       }
       setAuthLoading(false);
@@ -356,12 +536,14 @@ function App() {
         syncModeRef.current = "cloud";
         setSyncMode("cloud");
         if (isAccountTransition) {
+          setVerifiedCloudBudgetIds([]);
           setState(loadCloudState(nextSession.user.id));
           setCloudMessage("Signed in. Loading cloud data.");
         }
       }
       if (!nextSession) {
         setPendingInvites([]);
+        setVerifiedCloudBudgetIds([]);
         setCloudMessage("You are signed out. Sign in to continue, or use this computer for local mode.");
       }
       setAuthLoading(false);
@@ -528,6 +710,7 @@ function App() {
             setCloudMessage("Pending financial changes are deferred until this build is approved for Gate C writes.");
           }
 
+          setVerifiedCloudBudgetIds([]);
           const [nextState, invites] = await Promise.all([
             fetchCloudState(activeUser, request.preferredBudgetId),
             fetchPendingInvites(activeUser.email ?? "")
@@ -551,6 +734,7 @@ function App() {
           }
 
           setState((current) => (appStatesEqual(current, nextState) ? current : nextState));
+          setVerifiedCloudBudgetIds(nextState.budgets.map((budget) => budget.id));
           setPendingInvites(invites);
           setCloudError("");
           setCloudMessage("Synced just now");
@@ -566,6 +750,7 @@ function App() {
     };
 
     const refresh = (async () => {
+      setIsCloudSyncing(true);
       try {
         do {
           await drainRefreshes();
@@ -575,6 +760,7 @@ function App() {
         if (showedLoading) {
           setIsCloudLoading(false);
         }
+        setIsCloudSyncing(false);
       }
     })();
     cloudRefreshInFlight.current = refresh;
@@ -641,12 +827,31 @@ function App() {
     }
   }
 
-  function updateSettings(nextSettings: BudgetSettings) {
+  function updateSettings(nextSettings: BudgetSettings, persistToCloud = true) {
     const changesCurrentHouseholdCurrency =
       nextSettings.budgetId === currentBudget.id && nextSettings.currencyCode !== settings.currencyCode;
     if (changesCurrentHouseholdCurrency && !householdCapabilities.canEditCurrency) {
       setToastMessage(householdOwnerOnlyMessage);
       return;
+    }
+    if (changesCurrentHouseholdCurrency) {
+      const decision = currencyChangeDecision({
+        activeBudgetId: currentBudget.id,
+        presentedBudgetId: currentBudget.id,
+        history: currencyFinancialHistoryState({
+          transactionCount: budgetTransactions.length,
+          settlementCount: budgetSettlements.length,
+          categoryBudgetKeys: Array.from(new Set([
+            ...Object.keys(settings.categoryBudgets),
+            ...Object.keys(nextSettings.categoryBudgets)
+          ]))
+        }),
+        verification: currencyHistoryVerification
+      });
+      if (!decision.isAllowed) {
+        setToastMessage(decision.restrictionMessage ?? "Currency change is unavailable.");
+        return;
+      }
     }
 
     setState((current) => ({
@@ -657,7 +862,192 @@ function App() {
       }
     }));
 
-    queueSettingsWrite(nextSettings);
+    if (persistToCloud) {
+      queueSettingsWrite(nextSettings);
+    }
+  }
+
+  function updateProfileName(name: string): string | undefined {
+    const validationMessage = validateProfileName(name);
+    if (validationMessage) {
+      setToastMessage(validationMessage);
+      return validationMessage;
+    }
+
+    const authenticatedUserId = syncMode === "cloud" ? session?.user.id : state.currentUserId;
+    const member = currentBudgetMember;
+    if (
+      !authenticatedUserId ||
+      !householdIdentity ||
+      householdIdentity.id !== authenticatedUserId ||
+      !member ||
+      member.budgetId !== currentBudget.id ||
+      member.inviteStatus !== "active"
+    ) {
+      const message = "Your active profile could not be resolved.";
+      setToastMessage(message);
+      return message;
+    }
+
+    const updatedMember: BudgetMember = {
+      ...member,
+      displayName: name.trim(),
+      initials: memberInitials(name)
+    };
+    setState((current) => ({
+      ...current,
+      members: current.members.map((candidate) =>
+        candidate.id === member.id && candidate.budgetId === currentBudget.id ? updatedMember : candidate
+      )
+    }));
+
+    if (syncMode === "cloud") {
+      void runCloudMutation(() => upsertCloudMember(updatedMember, authenticatedUserId), "Profile saved");
+    }
+    setToastMessage("Profile name saved");
+    return undefined;
+  }
+
+  function categoryDefinitionsForManagement() {
+    const hiddenIds = hiddenExpenseCategoryIds(settings);
+    return [
+      ...visibleExpenseCategories(settings, budgetTransactions),
+      ...expenseCategories.filter((category) => hiddenIds.has(category.id))
+    ];
+  }
+
+  function commitCategoryChange(
+    nextSettings: BudgetSettings,
+    moveFrom: string | undefined,
+    moveTo: string | undefined,
+    successMessage: string
+  ): string | undefined {
+    const affectedTransactions = moveFrom && moveTo
+      ? budgetTransactions.filter((transaction) => transaction.category === moveFrom)
+      : [];
+    const changedTransactions = affectedTransactions.map((transaction) => ({
+      ...transaction,
+      category: moveTo as string
+    }));
+
+    for (const transaction of affectedTransactions) {
+      const decision = transactionMutationDecision(transaction);
+      if (!decision.isAllowed) {
+        const message = cloudFinancialWritesReadOnly
+          ? gateCFinancialWritesReadOnlyMessage
+          : decision.readOnlyMessage ?? sharedRecordMutationReadOnlyMessage;
+        setToastMessage(message);
+        return message;
+      }
+      if (syncMode === "cloud" && transaction.rowVersion === undefined) {
+        const message = "Transaction is not ready to change safely. Refresh cloud data and try again.";
+        setToastMessage(message);
+        return message;
+      }
+    }
+
+    if (syncMode === "cloud") {
+      for (const transaction of changedTransactions) {
+        if (!queueFinancialMutation(() => buildTransactionGateCMutation(transaction, financialMutationUserId))) {
+          return "Financial change could not be queued safely.";
+        }
+      }
+    }
+
+    const deferCloudSettingsWrite = syncMode === "cloud" && changedTransactions.length > 0;
+    updateSettings(nextSettings, !deferCloudSettingsWrite);
+    if (changedTransactions.length > 0) {
+      const changedById = new Map(changedTransactions.map((transaction) => [transaction.id, transaction]));
+      setState((current) => ({
+        ...current,
+        transactions: current.transactions.map((transaction) => {
+          if (transaction.budgetId !== currentBudget.id || !changedById.has(transaction.id)) {
+            return transaction;
+          }
+          return { ...transaction, category: changedById.get(transaction.id)?.category ?? transaction.category };
+        })
+      }));
+      if (syncMode === "cloud") {
+        void runCloudMutation(async () => {
+          await replayGateCFinancialMutations(financialMutationUserId);
+          await upsertCloudSettings(nextSettings, financialMutationUserId);
+        }, "Category saved");
+      }
+    }
+    setToastMessage(successMessage);
+    return undefined;
+  }
+
+  function saveCategory(input: CategorySaveInput): string | undefined {
+    const displayName = input.displayName.trim();
+    const categoryId = categoryIdFromDisplayName(displayName);
+    if (!categoryId) {
+      const message = "Enter a category name.";
+      setToastMessage(message);
+      return message;
+    }
+    if (input.oldCategoryId === "other" && categoryId !== "other") {
+      const message = "Other cannot be renamed.";
+      setToastMessage(message);
+      return message;
+    }
+
+    const emoji = input.emoji?.trim() ?? "";
+    if (emoji && !isSingleEmoji(emoji)) {
+      const message = "Use one emoji for the category icon.";
+      setToastMessage(message);
+      return message;
+    }
+
+    const duplicate = categoryDefinitionsForManagement().some((category) => {
+      if (category.id === input.oldCategoryId) {
+        return false;
+      }
+      return category.id.toLowerCase() === categoryId.toLowerCase() ||
+        category.name.trim().toLowerCase() === displayName.toLowerCase();
+    });
+    if (duplicate) {
+      const message = "That category already exists.";
+      setToastMessage(message);
+      return message;
+    }
+
+    const normalizedEmoji = normalizedCategoryEmoji(emoji);
+    let nextSettings: BudgetSettings;
+    if (!input.oldCategoryId) {
+      nextSettings = addCategorySettings(settings, categoryId, normalizedEmoji);
+    } else if (input.oldCategoryId === categoryId) {
+      nextSettings = updateCategoryEmojiSettings(settings, categoryId, normalizedEmoji);
+    } else {
+      nextSettings = renameCategorySettings(settings, input.oldCategoryId, categoryId, normalizedEmoji);
+    }
+
+    return commitCategoryChange(
+      nextSettings,
+      input.oldCategoryId && input.oldCategoryId !== categoryId ? input.oldCategoryId : undefined,
+      input.oldCategoryId && input.oldCategoryId !== categoryId ? categoryId : undefined,
+      input.oldCategoryId ? "Category updated." : "Category added."
+    );
+  }
+
+  function removeCategory(categoryId: string): string | undefined {
+    if (categoryId === "other") {
+      const message = "Other cannot be removed.";
+      setToastMessage(message);
+      return message;
+    }
+    return commitCategoryChange(
+      removeCategorySettings(settings, categoryId),
+      categoryId,
+      "other",
+      "Category removed. Existing transactions moved to Other."
+    );
+  }
+
+  function unhideCategory(categoryId: string) {
+    const nextSettings = unhideCategorySettings(settings, categoryId);
+    updateSettings(nextSettings);
+    setToastMessage("Category restored.");
   }
 
   function queueSettingsWrite(nextSettings: BudgetSettings) {
@@ -694,41 +1084,42 @@ function App() {
   }
 
   function addTransaction(form: TransactionFormState) {
-    if (cloudFinancialWritesReadOnly) {
-      setToastMessage(gateCFinancialWritesReadOnlyMessage);
+    const decision = recordCapability(currentBudget.id, "create");
+    if (!decision.isAllowed) {
+      setToastMessage(cloudFinancialWritesReadOnly ? gateCFinancialWritesReadOnlyMessage : decision.readOnlyMessage ?? sharedRecordMutationReadOnlyMessage);
       return;
     }
     const amount = normalizeAmount(Number(form.amount));
-    if (amount <= 0 || !form.title.trim()) {
+    const currencyCode = normalizedCurrencyCode(settings.currencyCode);
+    const exactAmount = amountMinorUnits(form.amount, currencyCode);
+    if (amount <= 0 || exactAmount === undefined || !form.title.trim() || !form.date || !form.createdByMemberId) {
       return;
     }
-
-    const splitWithHousehold = form.type === "expense" && form.splitWithHousehold && budgetMembers.length > 1;
-    const baseShare = splitWithHousehold ? Math.floor((amount * 100) / budgetMembers.length) / 100 : 0;
-    const splits = splitWithHousehold
-      ? budgetMembers.map((member, index) => {
-          const isLast = index === budgetMembers.length - 1;
-          const previous = baseShare * (budgetMembers.length - 1);
-          return {
-            id: makeId(),
-            memberId: member.id,
-            amount: isLast ? normalizeAmount(amount - previous) : baseShare
-          };
-        })
-      : [];
+    const splits = transactionSplitsForForm(form, exactAmount, currencyCode);
+    if (!splits) {
+      return;
+    }
+    const recurrenceRule = buildMonthlyRecurrence(form.recurrenceEnabled, form.recurrenceEndDate || undefined);
+    if (form.recurrenceEnabled && !recurrenceRule) {
+      return;
+    }
 
     const transaction: BudgetTransaction = {
       id: makeId(),
       budgetId: currentBudget.id,
       userId: state.currentUserId,
+      createdByUserId: financialMutationUserId,
       title: form.title.trim(),
       amount,
       type: form.type,
       category: form.category,
-      paymentMethod: form.paymentMethod,
+      paymentMethod: form.type === "expense" ? form.paymentMethod ?? "card" : form.paymentMethod,
       createdByMemberId: form.createdByMemberId,
       date: new Date(`${form.date}T12:00:00`).toISOString(),
       createdAt: new Date().toISOString(),
+      recurrenceRule,
+      amountMinorUnits: exactAmount,
+      currencyCode,
       splits
     };
 
@@ -749,26 +1140,130 @@ function App() {
     window.setTimeout(() => addTransactionButtonRef.current?.focus(), 0);
   }
 
+  function updateTransaction(id: string, form: TransactionFormState) {
+    const source = state.transactions.find((candidate) => candidate.id === id);
+    if (!source) {
+      return;
+    }
+    const decision = transactionMutationDecision(source);
+    if (!decision.isAllowed) {
+      setToastMessage(cloudFinancialWritesReadOnly ? gateCFinancialWritesReadOnlyMessage : decision.readOnlyMessage ?? sharedRecordMutationReadOnlyMessage);
+      return;
+    }
+
+    const currencyCode = source.currencyCode ?? normalizedCurrencyCode(settings.currencyCode);
+    const amount = normalizeAmount(Number(form.amount));
+    const exactAmount = amountMinorUnits(form.amount, currencyCode);
+    if (amount <= 0 || exactAmount === undefined || !form.title.trim() || !form.date || !form.createdByMemberId) {
+      return;
+    }
+    const splits = transactionSplitsForForm(form, exactAmount, currencyCode, source.splits);
+    if (!splits) {
+      return;
+    }
+    const recurrenceRule = buildMonthlyRecurrence(form.recurrenceEnabled, form.recurrenceEndDate || undefined);
+    if (form.recurrenceEnabled && !recurrenceRule) {
+      return;
+    }
+
+    const updated: BudgetTransaction = {
+      ...source,
+      title: form.title.trim(),
+      amount,
+      type: form.type,
+      category: form.category,
+      paymentMethod: form.type === "expense" ? form.paymentMethod ?? source.paymentMethod ?? "card" : form.paymentMethod ?? source.paymentMethod,
+      createdByMemberId: form.createdByMemberId,
+      date: localNoonISOString(form.date) ?? source.date,
+      recurrenceRule,
+      amountMinorUnits: exactAmount,
+      currencyCode,
+      splits
+    };
+
+    if (syncMode === "cloud" && !queueFinancialMutation(() => buildTransactionGateCMutation(updated, financialMutationUserId))) {
+      return;
+    }
+
+    setState((current) => ({
+      ...current,
+      transactions: current.transactions.map((candidate) => candidate.id === id ? updated : candidate)
+    }));
+    setEditingTransaction(null);
+    setSelectedTransaction(null);
+    setToastMessage("Transaction saved on this device");
+    window.setTimeout(() => setToastMessage(""), 2600);
+    if (syncMode === "cloud") {
+      void runCloudMutation(() => replayGateCFinancialMutations(financialMutationUserId).then(() => undefined));
+    }
+  }
+
+  function stopFutureOccurrences(id: string, occurrenceDate: string): boolean {
+    const source = state.transactions.find((candidate) => candidate.id === id);
+    if (!source || !parseMonthlyRecurrence(source.recurrenceRule)) {
+      return false;
+    }
+    const decision = transactionMutationDecision(source);
+    if (!decision.isAllowed) {
+      setToastMessage(cloudFinancialWritesReadOnly ? gateCFinancialWritesReadOnlyMessage : decision.readOnlyMessage ?? sharedRecordMutationReadOnlyMessage);
+      return false;
+    }
+
+    const occurrenceDateKey = localDateKey(new Date(occurrenceDate));
+    const until = previousLocalDate(occurrenceDateKey);
+    if (!until || until < localDateKey(new Date(source.date))) {
+      return false;
+    }
+    if (!window.confirm(`Stop recurring occurrences from ${formatDateLabel(occurrenceDate)} onward? The series will end on ${formatDateLabel(`${until}T12:00:00`)}.`)) {
+      return false;
+    }
+
+    const updated: BudgetTransaction = { ...source, recurrenceRule: buildMonthlyRecurrence(true, until) };
+    if (syncMode === "cloud" && !queueFinancialMutation(() => buildTransactionGateCMutation(updated, financialMutationUserId))) {
+      return false;
+    }
+
+    setState((current) => ({
+      ...current,
+      transactions: current.transactions.map((candidate) => candidate.id === id ? updated : candidate)
+    }));
+    setSelectedTransaction(null);
+    setToastMessage("Recurring series updated");
+    window.setTimeout(() => setToastMessage(""), 2600);
+    if (syncMode === "cloud") {
+      void runCloudMutation(() => replayGateCFinancialMutations(financialMutationUserId).then(() => undefined));
+    }
+    return true;
+  }
+
   function closeTransactionDialog() {
     setIsAddingTransaction(false);
     window.setTimeout(() => addTransactionButtonRef.current?.focus(), 0);
   }
 
-  function deleteTransaction(id: string) {
-    if (cloudFinancialWritesReadOnly) {
-      setToastMessage(gateCFinancialWritesReadOnlyMessage);
-      return;
-    }
+  function closeEditTransactionDialog() {
+    setEditingTransaction(null);
+  }
+
+  function deleteTransaction(id: string): boolean {
     const transaction = state.transactions.find((candidate) => candidate.id === id);
+    if (!transaction) {
+      return false;
+    }
+    const decision = transactionMutationDecision(transaction);
+    if (!decision.isAllowed) {
+      setToastMessage(cloudFinancialWritesReadOnly ? gateCFinancialWritesReadOnlyMessage : decision.readOnlyMessage ?? sharedRecordMutationReadOnlyMessage);
+      return false;
+    }
     if (
       transaction?.recurrenceRule?.startsWith("monthly") &&
       !window.confirm(`Delete "${transaction.title}" and its entire recurring series? This cannot be undone.`)
     ) {
-      return;
+      return false;
     }
 
-    if (!transaction || (syncMode === "cloud" && !queueFinancialMutation(() => buildTransactionDeleteGateCMutation(transaction, financialMutationUserId)))) {
-      return;
+    if (syncMode === "cloud" && !queueFinancialMutation(() => buildTransactionDeleteGateCMutation(transaction, financialMutationUserId))) {
+      return false;
     }
 
     setState((current) => ({
@@ -779,18 +1274,51 @@ function App() {
     if (syncMode === "cloud") {
       void runCloudMutation(() => replayGateCFinancialMutations(financialMutationUserId).then(() => undefined));
     }
+    return true;
+  }
+
+  function deleteSettlement(id: string): boolean {
+    const settlement = state.settlements.find((candidate) => candidate.id === id);
+    if (!settlement) {
+      return false;
+    }
+    const decision = settlementMutationDecision(settlement);
+    if (!decision.isAllowed) {
+      setToastMessage(cloudFinancialWritesReadOnly ? gateCFinancialWritesReadOnlyMessage : decision.readOnlyMessage ?? sharedRecordMutationReadOnlyMessage);
+      return false;
+    }
+    if (!window.confirm("Delete this settlement record? The associated payment will no longer reduce the household balance.")) {
+      return false;
+    }
+
+    if (syncMode === "cloud" && !queueFinancialMutation(() => buildSettlementDeleteGateCMutation(settlement, financialMutationUserId))) {
+      return false;
+    }
+
+    setState((current) => ({
+      ...current,
+      settlements: current.settlements.filter((candidate) => candidate.id !== id)
+    }));
+    if (syncMode === "cloud") {
+      void runCloudMutation(() => replayGateCFinancialMutations(financialMutationUserId).then(() => undefined), "Settlement deleted");
+    }
+    return true;
   }
 
   function settleBalance(suggestion: ReturnType<typeof settlementSuggestions>[number]) {
-    if (cloudFinancialWritesReadOnly) {
-      setToastMessage(gateCFinancialWritesReadOnlyMessage);
+    const decision = recordCapability(currentBudget.id, "create");
+    if (!decision.isAllowed) {
+      setToastMessage(cloudFinancialWritesReadOnly ? gateCFinancialWritesReadOnlyMessage : decision.readOnlyMessage ?? sharedRecordMutationReadOnlyMessage);
       return;
     }
-    if (
-      !window.confirm(
-        `Record that ${suggestion.from.displayName} paid ${suggestion.to.displayName} ${formatMoney(suggestion.amount, settings.currencyCode)}? This settle-up record cannot be undone on the web.`
-      )
-    ) {
+    const settlementCurrencyCode = normalizedCurrencyCode(settings.currencyCode);
+    const settlementAmountMinorUnits = amountMinorUnits(suggestion.amount, settlementCurrencyCode);
+    if (settlementAmountMinorUnits === undefined) {
+      setToastMessage("This settlement amount could not be recorded safely.");
+      return;
+    }
+    const settlementAmount = amountFromMinorUnits(settlementAmountMinorUnits, settlementCurrencyCode);
+    if (!window.confirm(`Record that ${suggestion.from.displayName} paid ${suggestion.to.displayName} ${formatMoney(settlementAmount, settlementCurrencyCode)}? This records a payment in your household history.`)) {
       return;
     }
 
@@ -799,9 +1327,12 @@ function App() {
       id: makeId(),
       budgetId: currentBudget.id,
       userId: state.currentUserId,
+      createdByUserId: financialMutationUserId,
       fromMemberId: suggestion.from.id,
       toMemberId: suggestion.to.id,
-      amount: suggestion.amount,
+      amount: settlementAmount,
+      amountMinorUnits: settlementAmountMinorUnits,
+      currencyCode: settlementCurrencyCode,
       date: settlementDate
     };
 
@@ -899,6 +1430,9 @@ function App() {
         setSession(nextSession);
         setSyncMode("cloud");
         if (isAccountTransition) {
+          setVerifiedCloudBudgetIds([]);
+        }
+        if (isAccountTransition) {
           setState(loadCloudState(nextSession.user.id));
         }
         setCloudMessage("Signed in. Loading cloud data.");
@@ -920,6 +1454,7 @@ function App() {
       await signOut();
       activeUserId.current = null;
       sessionUser.current = null;
+      setVerifiedCloudBudgetIds([]);
       const nextSyncMode = modeAfterSignOut(supabaseConfigStatus === "configured");
       syncModeRef.current = nextSyncMode;
       setSession(null);
@@ -997,6 +1532,7 @@ function App() {
         onSubmit={handleAuthSubmit}
         onUseLocal={() => {
           syncModeRef.current = "local";
+          setVerifiedCloudBudgetIds([]);
           setState(loadState(localStateStorageKey));
           setSyncMode("local");
           setCloudError("");
@@ -1058,6 +1594,7 @@ function App() {
                 className="secondary-action compact"
                 onClick={() => {
                   syncModeRef.current = "cloud";
+                  setVerifiedCloudBudgetIds([]);
                   setSyncMode("cloud");
                   setCloudMessage("Sign in to sync with Supabase.");
                 }}
@@ -1071,8 +1608,8 @@ function App() {
               onClick={() => setIsAddingTransaction(true)}
               ref={addTransactionButtonRef}
               type="button"
-              disabled={cloudFinancialWritesReadOnly}
-              title={cloudFinancialWritesReadOnly ? gateCFinancialWritesReadOnlyMessage : undefined}
+              disabled={!canCreateFinancialRecord}
+              title={!canCreateFinancialRecord ? financialMutationReadOnlyMessage : undefined}
             >
               <Plus size={18} aria-hidden="true" />
               <span className="desktop-action-label">Add transaction</span>
@@ -1100,13 +1637,19 @@ function App() {
             totals={totals}
             categoryTotals={categoryTotals}
             settlements={settlements}
+            budgetTransactions={budgetTransactions}
+            budgetSettlements={budgetSettlements}
             transactions={displayedTransactions}
             selectedMonth={selectedMonth}
             members={budgetMembers}
             onViewAll={() => setActiveTab("transactions")}
             onOpenBudget={() => setActiveTab("budget")}
+            onOpenCategory={setSelectedCategory}
+            onOpenSettlementHistory={() => setIsSettlementHistoryOpen(true)}
             onSettle={settleBalance}
-            canSettle={!cloudFinancialWritesReadOnly}
+            onOpenTransaction={setSelectedTransaction}
+            canSettle={canCreateFinancialRecord}
+            mutationReadOnlyMessage={financialMutationReadOnlyMessage}
           />
         )}
 
@@ -1120,8 +1663,14 @@ function App() {
             search={transactionSearch}
             onSearch={setTransactionSearch}
             onDelete={deleteTransaction}
+            onOpenTransaction={setSelectedTransaction}
             onAddTransaction={() => setIsAddingTransaction(true)}
             financialReadOnly={cloudFinancialWritesReadOnly}
+            canCreate={canCreateFinancialRecord}
+            mutationReadOnlyMessage={financialMutationReadOnlyMessage}
+            canDelete={
+              (transaction) => transactionMutationDecision(transaction).isAllowed
+            }
           />
         )}
 
@@ -1134,6 +1683,7 @@ function App() {
             memberId={memberFilter}
             selectedMonth={selectedMonth}
             onSettingsChange={updateSettings}
+            onOpenCategory={setSelectedCategory}
           />
         )}
 
@@ -1141,11 +1691,19 @@ function App() {
           <SettingsView
             settings={settings}
             state={state}
+            transactions={budgetTransactions}
             members={budgetMembers}
+            currentMember={currentBudgetMember}
             capabilities={householdCapabilities}
+            currencyChangeAllowed={currencyCanChange}
+            currencyChangeMessage={currencyRestrictionMessage}
             importText={importText}
             importError={importError}
             onSettingsChange={updateSettings}
+            onUpdateProfileName={updateProfileName}
+            onSaveCategory={saveCategory}
+            onRemoveCategory={removeCategory}
+            onUnhideCategory={unhideCategory}
             onAddMember={addMember}
             onImportTextChange={setImportText}
             onImport={handleImport}
@@ -1173,19 +1731,79 @@ function App() {
             onSignOut={() => void handleSignOut()}
             onCreateSharedBudget={(name) => void createSharedBudget(name)}
             onAcceptInvite={(invite) => void acceptInvite(invite)}
+            onOpenTransaction={setSelectedTransaction}
           />
         )}
       </main>
 
-      {isAddingTransaction && !cloudFinancialWritesReadOnly && (
-          <TransactionDialog
-            members={budgetMembers}
-            settings={settings}
-            transactions={budgetTransactions}
-            defaultMemberId={currentBudgetMember?.id}
-            onClose={closeTransactionDialog}
-            onSubmit={addTransaction}
-          />
+      {isAddingTransaction && canCreateFinancialRecord && (
+        <TransactionDialog
+          members={budgetMembers}
+          settings={settings}
+          transactions={budgetTransactions}
+          defaultMemberId={currentBudgetMember?.id}
+          onClose={closeTransactionDialog}
+          onSubmit={addTransaction}
+        />
+      )}
+      {selectedCategory && (
+        <CategoryTransactionsDialog
+          category={selectedCategory}
+          selectedMonth={selectedMonth}
+          transactions={categoryTransactions}
+          settings={settings}
+          members={budgetMembers}
+          memberId={memberFilter}
+          onClose={() => setSelectedCategory(null)}
+          onOpenTransaction={(transaction) => {
+            setSelectedCategory(null);
+            setSelectedTransaction(transaction);
+          }}
+        />
+      )}
+      {isSettlementHistoryOpen && (
+        <SettlementHistoryDialog
+          settlements={budgetSettlements}
+          settings={settings}
+          members={budgetMembers}
+          onClose={() => setIsSettlementHistoryOpen(false)}
+          canDelete={(settlement) => settlementMutationDecision(settlement).isAllowed}
+          onDelete={deleteSettlement}
+        />
+      )}
+      {selectedTransaction && (
+        <TransactionDetailDialog
+          transaction={selectedTransaction}
+          sourceTransaction={state.transactions.find((candidate) => candidate.id === selectedTransaction.id)}
+          settings={settings}
+          members={budgetMembers}
+          canEdit={transactionMutationDecision(selectedTransaction).isAllowed}
+          canDelete={transactionMutationDecision(selectedTransaction).isAllowed}
+          mutationReadOnlyMessage={financialMutationReadOnlyMessage}
+          onClose={() => setSelectedTransaction(null)}
+          onEdit={() => {
+            const source = state.transactions.find((candidate) => candidate.id === selectedTransaction.id) ?? selectedTransaction;
+            setSelectedTransaction(null);
+            setEditingTransaction(source);
+          }}
+          onDelete={(id) => {
+            if (deleteTransaction(id)) {
+              setSelectedTransaction(null);
+            }
+          }}
+          onStopFutureOccurrences={stopFutureOccurrences}
+        />
+      )}
+      {editingTransaction && transactionMutationDecision(editingTransaction).isAllowed && (
+        <TransactionDialog
+          transaction={editingTransaction}
+          members={budgetMembers}
+          settings={settings}
+          transactions={budgetTransactions}
+          defaultMemberId={editingTransaction.createdByMemberId}
+          onClose={closeEditTransactionDialog}
+          onSubmit={(form) => updateTransaction(editingTransaction.id, form)}
+        />
       )}
       {toastMessage && (
         <div className="toast" role="status" aria-live="polite">
@@ -1407,26 +2025,39 @@ function DashboardView({
   totals,
   categoryTotals,
   settlements,
+  budgetTransactions,
+  budgetSettlements,
   transactions,
   selectedMonth,
   members,
   onViewAll,
   onOpenBudget,
+  onOpenCategory,
+  onOpenSettlementHistory,
   onSettle,
-  canSettle
+  onOpenTransaction,
+  canSettle,
+  mutationReadOnlyMessage
 }: {
   settings: BudgetSettings;
   totals: ReturnType<typeof dashboardTotals>;
   categoryTotals: ReturnType<typeof categoryBreakdown>;
   settlements: ReturnType<typeof settlementSuggestions>;
+  budgetTransactions: BudgetTransaction[];
+  budgetSettlements: Settlement[];
   transactions: BudgetTransaction[];
   selectedMonth: string;
   members: BudgetMember[];
   onViewAll: () => void;
   onOpenBudget: () => void;
+  onOpenCategory: (category: string) => void;
+  onOpenSettlementHistory: () => void;
   onSettle: (settlement: ReturnType<typeof settlementSuggestions>[number]) => void;
+  onOpenTransaction: (transaction: BudgetTransaction) => void;
   canSettle: boolean;
+  mutationReadOnlyMessage: string;
 }) {
+  const [expandedSettlementId, setExpandedSettlementId] = useState<string | null>(null);
   const budgetLimit = monthlyBudget(settings, selectedMonth);
   const spentRatio = budgetLimit > 0 ? Math.min(1, Math.max(0, totals.totalExpenses / budgetLimit)) : 0;
   const savingsRate = totals.totalIncome > 0
@@ -1493,6 +2124,7 @@ function DashboardView({
           items={categoryTotals.slice(0, 5)}
           total={totals.totalExpenses}
           currencyCode={settings.currencyCode}
+          onOpenCategory={onOpenCategory}
         />
       </section>
 
@@ -1501,7 +2133,7 @@ function DashboardView({
           <h2>Top categories</h2>
           <span>This month</span>
         </div>
-        <TopSpendingChart items={categoryTotals.slice(0, 6)} currencyCode={settings.currencyCode} />
+        <TopSpendingChart items={categoryTotals.slice(0, 6)} currencyCode={settings.currencyCode} onOpenCategory={onOpenCategory} />
       </section>
 
       <section className="panel recent-panel">
@@ -1511,42 +2143,72 @@ function DashboardView({
             View all
           </button>
         </div>
-        <TransactionList transactions={transactions.slice(0, 5)} settings={settings} members={members} />
+        <TransactionList
+          transactions={transactions.slice(0, 5)}
+          settings={settings}
+          members={members}
+          onOpenTransaction={onOpenTransaction}
+        />
       </section>
 
       <section className="panel settle-panel">
         <div className="panel-heading">
           <h2>Settle up</h2>
-          <span>{settlements.length ? `${settlements.length} suggestions` : "Clear"}</span>
+          <button className="text-action" type="button" onClick={onOpenSettlementHistory}>
+            History{budgetSettlements.length ? ` · ${budgetSettlements.length}` : ""}
+          </button>
         </div>
         <div className="settlement-list">
           {settlements.length === 0 ? (
             <div className="empty-state">No open household balances.</div>
           ) : (
-            settlements.slice(0, 4).map((settlement) => (
-              <div key={settlement.id} className="settlement-row">
+            settlements.slice(0, 4).map((settlement) => {
+              const explanation = settlementExplanation(
+                budgetTransactions,
+                budgetSettlements,
+                settlement.from.id,
+                settlement.to.id
+              );
+              return (
+              <div key={settlement.id} className="settlement-row-wrap">
+                <div className="settlement-row">
                 <div className="avatar-pair" aria-hidden="true">
                   <MemberBadge member={settlement.from} />
                   <MemberBadge member={settlement.to} />
                 </div>
-                <div className="settlement-copy">
+                <button
+                  className="settlement-copy settlement-explanation-trigger"
+                  type="button"
+                  onClick={() => setExpandedSettlementId((current) => current === settlement.id ? null : settlement.id)}
+                  aria-expanded={expandedSettlementId === settlement.id}
+                >
                   <strong>
                     {firstName(settlement.from.displayName)} pays {firstName(settlement.to.displayName)}
                   </strong>
                   <span className="settlement-amount">{formatMoney(settlement.amount, settings.currencyCode)}</span>
-                </div>
+                </button>
                 <button
                   className="ghost-button small settlement-action"
                   type="button"
                   onClick={() => onSettle(settlement)}
                   aria-label={`Settle ${firstName(settlement.from.displayName)} paying ${firstName(settlement.to.displayName)}`}
                   disabled={!canSettle}
-                  title={!canSettle ? gateCFinancialWritesReadOnlyMessage : undefined}
+                  title={!canSettle ? mutationReadOnlyMessage : undefined}
                 >
                   Settle
                 </button>
               </div>
-            ))
+                {expandedSettlementId === settlement.id && (
+                  <SettlementExplanation
+                    explanation={explanation}
+                    from={settlement.from}
+                    to={settlement.to}
+                    currencyCode={settings.currencyCode}
+                  />
+                )}
+              </div>
+              );
+            })
           )}
         </div>
       </section>
@@ -1604,14 +2266,54 @@ function SummaryTile({
   );
 }
 
+function SettlementExplanation({
+  explanation,
+  from,
+  to,
+  currencyCode
+}: {
+  explanation: ReturnType<typeof settlementExplanation>;
+  from: BudgetMember;
+  to: BudgetMember;
+  currencyCode: string;
+}) {
+  return (
+    <div className="settlement-explanation">
+      <p>
+        {firstName(from.displayName)} owes {firstName(to.displayName)} {formatMoney(explanation.expenseTotal, currencyCode)} in shared expenses.
+      </p>
+      {explanation.reversedExpenseTotal > 0 && (
+        <p>{firstName(to.displayName)} covered {formatMoney(explanation.reversedExpenseTotal, currencyCode)} for {firstName(from.displayName)}.</p>
+      )}
+      {explanation.paidTotal > 0 && (
+        <p>{firstName(from.displayName)} already paid {formatMoney(explanation.paidTotal, currencyCode)} toward this balance.</p>
+      )}
+      {explanation.receivedTotal > 0 && (
+        <p>{firstName(to.displayName)} already paid {formatMoney(explanation.receivedTotal, currencyCode)} back toward this balance.</p>
+      )}
+      <div className="settlement-explanation-items">
+        {explanation.owedExpenses.map((item) => (
+          <span key={`owed-${item.id}`}>{item.title} · {formatMoney(item.amount, currencyCode)}</span>
+        ))}
+        {explanation.priorSettlements.map((settlement) => (
+          <span key={settlement.id}>Payment on {formatDateLabel(settlement.date)} · {formatMoney(settlement.amount, settlement.currencyCode ?? currencyCode)}</span>
+        ))}
+      </div>
+      <strong>Net suggested payment: {formatMoney(Math.max(0, explanation.netAmount), currencyCode)}</strong>
+    </div>
+  );
+}
+
 function ExpenseBreakdownChart({
   items,
   total,
-  currencyCode
+  currencyCode,
+  onOpenCategory
 }: {
   items: ReturnType<typeof categoryBreakdown>;
   total: number;
   currencyCode: string;
+  onOpenCategory: (category: string) => void;
 }) {
   if (items.length === 0 || total <= 0) {
     return <div className="empty-state">No expenses in this view.</div>;
@@ -1634,12 +2336,18 @@ function ExpenseBreakdownChart({
         {items.map((item) => {
         const percentage = Math.round((item.amount / total) * 100);
         return (
-          <div key={item.category} className="breakdown-row">
+          <button
+            key={item.category}
+            className="breakdown-row category-drilldown"
+            type="button"
+            onClick={() => onOpenCategory(item.category)}
+            aria-label={`View ${categoryName(item.category)} expenses`}
+          >
             <i style={{ backgroundColor: categoryColor(item.category) }} aria-hidden="true" />
             <span>{categoryName(item.category)}</span>
             <em>{percentage}%</em>
             <strong>{formatMoney(item.amount, currencyCode)}</strong>
-          </div>
+          </button>
         );
       })}
       </div>
@@ -1649,10 +2357,12 @@ function ExpenseBreakdownChart({
 
 function TopSpendingChart({
   items,
-  currencyCode
+  currencyCode,
+  onOpenCategory
 }: {
   items: ReturnType<typeof categoryBreakdown>;
   currencyCode: string;
+  onOpenCategory: (category: string) => void;
 }) {
   const maxAmount = Math.max(...items.map((item) => item.amount), 0);
 
@@ -1663,9 +2373,12 @@ function TopSpendingChart({
   return (
     <div className="top-spending-chart" aria-label="Top spending categories">
       {items.map((item) => (
-        <div
+        <button
           key={item.category}
-          className="spending-bar-row"
+          className="spending-bar-row category-drilldown"
+          type="button"
+          onClick={() => onOpenCategory(item.category)}
+          aria-label={`View ${categoryName(item.category)} expenses`}
           style={{ "--category-color": categoryColor(item.category) } as CSSProperties}
         >
           <span>{categoryName(item.category)}</span>
@@ -1673,7 +2386,7 @@ function TopSpendingChart({
             <b style={{ width: `${Math.max(8, (item.amount / maxAmount) * 100)}%` }} />
           </div>
           <strong>{formatMoney(item.amount, currencyCode)}</strong>
-        </div>
+        </button>
       ))}
     </div>
   );
@@ -1688,8 +2401,12 @@ function TransactionsView({
   search,
   onSearch,
   onDelete,
+  onOpenTransaction,
   onAddTransaction,
-  financialReadOnly
+  financialReadOnly,
+  canCreate,
+  mutationReadOnlyMessage,
+  canDelete
 }: {
   settings: BudgetSettings;
   transactions: BudgetTransaction[];
@@ -1699,8 +2416,12 @@ function TransactionsView({
   search: string;
   onSearch: (search: string) => void;
   onDelete: (id: string) => void;
+  onOpenTransaction: (transaction: BudgetTransaction) => void;
   onAddTransaction: () => void;
   financialReadOnly: boolean;
+  canCreate: boolean;
+  mutationReadOnlyMessage: string;
+  canDelete: (transaction: BudgetTransaction) => boolean;
 }) {
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState<"all" | TransactionType>("all");
@@ -1793,8 +2514,8 @@ function TransactionsView({
               className="text-action"
               type="button"
               onClick={hasActiveFilters ? clearFilters : onAddTransaction}
-              disabled={!hasActiveFilters && financialReadOnly}
-              title={!hasActiveFilters && financialReadOnly ? gateCFinancialWritesReadOnlyMessage : undefined}
+              disabled={!hasActiveFilters && (!canCreate || financialReadOnly)}
+              title={!hasActiveFilters && (!canCreate || financialReadOnly) ? mutationReadOnlyMessage : undefined}
             >
               {hasActiveFilters ? "Clear filters" : "Add transaction"}
             </button>
@@ -1811,7 +2532,15 @@ function TransactionsView({
             {filteredTransactions.map((transaction) => {
               const member = memberById.get(transaction.createdByMemberId);
               return (
-                <article key={transaction.id} className="transaction-row">
+                <article
+                  key={transaction.id}
+                  className="transaction-row transaction-row-open"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Open details for ${transaction.title}`}
+                  onClick={() => onOpenTransaction(transaction)}
+                  onKeyDown={(event) => activateTransactionOnKeyDown(event, () => onOpenTransaction(transaction))}
+                >
                   <div className="transaction-main">
                     <div className={`transaction-icon ${transaction.type}`}>
                       {transaction.type === "income" ? (
@@ -1842,11 +2571,20 @@ function TransactionsView({
                   </time>
                   <button
                     className="icon-button subtle"
-                    onClick={() => onDelete(transaction.id)}
-                    title="Delete transaction"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDelete(transaction.id);
+                    }}
                     aria-label={`Delete ${transaction.title}${transaction.recurrenceRule?.startsWith("monthly") ? " recurring series" : ""}`}
                     type="button"
-                    disabled={financialReadOnly}
+                    disabled={financialReadOnly || !canDelete(transaction)}
+                    title={
+                      financialReadOnly || !canDelete(transaction)
+                        ? mutationReadOnlyMessage
+                        : transaction.recurrenceRule?.startsWith("monthly")
+                          ? "Delete recurring series"
+                          : "Delete transaction"
+                    }
                   >
                     <Trash2 size={17} aria-hidden="true" />
                   </button>
@@ -1909,7 +2647,8 @@ function BudgetView({
   members,
   memberId,
   selectedMonth,
-  onSettingsChange
+  onSettingsChange,
+  onOpenCategory
 }: {
   settings: BudgetSettings;
   totals: ReturnType<typeof dashboardTotals>;
@@ -1918,6 +2657,7 @@ function BudgetView({
   memberId?: string;
   selectedMonth: string;
   onSettingsChange: (settings: BudgetSettings) => void;
+  onOpenCategory: (category: string) => void;
 }) {
   const spending = categoryBreakdown(transactions, memberId);
   const spendingByCategory = new Map(spending.map((item) => [item.category, item.amount]));
@@ -1949,18 +2689,18 @@ function BudgetView({
     const tone = budgetPaceTone(spent, budget);
     return (
       <div key={category.id} className={`budget-row ${tone}`}>
-        <div>
+        <button className="budget-category-trigger" type="button" onClick={() => onOpenCategory(category.id)}>
           <strong>
-            {settings.categoryEmojis[category.id] ? `${settings.categoryEmojis[category.id]} ` : ""}
-            {category.name}
+              {settings.categoryEmojis[category.id] ? `${settings.categoryEmojis[category.id]} ` : ""}
+              {category.name}
           </strong>
           <span>
-            {formatMoney(spent, settings.currencyCode)} of {formatMoney(budget, settings.currencyCode)}
+              {formatMoney(spent, settings.currencyCode)} of {formatMoney(budget, settings.currencyCode)}
           </span>
           <div className="budget-progress" aria-hidden="true">
             <b style={{ width: `${ratio * 100}%` }} />
           </div>
-        </div>
+        </button>
         <label className="budget-input">
           <span>{currencySymbol(settings.currencyCode)}</span>
           <input
@@ -2045,8 +2785,12 @@ function BudgetView({
 function SettingsView({
   settings,
   state,
+  transactions,
   members,
+  currentMember,
   capabilities,
+  currencyChangeAllowed,
+  currencyChangeMessage,
   importText,
   importError,
   syncMode,
@@ -2056,6 +2800,10 @@ function SettingsView({
   isCloudLoading,
   pendingInvites,
   onSettingsChange,
+  onUpdateProfileName,
+  onSaveCategory,
+  onRemoveCategory,
+  onUnhideCategory,
   onAddMember,
   onImportTextChange,
   onImport,
@@ -2063,12 +2811,17 @@ function SettingsView({
   onRefresh,
   onSignOut,
   onCreateSharedBudget,
-  onAcceptInvite
+  onAcceptInvite,
+  onOpenTransaction
 }: {
   settings: BudgetSettings;
   state: AppState;
+  transactions: BudgetTransaction[];
   members: BudgetMember[];
+  currentMember?: BudgetMember;
   capabilities: HouseholdCapabilities;
+  currencyChangeAllowed: boolean;
+  currencyChangeMessage: string;
   importText: string;
   importError: string;
   syncMode: SyncMode;
@@ -2078,6 +2831,10 @@ function SettingsView({
   isCloudLoading: boolean;
   pendingInvites: BudgetInvite[];
   onSettingsChange: (settings: BudgetSettings) => void;
+  onUpdateProfileName: (name: string) => string | undefined;
+  onSaveCategory: (input: CategorySaveInput) => string | undefined;
+  onRemoveCategory: (categoryId: string) => string | undefined;
+  onUnhideCategory: (categoryId: string) => void;
   onAddMember: (name: string, email: string) => boolean;
   onImportTextChange: (value: string) => void;
   onImport: () => void;
@@ -2086,12 +2843,81 @@ function SettingsView({
   onSignOut: () => void;
   onCreateSharedBudget: (name: string) => void;
   onAcceptInvite: (invite: BudgetInvite) => void;
+  onOpenTransaction: (transaction: BudgetTransaction) => void;
 }) {
+  const [profileName, setProfileName] = useState(currentMember?.displayName ?? "");
+  const [profileMessage, setProfileMessage] = useState("");
   const [memberName, setMemberName] = useState("");
   const [memberEmail, setMemberEmail] = useState("");
   const [sharedBudgetName, setSharedBudgetName] = useState("");
   const [memberMessage, setMemberMessage] = useState("");
   const [sharedBudgetMessage, setSharedBudgetMessage] = useState("");
+  const [categoryNameInput, setCategoryNameInput] = useState("");
+  const [categoryEmojiInput, setCategoryEmojiInput] = useState("");
+  const [editingCategoryId, setEditingCategoryId] = useState<string | undefined>();
+  const [categoryMessage, setCategoryMessage] = useState("");
+
+  const visibleCategories = visibleExpenseCategories(settings, transactions);
+  const hiddenIds = hiddenExpenseCategoryIds(settings);
+  const hiddenCategories = expenseCategories.filter((category) => hiddenIds.has(category.id));
+  const recurringExpenses = activeRecurringExpenses(transactions);
+
+  useEffect(() => {
+    setProfileName(currentMember?.displayName ?? "");
+    setProfileMessage("");
+  }, [currentMember?.displayName, currentMember?.id]);
+
+  function handleProfileName(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const error = onUpdateProfileName(profileName);
+    setProfileMessage(error ?? "Profile name updated.");
+  }
+
+  function resetCategoryForm() {
+    setCategoryNameInput("");
+    setCategoryEmojiInput("");
+    setEditingCategoryId(undefined);
+  }
+
+  function editCategory(category: { id: string; name: string }) {
+    setEditingCategoryId(category.id);
+    setCategoryNameInput(category.name);
+    setCategoryEmojiInput(settings.categoryEmojis[category.id] ?? "");
+    setCategoryMessage("");
+  }
+
+  function handleSaveCategory(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const error = onSaveCategory({
+      oldCategoryId: editingCategoryId,
+      displayName: categoryNameInput,
+      emoji: categoryEmojiInput
+    });
+    if (error) {
+      setCategoryMessage(error);
+      return;
+    }
+    setCategoryMessage(editingCategoryId ? "Category updated." : "Category added.");
+    resetCategoryForm();
+  }
+
+  function handleRemoveCategory(categoryId: string) {
+    const category = visibleCategories.find((candidate) => candidate.id === categoryId);
+    if (!category || categoryId === "other") {
+      return;
+    }
+    const builtIn = expenseCategories.some((candidate) => candidate.id === categoryId);
+    if (!window.confirm(`${builtIn ? "Hide" : "Remove"} ${category.name}? Existing transactions will move to Other.`)) {
+      return;
+    }
+    const error = onRemoveCategory(categoryId);
+    setCategoryMessage(error ?? `${category.name} ${builtIn ? "hidden" : "removed"}.`);
+  }
+
+  function handleUnhideCategory(categoryId: string) {
+    onUnhideCategory(categoryId);
+    setCategoryMessage("Category restored.");
+  }
 
   function handleAddMember(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -2183,6 +3009,27 @@ function SettingsView({
             Sign out
           </button>
         </div>
+        <form className="profile-form" onSubmit={handleProfileName}>
+          <label className="field-row vertical">
+            <span>Profile name</span>
+            <input
+              value={profileName}
+              onChange={(event) => {
+                setProfileName(event.target.value);
+                setProfileMessage("");
+              }}
+              placeholder="Your name"
+              disabled={!currentMember}
+              aria-describedby="profile-name-note"
+            />
+          </label>
+          <button className="secondary-action" type="submit" disabled={!currentMember || !profileName.trim()}>
+            Save name
+          </button>
+        </form>
+        <p className="form-note" id="profile-name-note" role="status" aria-live="polite">
+          {profileMessage || (currentMember ? "Only your active profile can be edited." : "Your active profile is unavailable.")}
+        </p>
       </section>
 
       <section className="panel settings-panel">
@@ -2195,6 +3042,8 @@ function SettingsView({
             <span>Currency</span>
             <select
               value={settings.currencyCode}
+              disabled={!currencyChangeAllowed}
+              aria-describedby="currency-guardrail-note"
               onChange={(event) => onSettingsChange({ ...settings, currencyCode: event.target.value })}
             >
               {currencyOptions.map((currency) => (
@@ -2213,6 +3062,22 @@ function SettingsView({
             </div>
           </div>
         )}
+        {capabilities.canEditCurrency && (
+          <p className="form-note" id="currency-guardrail-note" role="status" aria-live="polite">
+            {currencyChangeMessage}
+          </p>
+        )}
+        <label className="field-row">
+          <span>Appearance</span>
+          <select
+            value={settings.appearance}
+            onChange={(event) => onSettingsChange({ ...settings, appearance: event.target.value as BudgetSettings["appearance"] })}
+          >
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
         <div className="status-row compact-status">
           <RefreshCcw size={18} aria-hidden="true" />
           <div>
@@ -2229,6 +3094,96 @@ function SettingsView({
             <i />
           </span>
         </div>
+      </section>
+
+      <section className="panel settings-panel category-settings-panel">
+        <div className="panel-heading">
+          <h2>Categories</h2>
+          <span>{visibleCategories.length} visible</span>
+        </div>
+        <p className="panel-intro">Manage expense categories used by your budget and transactions.</p>
+        <div className="category-list">
+          {visibleCategories.map((category) => {
+            const isBuiltIn = expenseCategories.some((candidate) => candidate.id === category.id);
+            const isProtected = category.id === "other";
+            return (
+              <div key={category.id} className="category-management-row">
+                <span className="category-management-emoji" aria-hidden="true">
+                  {settings.categoryEmojis[category.id] ?? "•"}
+                </span>
+                <div>
+                  <strong>{category.name}</strong>
+                  <span>{isBuiltIn ? "Built-in" : "Custom"}</span>
+                </div>
+                <div className="category-management-actions">
+                  <button className="ghost-button small" type="button" onClick={() => editCategory(category)}>
+                    Edit
+                  </button>
+                  <button
+                    className="ghost-button small"
+                    type="button"
+                    disabled={isProtected}
+                    title={isProtected ? "Other is protected" : undefined}
+                    onClick={() => handleRemoveCategory(category.id)}
+                  >
+                    {isBuiltIn ? "Hide" : "Remove"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {hiddenCategories.length > 0 && (
+          <div className="category-hidden-list">
+            <p className="form-note">Hidden built-in categories</p>
+            {hiddenCategories.map((category) => (
+              <div key={category.id} className="category-management-row">
+                <span className="category-management-emoji muted-emoji" aria-hidden="true">•</span>
+                <div>
+                  <strong>{category.name}</strong>
+                  <span>Hidden built-in</span>
+                </div>
+                <button className="ghost-button small" type="button" onClick={() => handleUnhideCategory(category.id)}>
+                  Unhide
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <form className="member-form category-form" onSubmit={handleSaveCategory}>
+          <input
+            value={categoryNameInput}
+            onChange={(event) => {
+              setCategoryNameInput(event.target.value);
+              setCategoryMessage("");
+            }}
+            placeholder="Category name"
+            aria-label="Category name"
+            disabled={editingCategoryId === "other"}
+          />
+          <input
+            value={categoryEmojiInput}
+            onChange={(event) => {
+              setCategoryEmojiInput(event.target.value);
+              setCategoryMessage("");
+            }}
+            placeholder="Optional emoji"
+            aria-label="Optional category emoji"
+            maxLength={12}
+          />
+          <button className="secondary-action" type="submit" disabled={!categoryNameInput.trim()}>
+            <Plus size={17} aria-hidden="true" />
+            {editingCategoryId ? "Save category" : "Add category"}
+          </button>
+          {editingCategoryId && (
+            <button className="ghost-button" type="button" onClick={resetCategoryForm}>
+              Cancel
+            </button>
+          )}
+        </form>
+        <p className="form-note" role="status" aria-live="polite">
+          {categoryMessage || "Use a display name. An optional icon must be one emoji."}
+        </p>
       </section>
 
       <section className="panel settings-panel">
@@ -2359,6 +3314,57 @@ function SettingsView({
         </section>
       )}
 
+      <section className="panel settings-panel">
+        <div className="panel-heading">
+          <h2>Recurring expenses</h2>
+          <RefreshCcw size={18} aria-hidden="true" />
+        </div>
+        {recurringExpenses.length === 0 ? (
+          <div className="empty-state">No recurring expenses right now.</div>
+        ) : (
+          <div className="recurring-expense-list">
+            {recurringExpenses.map((transaction) => {
+              const recurrence = parseMonthlyRecurrence(transaction.recurrenceRule);
+              const currencyCode = transaction.currencyCode ?? settings.currencyCode;
+              return (
+                <button
+                  key={transaction.id}
+                  className="recurring-expense-row"
+                  type="button"
+                  onClick={() => onOpenTransaction(transaction)}
+                >
+                  <span className="recurring-expense-icon" aria-hidden="true">
+                    <RefreshCcw size={16} />
+                  </span>
+                  <span className="recurring-expense-copy">
+                    <strong>{transaction.title}</strong>
+                    <span>{formatMoney(transaction.amount, currencyCode)} · {categoryName(transaction.category)}</span>
+                    <small>
+                      Started {formatDateLabel(transaction.date)} · {recurrence?.until ? `Stops ${formatDateLabel(`${recurrence.until}T12:00:00`)}` : "No stop date"}
+                    </small>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <section className="panel settings-panel">
+        <div className="panel-heading">
+          <h2>Privacy &amp; support</h2>
+          <span>Help</span>
+        </div>
+        <div className="support-links">
+          <a href="https://budgetmate.pages.dev/privacy.html" target="_blank" rel="noreferrer">
+            Privacy policy
+          </a>
+          <a href="https://budgetmate.pages.dev/support.html" target="_blank" rel="noreferrer">
+            Support
+          </a>
+        </div>
+      </section>
+
       <section className="panel settings-panel data-panel">
         <div className="panel-heading">
           <h2>Data</h2>
@@ -2419,6 +3425,7 @@ function SettingsView({
 }
 
 function TransactionDialog({
+  transaction,
   members,
   settings,
   transactions,
@@ -2426,6 +3433,7 @@ function TransactionDialog({
   onClose,
   onSubmit
 }: {
+  transaction?: BudgetTransaction;
   members: BudgetMember[];
   settings: BudgetSettings;
   transactions: BudgetTransaction[];
@@ -2433,21 +3441,30 @@ function TransactionDialog({
   onClose: () => void;
   onSubmit: (form: TransactionFormState) => void;
 }) {
-  const resolvedDefaultMemberId = defaultMemberId ?? members[0]?.id ?? "";
+  const resolvedDefaultMemberId = defaultMemberId ?? transaction?.createdByMemberId ?? members[0]?.id ?? "";
+  const recurrence = parseMonthlyRecurrence(transaction?.recurrenceRule);
   const expenseCategoryOptions = visibleExpenseCategories(settings, transactions);
   const defaultExpenseCategory = expenseCategoryOptions.some((category) => category.id === "groceries")
     ? "groceries"
     : expenseCategoryOptions[0]?.id ?? "other";
-  const [form, setForm] = useState<TransactionFormState>({
-    type: "expense",
-    title: "",
-    amount: "",
-    category: defaultExpenseCategory,
-    paymentMethod: "card",
-    createdByMemberId: resolvedDefaultMemberId,
-    date: todayInputValue(),
-    splitWithHousehold: false
-  });
+  const effectiveCurrencyCode = transaction?.currencyCode ?? settings.currencyCode;
+  const [form, setForm] = useState<TransactionFormState>(() => ({
+    type: transaction?.type ?? "expense",
+    title: transaction?.title ?? "",
+    amount: transaction ? String(transaction.amount) : "",
+    category: transaction?.category ?? defaultExpenseCategory,
+    paymentMethod: transaction?.paymentMethod,
+    createdByMemberId: transaction?.createdByMemberId ?? resolvedDefaultMemberId,
+    date: transaction ? localDateKey(new Date(transaction.date)) : todayInputValue(),
+    splitEnabled: transaction?.type === "expense" && transaction.splits.length > 0,
+    splitMethod: transaction?.splits.length ? "custom" : "equal",
+    splitMemberIds: transaction?.splits.map((split) => split.memberId) ?? [],
+    splitAmounts: Object.fromEntries(
+      transaction?.splits.map((split) => [split.memberId, String(split.amount)]) ?? []
+    ),
+    recurrenceEnabled: !!recurrence,
+    recurrenceEndDate: recurrence?.until ?? ""
+  }));
   const [formError, setFormError] = useState("");
   const dialogRef = useRef<HTMLFormElement | null>(null);
   const amountRef = useRef<HTMLInputElement | null>(null);
@@ -2455,7 +3472,35 @@ function TransactionDialog({
   const memberChoiceChangedRef = useRef(false);
 
   const categories = form.type === "income" ? incomeCategories : expenseCategoryOptions;
-
+  const formAmountMinorUnits = amountMinorUnits(form.amount, effectiveCurrencyCode);
+  const activeMembers = members.filter((member) => member.inviteStatus === "active");
+  const splitMembers = members.filter(
+    (member) => member.inviteStatus === "active" || form.splitMemberIds.includes(member.id)
+  );
+  const customSplitValidation =
+    form.type === "expense" && form.splitEnabled && form.splitMethod === "custom"
+      ? validateCustomSplitAmounts(formAmountMinorUnits, form.splitMemberIds, form.splitAmounts, effectiveCurrencyCode)
+      : undefined;
+  const equalAllocations =
+    form.type === "expense" && form.splitEnabled && formAmountMinorUnits !== undefined
+      ? allocateEqualSplitMinorUnits(formAmountMinorUnits, form.splitMemberIds, form.createdByMemberId)
+      : undefined;
+  const splitValidationMessage =
+    form.type !== "expense" || !form.splitEnabled
+      ? ""
+      : form.splitMemberIds.length === 0
+        ? "Select at least one member."
+        : formAmountMinorUnits === undefined
+          ? "Enter a valid amount to split."
+          : form.splitMethod === "equal" && !equalAllocations
+            ? "Amount too small for selected members."
+          : customSplitValidation?.status === "invalid"
+            ? "Enter valid split amounts."
+            : customSplitValidation?.status === "under"
+              ? `Add ${formatMoney(amountFromMinorUnits(customSplitValidation.differenceMinorUnits ?? 0, effectiveCurrencyCode), effectiveCurrencyCode)} to match the total.`
+              : customSplitValidation?.status === "over"
+                ? `${formatMoney(amountFromMinorUnits(customSplitValidation.differenceMinorUnits ?? 0, effectiveCurrencyCode), effectiveCurrencyCode)} over the total.`
+                : "";
   useEffect(() => {
     if (!categories.some((category) => category.id === form.category)) {
       setForm((current) => ({ ...current, category: categories[0]?.id ?? "other" }));
@@ -2530,7 +3575,7 @@ function TransactionDialog({
       const next = { ...current, ...patch };
       if (patch.type) {
         next.category = patch.type === "income" ? "work" : defaultExpenseCategory;
-        next.splitWithHousehold = false;
+        next.splitEnabled = false;
       }
       return next;
     });
@@ -2547,8 +3592,25 @@ function TransactionDialog({
       setFormError("Enter an amount greater than zero.");
       return;
     }
+    if (formAmountMinorUnits === undefined) {
+      setFormError("Enter a valid amount for this currency.");
+      return;
+    }
     if (!form.date || !form.createdByMemberId) {
       setFormError("Choose a date and member before saving.");
+      return;
+    }
+    const recurrenceRule = buildMonthlyRecurrence(form.recurrenceEnabled, form.recurrenceEndDate || undefined);
+    if (form.recurrenceEnabled && !recurrenceRule) {
+      setFormError("Enter a valid recurrence end date.");
+      return;
+    }
+    if (form.recurrenceEnabled && form.recurrenceEndDate && form.recurrenceEndDate < form.date) {
+      setFormError("Recurrence end date cannot be before the transaction date.");
+      return;
+    }
+    if (splitValidationMessage) {
+      setFormError(splitValidationMessage);
       return;
     }
 
@@ -2569,8 +3631,8 @@ function TransactionDialog({
         ref={dialogRef}
       >
         <div className="dialog-header">
-          <h2 id="transaction-dialog-title">Add transaction</h2>
-          <button className="icon-button" onClick={onClose} title="Close" aria-label="Close add transaction" type="button">
+          <h2 id="transaction-dialog-title">{transaction ? "Edit transaction" : "Add transaction"}</h2>
+          <button className="icon-button" onClick={onClose} title="Close" aria-label={`Close ${transaction ? "edit" : "add"} transaction`} type="button">
             <X size={18} aria-hidden="true" />
           </button>
         </div>
@@ -2597,7 +3659,7 @@ function TransactionDialog({
         <label className="amount-hero">
           <span>Amount</span>
           <div>
-            <b>{currencySymbol(settings.currencyCode)}</b>
+            <b>{currencySymbol(effectiveCurrencyCode)}</b>
             <input
               type="number"
               min="0"
@@ -2614,7 +3676,7 @@ function TransactionDialog({
               ref={amountRef}
               required
               aria-label="Transaction amount"
-              aria-invalid={!!formError && normalizeAmount(Number(form.amount)) <= 0}
+              aria-invalid={!!formError && (normalizeAmount(Number(form.amount)) <= 0 || formAmountMinorUnits === undefined)}
               aria-describedby={formError ? "transaction-form-error" : undefined}
             />
           </div>
@@ -2651,6 +3713,20 @@ function TransactionDialog({
           </label>
         </div>
 
+        {form.type === "expense" && (
+          <label className="field-row vertical">
+            <span>Payment method</span>
+            <select
+              value={form.paymentMethod ?? "card"}
+              onChange={(event) => updateForm({ paymentMethod: event.target.value as "cash" | "card" | "paypal" })}
+            >
+              <option value="cash">Cash</option>
+              <option value="card">Card</option>
+              <option value="paypal">PayPal</option>
+            </select>
+          </label>
+        )}
+
         <label className="field-row vertical">
           <span>{form.type === "income" ? "Income for" : "Paid by"}</span>
           <select
@@ -2669,18 +3745,115 @@ function TransactionDialog({
           </select>
         </label>
 
-        {form.type === "expense" && members.length > 1 && (
-          <label className="toggle-row">
+        <label className="toggle-row">
+          <input
+            type="checkbox"
+            checked={form.recurrenceEnabled}
+            onChange={(event) => updateForm({ recurrenceEnabled: event.target.checked })}
+          />
+          <span>
+            <strong>Repeat monthly</strong>
+            <small>{form.recurrenceEnabled ? "Create this transaction on the same day each month." : "This transaction happens once."}</small>
+          </span>
+        </label>
+
+        {form.recurrenceEnabled && (
+          <label className="field-row vertical">
+            <span>End date (optional)</span>
             <input
-              type="checkbox"
-              checked={form.splitWithHousehold}
-              onChange={(event) => updateForm({ splitWithHousehold: event.target.checked })}
+              type="date"
+              value={form.recurrenceEndDate}
+              min={form.date}
+              onChange={(event) => updateForm({ recurrenceEndDate: event.target.value })}
             />
-            <span>
-              <strong>Split with household</strong>
-              <small>Divide evenly across {members.length} {members.length === 1 ? "member" : "members"}</small>
-            </span>
           </label>
+        )}
+
+        {form.type === "expense" && activeMembers.length > 0 && (
+          <>
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={form.splitEnabled}
+                onChange={(event) => updateForm({ splitEnabled: event.target.checked })}
+              />
+              <span>
+                <strong>Split this expense</strong>
+                <small>{form.splitEnabled ? "Choose participants and allocation." : "Share this expense with household members."}</small>
+              </span>
+            </label>
+
+            {form.splitEnabled && (
+              <section className="split-editor" aria-label="Expense split editor">
+                <div className="segmented split-method" role="group" aria-label="Split method">
+                  <button
+                    className={form.splitMethod === "equal" ? "active" : ""}
+                    onClick={() => updateForm({ splitMethod: "equal" })}
+                    aria-pressed={form.splitMethod === "equal"}
+                    type="button"
+                  >
+                    Equal
+                  </button>
+                  <button
+                    className={form.splitMethod === "custom" ? "active" : ""}
+                    onClick={() => updateForm({ splitMethod: "custom" })}
+                    aria-pressed={form.splitMethod === "custom"}
+                    type="button"
+                  >
+                    Custom
+                  </button>
+                </div>
+
+                <div className="split-editor-list">
+                  {splitMembers.map((member) => {
+                    const selected = form.splitMemberIds.includes(member.id);
+                    const equalShare = equalAllocations?.find((allocation) => allocation.memberId === member.id);
+                    return (
+                      <div key={member.id} className="split-editor-row">
+                        <label className="split-member-choice">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            disabled={member.inviteStatus !== "active"}
+                            onChange={(event) => updateForm({
+                              splitMemberIds: event.target.checked
+                                ? [...form.splitMemberIds, member.id]
+                                : form.splitMemberIds.filter((id) => id !== member.id)
+                            })}
+                          />
+                          <MemberBadge member={member} />
+                          <span>{member.displayName}{member.id === form.createdByMemberId ? " (paid)" : ""}</span>
+                        </label>
+                        {selected && form.splitMethod === "equal" && equalShare && (
+                          <strong>{formatMoney(amountFromMinorUnits(equalShare.amountMinorUnits, effectiveCurrencyCode), effectiveCurrencyCode)}</strong>
+                        )}
+                        {selected && form.splitMethod === "custom" && (
+                          <input
+                            className="split-amount-input"
+                            type="number"
+                            min="0"
+                            step={normalizedCurrencyCode(effectiveCurrencyCode) === "JPY" ? "1" : "0.01"}
+                            value={form.splitAmounts[member.id] ?? ""}
+                            onChange={(event) => updateForm({
+                              splitAmounts: { ...form.splitAmounts, [member.id]: event.target.value }
+                            })}
+                            placeholder={formatAmountNumber(0, effectiveCurrencyCode)}
+                            aria-label={`Amount for ${member.displayName}`}
+                            aria-invalid={customSplitValidation?.status === "invalid"}
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                {splitValidationMessage && (
+                  <p className="form-error" id="split-validation-error" role="alert">
+                    {splitValidationMessage}
+                  </p>
+                )}
+              </section>
+            )}
+          </>
         )}
 
         {formError && (
@@ -2693,9 +3866,9 @@ function TransactionDialog({
           <button className="ghost-button" onClick={onClose} type="button">
             Cancel
           </button>
-          <button className="primary-action full" type="submit">
-            <Plus size={18} aria-hidden="true" />
-            Add transaction
+          <button className="primary-action full" type="submit" disabled={!!splitValidationMessage}>
+            {transaction ? <CheckCircle2 size={18} aria-hidden="true" /> : <Plus size={18} aria-hidden="true" />}
+            {transaction ? "Save changes" : "Add transaction"}
           </button>
         </div>
       </form>
@@ -2703,14 +3876,423 @@ function TransactionDialog({
   );
 }
 
+function CategoryTransactionsDialog({
+  category,
+  selectedMonth,
+  transactions,
+  settings,
+  members,
+  memberId,
+  onClose,
+  onOpenTransaction
+}: {
+  category: string;
+  selectedMonth: string;
+  transactions: BudgetTransaction[];
+  settings: BudgetSettings;
+  members: BudgetMember[];
+  memberId?: string;
+  onClose: () => void;
+  onOpenTransaction: (transaction: BudgetTransaction) => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const total = categoryBreakdown(transactions, memberId).find((item) => item.category === category)?.amount ?? 0;
+
+  useEffect(() => {
+    const focusId = window.requestAnimationFrame(() => closeRef.current?.focus());
+    function focusableElements() {
+      return Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      ).filter((element) => element.offsetWidth > 0 || element.offsetHeight > 0 || element.getClientRects().length > 0);
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") {
+        return;
+      }
+      const elements = focusableElements();
+      if (elements.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusId);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
+      <div
+        className="dialog category-transactions-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="category-transactions-title"
+        ref={dialogRef}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="dialog-header">
+          <div>
+            <p className="eyebrow">Category expenses</p>
+            <h2 id="category-transactions-title">{categoryName(category)}</h2>
+          </div>
+          <button ref={closeRef} className="icon-button" onClick={onClose} title="Close" aria-label="Close category expenses" type="button">
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+        <div className="category-detail-summary">
+          <span>{formatMonthLabel(selectedMonth)}</span>
+          <strong>{formatMoney(total, settings.currencyCode)}</strong>
+          <small>{transactions.length} {transactions.length === 1 ? "expense" : "expenses"}</small>
+        </div>
+        {transactions.length === 0 ? (
+          <div className="empty-state">No {categoryName(category).toLowerCase()} expenses in this view.</div>
+        ) : (
+          <TransactionList
+            transactions={transactions}
+            settings={settings}
+            members={members}
+            onOpenTransaction={onOpenTransaction}
+          />
+        )}
+        <div className="dialog-actions">
+          <button className="ghost-button" onClick={onClose} type="button">Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettlementHistoryDialog({
+  settlements,
+  settings,
+  members,
+  canDelete,
+  onClose,
+  onDelete
+}: {
+  settlements: Settlement[];
+  settings: BudgetSettings;
+  members: BudgetMember[];
+  canDelete: (settlement: Settlement) => boolean;
+  onClose: () => void;
+  onDelete: (id: string) => boolean;
+}) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const memberById = new Map(members.map((member) => [member.id, member]));
+  const sortedSettlements = [...settlements].sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime());
+
+  useEffect(() => {
+    const focusId = window.requestAnimationFrame(() => closeRef.current?.focus());
+    function focusableElements() {
+      return Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      ).filter((element) => element.offsetWidth > 0 || element.offsetHeight > 0 || element.getClientRects().length > 0);
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") {
+        return;
+      }
+      const elements = focusableElements();
+      if (elements.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusId);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
+      <div
+        className="dialog settlement-history-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settlement-history-title"
+        ref={dialogRef}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="dialog-header">
+          <div>
+            <p className="eyebrow">Active budget</p>
+            <h2 id="settlement-history-title">Settlement history</h2>
+          </div>
+          <button ref={closeRef} className="icon-button" onClick={onClose} title="Close" aria-label="Close settlement history" type="button">
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+        {sortedSettlements.length === 0 ? (
+          <div className="empty-state">No settlement payments recorded yet.</div>
+        ) : (
+          <div className="settlement-history-list">
+            {sortedSettlements.map((settlement) => {
+              const from = memberById.get(settlement.fromMemberId)?.displayName ?? "Member unavailable";
+              const to = memberById.get(settlement.toMemberId)?.displayName ?? "Member unavailable";
+              const creatorId = settlement.createdByUserId ?? settlement.userId;
+              const creator = members.find((member) => member.authUserId === creatorId || member.id === creatorId)?.displayName ?? creatorId;
+              const deletable = canDelete(settlement);
+              const currencyCode = settlement.currencyCode ?? settings.currencyCode;
+              return (
+                <article key={settlement.id} className="settlement-history-row">
+                  <dl className="settlement-history-detail">
+                    <div><dt>From</dt><dd>{from}</dd></div>
+                    <div><dt>To</dt><dd>{to}</dd></div>
+                    <div><dt>Amount</dt><dd>{formatMoney(settlement.amount, currencyCode)}</dd></div>
+                    <div><dt>Date</dt><dd>{formatDateLabel(settlement.date)}</dd></div>
+                    <div><dt>Creator</dt><dd>{creator}</dd></div>
+                    <div><dt>Status</dt><dd>{deletable ? "Editable by you" : "Read-only"}</dd></div>
+                  </dl>
+                  <button
+                    className="danger-action settlement-delete-action"
+                    type="button"
+                    onClick={() => onDelete(settlement.id)}
+                    disabled={!deletable}
+                    title={deletable ? "Delete settlement" : "This settlement is read-only"}
+                  >
+                    <Trash2 size={16} aria-hidden="true" />
+                    Delete
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        )}
+        <div className="dialog-actions">
+          <button className="ghost-button" onClick={onClose} type="button">Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TransactionDetailDialog({
+  transaction,
+  sourceTransaction,
+  settings,
+  members,
+  canEdit,
+  canDelete,
+  mutationReadOnlyMessage,
+  onClose,
+  onEdit,
+  onDelete,
+  onStopFutureOccurrences
+}: {
+  transaction: BudgetTransaction;
+  sourceTransaction?: BudgetTransaction;
+  settings: BudgetSettings;
+  members: BudgetMember[];
+  canEdit: boolean;
+  canDelete: boolean;
+  mutationReadOnlyMessage: string;
+  onClose: () => void;
+  onEdit: () => void;
+  onDelete: (id: string) => void;
+  onStopFutureOccurrences: (id: string, occurrenceDate: string) => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const currencyCode = transaction.currencyCode ?? settings.currencyCode;
+  const memberById = new Map(members.map((member) => [member.id, member]));
+  const payer = memberById.get(transaction.createdByMemberId)?.displayName ?? "Member unavailable";
+  const creator = transaction.createdByUserId
+    ? members.find((member) => member.authUserId === transaction.createdByUserId || member.id === transaction.createdByUserId)?.displayName ?? transaction.createdByUserId
+    : undefined;
+  const recurrence = recurrenceSummary(transaction.recurrenceRule);
+  const isOccurrence = !!sourceTransaction && sourceTransaction.date !== transaction.date;
+  const isRecurring = !!parseMonthlyRecurrence(transaction.recurrenceRule);
+
+  useEffect(() => {
+    const focusId = window.requestAnimationFrame(() => closeRef.current?.focus());
+    function focusableElements() {
+      return Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      ).filter((element) => element.offsetWidth > 0 || element.offsetHeight > 0 || element.getClientRects().length > 0);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") {
+        return;
+      }
+
+      const elements = focusableElements();
+      if (elements.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      } else if (!dialogRef.current?.contains(active)) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusId);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
+      <div
+        className="dialog transaction-detail"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="transaction-detail-title"
+        ref={dialogRef}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="dialog-header">
+          <div>
+            <p className="eyebrow">Transaction details</p>
+            <h2 id="transaction-detail-title">{transaction.title}</h2>
+          </div>
+          <button ref={closeRef} className="icon-button" onClick={onClose} title="Close" aria-label="Close transaction details" type="button">
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className={`transaction-detail-amount ${transaction.type}`}>
+          <strong>{transaction.type === "expense" ? "−" : "+"}{formatMoney(transaction.amount, currencyCode)}</strong>
+          <span>{transaction.type === "expense" ? "Expense" : "Income"}</span>
+        </div>
+
+        <dl className="transaction-detail-grid">
+          <div><dt>Category</dt><dd>{categoryName(transaction.category)}</dd></div>
+          <div><dt>Date</dt><dd>{formatDateLabel(transaction.date)}</dd></div>
+          <div><dt>{transaction.type === "expense" ? "Paid by" : "Income for"}</dt><dd>{payer}</dd></div>
+          <div><dt>Payment method</dt><dd>{transaction.paymentMethod ? transaction.paymentMethod === "paypal" ? "PayPal" : transaction.paymentMethod === "cash" ? "Cash" : "Card" : "Not specified"}</dd></div>
+          <div><dt>Recurrence</dt><dd>{recurrence}</dd></div>
+          {creator && <div><dt>Creator</dt><dd>{creator}</dd></div>}
+        </dl>
+
+        {isOccurrence && (
+          <p className="form-note" role="status">
+            This is a recurring occurrence. Editing updates the saved source transaction.
+          </p>
+        )}
+
+        <section className="transaction-splits" aria-labelledby="transaction-splits-title">
+          <h3 id="transaction-splits-title">Split participants</h3>
+          {transaction.splits.length === 0 ? (
+            <p className="form-note">Not split with the household.</p>
+          ) : (
+            <div className="split-list">
+              {transaction.splits.map((split) => (
+                <div key={split.id} className="split-row">
+                  <span>{memberById.get(split.memberId)?.displayName ?? "Member unavailable"}</span>
+                  <strong>{formatMoney(split.amount, currencyCode)}</strong>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {!canEdit && <p className="form-note" role="status">{mutationReadOnlyMessage}</p>}
+        <div className="dialog-actions transaction-detail-actions">
+          <button className="ghost-button" onClick={onClose} type="button">Close</button>
+          {isOccurrence && isRecurring && (
+            <button
+              className="ghost-button"
+              onClick={() => onStopFutureOccurrences(transaction.id, transaction.date)}
+              disabled={!canEdit}
+              title={!canEdit ? mutationReadOnlyMessage : "Stop future occurrences"}
+              type="button"
+            >
+              Stop future occurrences
+            </button>
+          )}
+          <button
+            className="danger-action"
+            onClick={() => onDelete(transaction.id)}
+            disabled={!canDelete}
+            title={!canDelete ? mutationReadOnlyMessage : isRecurring ? "Delete recurring series" : "Delete transaction"}
+            type="button"
+          >
+            <Trash2 size={17} aria-hidden="true" />
+            {isRecurring ? "Delete recurring series" : "Delete"}
+          </button>
+          <button
+            className="primary-action"
+            onClick={onEdit}
+            disabled={!canEdit}
+            title={!canEdit ? mutationReadOnlyMessage : "Edit transaction"}
+            type="button"
+          >
+            Edit transaction
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TransactionList({
   transactions,
   settings,
-  members
+  members,
+  onOpenTransaction
 }: {
   transactions: BudgetTransaction[];
   settings: BudgetSettings;
   members: BudgetMember[];
+  onOpenTransaction: (transaction: BudgetTransaction) => void;
 }) {
   const memberById = new Map(members.map((member) => [member.id, member]));
 
@@ -2722,7 +4304,15 @@ function TransactionList({
         transactions.map((transaction) => {
           const member = memberById.get(transaction.createdByMemberId);
           return (
-            <div key={transaction.id} className="compact-row">
+            <div
+              key={transaction.id}
+              className="compact-row compact-row-open"
+              role="button"
+              tabIndex={0}
+              aria-label={`Open details for ${transaction.title}`}
+              onClick={() => onOpenTransaction(transaction)}
+              onKeyDown={(event) => activateTransactionOnKeyDown(event, () => onOpenTransaction(transaction))}
+            >
               <span className={`transaction-icon ${transaction.type}`} aria-hidden="true">
                 {transaction.type === "income" ? <ArrowUpCircle size={17} /> : <ArrowDownCircle size={17} />}
               </span>

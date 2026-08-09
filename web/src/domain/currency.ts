@@ -21,14 +21,18 @@ export function normalizedCurrencyCode(code: string): string {
 
 export function currencySymbol(code: string): string {
   const normalized = normalizedCurrencyCode(code);
+  if (normalized === "CAD") {
+    return "$";
+  }
   return currencyOptions.find((option) => option.code === normalized)?.symbol ?? "$";
 }
 
 export function formatMoney(amount: number, currencyCode: string): string {
-  return new Intl.NumberFormat("en-US", {
+  const normalized = normalizedCurrencyCode(currencyCode);
+  return new Intl.NumberFormat(normalized === "CAD" ? "en-CA" : "en-US", {
     style: "currency",
-    currency: normalizedCurrencyCode(currencyCode),
-    maximumFractionDigits: normalizedCurrencyCode(currencyCode) === "JPY" ? 0 : 2
+    currency: normalized,
+    maximumFractionDigits: normalized === "JPY" ? 0 : 2
   }).format(amount);
 }
 
@@ -38,4 +42,24 @@ export function formatAmountNumber(amount: number, currencyCode: string): string
     minimumFractionDigits: normalizedCurrencyCode(currencyCode) === "JPY" ? 0 : 2,
     maximumFractionDigits: normalizedCurrencyCode(currencyCode) === "JPY" ? 0 : 2
   }).format(amount);
+}
+
+export function amountMinorUnits(value: string | number, currencyCode: string): number | undefined {
+  const fractionDigits = normalizedCurrencyCode(currencyCode) === "JPY" ? 0 : 2;
+  const text = String(value).trim().replace(/^\+/, "");
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(text);
+  if (!match) {
+    return undefined;
+  }
+
+  const whole = match[1];
+  const fraction = match[2] ?? "";
+  const kept = fraction.slice(0, fractionDigits).padEnd(fractionDigits, "0");
+  const shouldRound = fraction.length > fractionDigits && Number(fraction[fractionDigits]) >= 5;
+  const scaled = Number(`${whole}${kept}` || "0") + (shouldRound ? 1 : 0);
+  return Number.isSafeInteger(scaled) ? scaled : undefined;
+}
+
+export function amountFromMinorUnits(value: number, currencyCode: string): number {
+  return value / (normalizedCurrencyCode(currencyCode) === "JPY" ? 1 : 100);
 }

@@ -1,4 +1,4 @@
-import { isInternalBudgetKey } from "./budgetMath";
+import { isInternalBudgetKey, isMonthBudgetKey, monthBudgetKey } from "./budgetMath";
 import type { BudgetSettings, BudgetTransaction } from "./types";
 
 export interface CategoryDefinition {
@@ -40,15 +40,32 @@ const allCategories = new Map(
 );
 
 const builtInCategoryIds = new Set(allCategories.keys());
-const hiddenCategoryPrefix = "__hiddenCategory__";
-const monthBudgetPrefix = "__monthBudget__:";
+const builtInExpenseCategoryIds = new Set(expenseCategories.map((category) => category.id));
+export const hiddenCategoryPrefix = "__hiddenCategory__";
+
+export function hiddenCategoryKey(categoryId: string): string {
+  return `${hiddenCategoryPrefix}${categoryId}`;
+}
+
+function monthBudgetCategory(key: string): { month: string; category: string } | undefined {
+  if (!isMonthBudgetKey(key)) {
+    return undefined;
+  }
+
+  const value = key.slice("__monthBudget__:".length);
+  const separatorIndex = value.indexOf(":");
+  if (separatorIndex < 0) {
+    return undefined;
+  }
+
+  const month = value.slice(0, separatorIndex);
+  const category = value.slice(separatorIndex + 1);
+  return month && category ? { month, category } : undefined;
+}
 
 function categoryIdFromBudgetKey(key: string): string | undefined {
-  if (key.startsWith(monthBudgetPrefix)) {
-    const scopedValue = key.slice(monthBudgetPrefix.length);
-    const separatorIndex = scopedValue.indexOf(":");
-    return separatorIndex >= 0 ? scopedValue.slice(separatorIndex + 1) || undefined : undefined;
-  }
+  const scoped = monthBudgetCategory(key);
+  if (scoped) return scoped.category;
 
   return isInternalBudgetKey(key) ? undefined : key;
 }
@@ -60,6 +77,161 @@ export function hiddenExpenseCategoryIds(settings: BudgetSettings): Set<string> 
       .map((key) => key.slice(hiddenCategoryPrefix.length))
       .filter(Boolean)
   );
+}
+
+export function categoryIdFromDisplayName(displayName: string): string | undefined {
+  const words = displayName
+    .trim()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+    .map((word) => word.toLowerCase());
+
+  if (words.length === 0) {
+    return undefined;
+  }
+
+  return [words[0], ...words.slice(1).map((word) => `${word[0].toUpperCase()}${word.slice(1)}`)].join("");
+}
+
+type GraphemeSegmenter = {
+  segment(value: string): Iterable<{ segment: string }>;
+};
+
+type IntlWithSegmenter = typeof Intl & {
+  Segmenter?: new (
+    locales?: string | string[],
+    options?: { granularity: "grapheme" }
+  ) => GraphemeSegmenter;
+};
+
+export function isSingleEmoji(value: string): boolean {
+  const trimmed = value.trim();
+  const Segmenter = (Intl as IntlWithSegmenter).Segmenter;
+  if (!trimmed || !Segmenter) {
+    return false;
+  }
+
+  const graphemes = [...new Segmenter(undefined, { granularity: "grapheme" }).segment(trimmed)].map(
+    (part) => part.segment
+  );
+  if (graphemes.length !== 1) {
+    return false;
+  }
+
+  const grapheme = graphemes[0];
+  if (!/\p{Emoji}/u.test(grapheme)) {
+    return false;
+  }
+
+  if (/^[0-9#*]\uFE0F?\u20E3$/u.test(grapheme)) {
+    return true;
+  }
+
+  return Array.from(grapheme).some((scalar) => {
+    const codePoint = scalar.codePointAt(0) ?? 0;
+    return /\p{Emoji_Presentation}/u.test(scalar) ||
+      (codePoint > 0x238c && /\p{Emoji}/u.test(scalar));
+  });
+}
+
+export function normalizedCategoryEmoji(value?: string): string | undefined {
+  const trimmed = value?.trim() ?? "";
+  return trimmed && isSingleEmoji(trimmed) ? trimmed : undefined;
+}
+
+function copySettings(settings: BudgetSettings): BudgetSettings {
+  return {
+    ...settings,
+    categoryBudgets: { ...settings.categoryBudgets },
+    categoryEmojis: { ...settings.categoryEmojis }
+  };
+}
+
+export function addCategorySettings(
+  settings: BudgetSettings,
+  categoryId: string,
+  emoji?: string
+): BudgetSettings {
+  const next = copySettings(settings);
+  next.categoryBudgets[categoryId] = 0;
+  delete next.categoryBudgets[hiddenCategoryKey(categoryId)];
+  delete next.categoryEmojis[categoryId];
+  const normalizedEmoji = normalizedCategoryEmoji(emoji);
+  if (normalizedEmoji) {
+    next.categoryEmojis[categoryId] = normalizedEmoji;
+  }
+  return next;
+}
+
+export function updateCategoryEmojiSettings(
+  settings: BudgetSettings,
+  categoryId: string,
+  emoji?: string
+): BudgetSettings {
+  const next = copySettings(settings);
+  delete next.categoryEmojis[categoryId];
+  const normalizedEmoji = normalizedCategoryEmoji(emoji);
+  if (normalizedEmoji) {
+    next.categoryEmojis[categoryId] = normalizedEmoji;
+  }
+  return next;
+}
+
+export function renameCategorySettings(
+  settings: BudgetSettings,
+  oldCategoryId: string,
+  newCategoryId: string,
+  emoji?: string
+): BudgetSettings {
+  const next = copySettings(settings);
+  next.categoryBudgets[newCategoryId] = next.categoryBudgets[oldCategoryId] ?? 0;
+  delete next.categoryBudgets[oldCategoryId];
+
+  for (const [key, amount] of Object.entries(settings.categoryBudgets)) {
+    const scoped = monthBudgetCategory(key);
+    if (!scoped || scoped.category !== oldCategoryId) {
+      continue;
+    }
+    next.categoryBudgets[monthBudgetKey(scoped.month, newCategoryId)] = amount;
+    delete next.categoryBudgets[key];
+  }
+
+  const currentEmoji = normalizedCategoryEmoji(emoji) ?? settings.categoryEmojis[oldCategoryId];
+  delete next.categoryEmojis[oldCategoryId];
+  delete next.categoryEmojis[newCategoryId];
+  if (currentEmoji) {
+    next.categoryEmojis[newCategoryId] = currentEmoji;
+  }
+
+  if (builtInExpenseCategoryIds.has(oldCategoryId)) {
+    next.categoryBudgets[hiddenCategoryKey(oldCategoryId)] = 1;
+  }
+  delete next.categoryBudgets[hiddenCategoryKey(newCategoryId)];
+  return next;
+}
+
+export function removeCategorySettings(settings: BudgetSettings, categoryId: string): BudgetSettings {
+  const next = copySettings(settings);
+  if (builtInExpenseCategoryIds.has(categoryId)) {
+    next.categoryBudgets[categoryId] = 0;
+    next.categoryBudgets[hiddenCategoryKey(categoryId)] = 1;
+  } else {
+    delete next.categoryBudgets[categoryId];
+    delete next.categoryBudgets[hiddenCategoryKey(categoryId)];
+  }
+  delete next.categoryEmojis[categoryId];
+  for (const key of Object.keys(next.categoryBudgets)) {
+    if (monthBudgetCategory(key)?.category === categoryId) {
+      delete next.categoryBudgets[key];
+    }
+  }
+  return next;
+}
+
+export function unhideCategorySettings(settings: BudgetSettings, categoryId: string): BudgetSettings {
+  const next = copySettings(settings);
+  delete next.categoryBudgets[hiddenCategoryKey(categoryId)];
+  return next;
 }
 
 export function visibleExpenseCategories(

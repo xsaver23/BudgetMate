@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { monthKey, transactionsForMonth } from "./budgetMath";
+import { monthKey, settlementExplanation, transactionsForMonth } from "./budgetMath";
 import { localDateKey, localNoonISOString } from "./dates";
 import type { BudgetTransaction } from "./types";
 
@@ -64,5 +64,43 @@ describe("monthly recurrence", () => {
 
   it("does not expand non-recurring transactions", () => {
     expect(transactionsForMonth([transaction("2026-01-15")], "2026-02")).toEqual([]);
+  });
+});
+
+describe("settlement explanation", () => {
+  it("traces pair-specific splits and prior payments into the suggestion amount", () => {
+    const payer = "payer";
+    const debtor = "debtor";
+    const transactions = [
+      {
+        ...transaction("2026-07-11", undefined, "expense-1"),
+        title: "Groceries",
+        amount: 30,
+        createdByMemberId: payer,
+        splits: [{ id: "split-1", memberId: debtor, amount: 30 }]
+      },
+      {
+        ...transaction("2026-07-12", undefined, "expense-2"),
+        title: "Dinner",
+        amount: 10,
+        createdByMemberId: debtor,
+        splits: [{ id: "split-2", memberId: payer, amount: 10 }]
+      }
+    ];
+    const explanation = settlementExplanation(transactions, [{
+      id: "settlement-1",
+      budgetId: "budget",
+      userId: "user",
+      fromMemberId: debtor,
+      toMemberId: payer,
+      amount: 5,
+      date: localNoonISOString("2026-07-13")!
+    }], debtor, payer);
+
+    expect(explanation.owedExpenses).toHaveLength(1);
+    expect(explanation.reversedExpenses).toHaveLength(1);
+    expect(explanation.paidTotal).toBe(5);
+    expect(explanation.receivedTotal).toBe(0);
+    expect(explanation.netAmount).toBe(15);
   });
 });
