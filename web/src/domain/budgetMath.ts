@@ -342,6 +342,54 @@ export function settlementSuggestions(
   });
 }
 
+export function settlementExplanation(
+  transactions: BudgetTransaction[],
+  settlements: Settlement[],
+  fromMemberId: string,
+  toMemberId: string
+) {
+  const owedExpenses: Array<{ id: string; title: string; amount: number; date: string }> = [];
+  const reversedExpenses: Array<{ id: string; title: string; amount: number; date: string }> = [];
+
+  for (const transaction of transactions) {
+    if (transaction.type !== "expense" || transaction.splits.length === 0) {
+      continue;
+    }
+
+    const splitAmount = (memberId: string) => transaction.splits.find((split) => split.memberId === memberId)?.amount ?? 0;
+    if (transaction.createdByMemberId === toMemberId && splitAmount(fromMemberId) > 0) {
+      owedExpenses.push({ id: transaction.id, title: transaction.title, amount: splitAmount(fromMemberId), date: transaction.date });
+    }
+    if (transaction.createdByMemberId === fromMemberId && splitAmount(toMemberId) > 0) {
+      reversedExpenses.push({ id: transaction.id, title: transaction.title, amount: splitAmount(toMemberId), date: transaction.date });
+    }
+  }
+
+  const priorSettlements = settlements.filter((settlement) =>
+    (settlement.fromMemberId === fromMemberId && settlement.toMemberId === toMemberId) ||
+    (settlement.fromMemberId === toMemberId && settlement.toMemberId === fromMemberId)
+  );
+  const expenseTotal = owedExpenses.reduce((total, item) => total + cents(item.amount), 0) / 100;
+  const reversedExpenseTotal = reversedExpenses.reduce((total, item) => total + cents(item.amount), 0) / 100;
+  const paidTotal = priorSettlements
+    .filter((settlement) => settlement.fromMemberId === fromMemberId)
+    .reduce((total, settlement) => total + cents(settlement.amount), 0) / 100;
+  const receivedTotal = priorSettlements
+    .filter((settlement) => settlement.fromMemberId === toMemberId)
+    .reduce((total, settlement) => total + cents(settlement.amount), 0) / 100;
+
+  return {
+    owedExpenses,
+    reversedExpenses,
+    priorSettlements,
+    expenseTotal,
+    reversedExpenseTotal,
+    paidTotal,
+    receivedTotal,
+    netAmount: expenseTotal - reversedExpenseTotal - paidTotal + receivedTotal
+  };
+}
+
 export function normalizeAmount(amount: number): number {
   if (!Number.isFinite(amount)) {
     return 0;

@@ -22,6 +22,7 @@ Live web app: [budgetmate.pages.dev](https://budgetmate.pages.dev)
 - Recurring expenses with optional stop dates.
 - Currency display preferences.
 - Member filters for dashboard, transactions, and budget views.
+- Transaction history grouped by newest day, with the newest-added transaction first within each day.
 - Local desktop mode for development and offline demos.
 - Cloud sync between iOS and web using the same Supabase tables.
 
@@ -138,6 +139,28 @@ Build check:
 ```bash
 xcodebuild -scheme BudgetMate -project BudgetMate.xcodeproj -destination 'generic/platform=iOS Simulator' build
 ```
+
+### Verification
+
+Use the newest installed iPhone simulator and iOS version. When a local rollout
+config enables Gate C, override the markers for unit tests that verify the
+checked-in safe defaults:
+
+```bash
+xcodebuild -quiet -project BudgetMate.xcodeproj -scheme BudgetMate \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' \
+  BUDGETMATE_GATE_C_SERVER_READY=NO \
+  BUDGETMATE_GATE_C_ENABLED=NO \
+  BUDGETMATE_MONEY_SERVER_BRIDGE_ENABLED=NO \
+  test -only-testing:BudgetMateTests
+
+./scripts/verify_ios_secrets.sh
+git diff --check
+```
+
+Recheck available simulator names and OS versions with `xcrun simctl list
+devices available` before running the command. Never commit
+`Supabase.local.xcconfig` or place credentials in tests or logs.
 
 ### Web
 

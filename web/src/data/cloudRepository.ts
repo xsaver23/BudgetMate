@@ -3,7 +3,7 @@ import { supabase } from "./supabaseClient";
 import { defaultBudgetSettings } from "../domain/defaults";
 import { monthlyBudget, uniqueTransactions } from "../domain/budgetMath";
 import { localDateKey, localNoonISOString } from "../domain/dates";
-import { normalizedCurrencyCode } from "../domain/currency";
+import { amountFromMinorUnits, normalizedCurrencyCode } from "../domain/currency";
 import { gateCFinancialWritesEnabled, gateCFinancialWritesReadOnlyMessage } from "./gateCRollout";
 import {
   GateCFinancialOutbox,
@@ -68,9 +68,12 @@ type MemberRow = {
 type TransactionRow = {
   id: string;
   user_id: string;
+  created_by_user_id?: string | null;
   budget_id: string;
   title: string;
   amount: number | string;
+  amount_minor_units?: number | string | null;
+  currency_code?: string | null;
   type: "income" | "expense";
   category: string;
   payment_method: "cash" | "card" | "paypal" | null;
@@ -81,15 +84,25 @@ type TransactionRow = {
   created_at: string;
   recurrence_rule: string | null;
   splits: Array<{ id: string; member_id?: string; memberId?: string; amount: number | string }> | null;
+  splits_minor_units?: Array<{
+    id: string;
+    member_id?: string;
+    memberId?: string;
+    amount_minor_units: number | string;
+    currency_code?: string | null;
+  }> | null;
 };
 
 type SettlementRow = {
   id: string;
   user_id: string;
+  created_by_user_id?: string | null;
   budget_id: string;
   from_member_id: string;
   to_member_id: string;
   amount: number | string;
+  amount_minor_units?: number | string | null;
+  currency_code?: string | null;
   date: string;
   occurred_on?: string | null;
   row_version?: number | string | null;
@@ -158,7 +171,7 @@ export async function retryGateCMutation<T>(operation: () => Promise<T>): Promis
 }
 
 function transactionMutationPayload(transaction: BudgetTransaction): Record<string, unknown> {
-  return {
+  const payload: Record<string, unknown> = {
     title: transaction.title,
     amount: transaction.amount,
     type: transaction.type,
@@ -175,16 +188,40 @@ function transactionMutationPayload(transaction: BudgetTransaction): Record<stri
       amount: split.amount
     }))
   };
+  if (transaction.amountMinorUnits !== undefined && transaction.currencyCode) {
+    payload.amount_minor_units = transaction.amountMinorUnits;
+    payload.currency_code = transaction.currencyCode;
+  }
+  const exactSplits = transaction.amountMinorUnits !== undefined && transaction.currencyCode && transaction.splits.every((split) =>
+    Number.isSafeInteger(split.amountMinorUnits) &&
+    (split.currencyCode === undefined || split.currencyCode === transaction.currencyCode)
+  )
+    ? transaction.splits.map((split) => ({
+        id: split.id,
+        member_id: split.memberId,
+        amount_minor_units: split.amountMinorUnits,
+        currency_code: split.currencyCode ?? transaction.currencyCode
+      }))
+    : undefined;
+  if (exactSplits) {
+    payload.splits_minor_units = exactSplits;
+  }
+  return payload;
 }
 
 function settlementMutationPayload(settlement: Settlement): Record<string, unknown> {
-  return {
+  const payload: Record<string, unknown> = {
     from_member_id: settlement.fromMemberId,
     to_member_id: settlement.toMemberId,
     amount: settlement.amount,
     date: swiftISODate(settlement.date),
     occurred_on: localDateKey(new Date(settlement.date))
   };
+  if (settlement.amountMinorUnits !== undefined && settlement.currencyCode) {
+    payload.amount_minor_units = settlement.amountMinorUnits;
+    payload.currency_code = settlement.currencyCode;
+  }
+  return payload;
 }
 
 async function invokeGateCMutation(
@@ -489,22 +526,64 @@ function remapSettlementMembers(settlement: Settlement, aliases: Map<string, str
   };
 }
 
-function mapSplits(splits: TransactionRow["splits"]): TransactionSplit[] {
-  return (splits ?? []).map((split) => ({
-    id: split.id,
-    memberId: split.member_id ?? split.memberId ?? "",
-    amount: Number(split.amount)
-  })).filter((split) => split.memberId && split.amount > 0);
+function mapSplits(
+  splits: TransactionRow["splits"],
+  exactSplits: TransactionRow["splits_minor_units"],
+  currencyCode?: string
+): TransactionSplit[] {
+  const exactById = new Map((exactSplits ?? []).map((split) => [split.id, split]));
+  const mapped = (splits ?? []).map((split) => {
+    const exact = exactById.get(split.id);
+    const parsedAmountMinor = exact == null ? undefined : Number(exact.amount_minor_units);
+    const amountMinor = parsedAmountMinor !== undefined && Number.isSafeInteger(parsedAmountMinor) ? parsedAmountMinor : undefined;
+    const splitCurrencyCode = exact?.currency_code ?? currencyCode;
+    const legacyAmount = Number(split.amount);
+    const exactFields = amountMinor !== undefined && amountMinor > 0 ? { amountMinorUnits: amountMinor } : {};
+    const exactAmount = amountMinor !== undefined && amountMinor > 0 && splitCurrencyCode
+      ? amountFromMinorUnits(amountMinor, splitCurrencyCode)
+      : undefined;
+    return {
+      id: split.id,
+      memberId: split.member_id ?? split.memberId ?? "",
+      amount: exactAmount ?? legacyAmount,
+      ...exactFields,
+      ...(splitCurrencyCode ? { currencyCode: splitCurrencyCode } : {})
+    };
+  });
+  const mappedIds = new Set(mapped.map((split) => split.id));
+  const exactOnly = (exactSplits ?? [])
+    .filter((split) => !mappedIds.has(split.id))
+    .map((split) => {
+      const memberId = split.member_id ?? split.memberId ?? "";
+      const amountMinor = Number(split.amount_minor_units);
+      const splitCurrencyCode = split.currency_code ?? currencyCode;
+      return {
+        id: split.id,
+        memberId,
+        amount: splitCurrencyCode ? amountFromMinorUnits(amountMinor, splitCurrencyCode) : 0,
+        ...(Number.isSafeInteger(amountMinor) && amountMinor > 0 ? { amountMinorUnits: amountMinor } : {}),
+        ...(splitCurrencyCode ? { currencyCode: splitCurrencyCode } : {})
+      };
+    });
+  return [...mapped, ...exactOnly].filter((split) => split.memberId && split.amount > 0);
 }
 
-function mapTransaction(row: TransactionRow): BudgetTransaction {
+export function mapTransaction(row: TransactionRow): BudgetTransaction {
   const occurredOnDate = row.occurred_on ? localNoonISOString(row.occurred_on) : undefined;
+  const currencyCode = row.currency_code?.trim().toUpperCase() || undefined;
+  const parsedAmountMinorUnits = row.amount_minor_units == null ? undefined : Number(row.amount_minor_units);
+  const exactAmount = currencyCode && parsedAmountMinorUnits !== undefined && Number.isSafeInteger(parsedAmountMinorUnits)
+    ? amountFromMinorUnits(parsedAmountMinorUnits, currencyCode)
+    : undefined;
   return {
     id: row.id,
     budgetId: row.budget_id,
     userId: row.user_id,
+    createdByUserId: row.created_by_user_id ?? undefined,
     title: row.title,
-    amount: Number(row.amount),
+    amount: exactAmount ?? Number(row.amount),
+    amountMinorUnits: exactAmount === undefined ? undefined : parsedAmountMinorUnits,
+    currencyCode,
     type: row.type,
     category: row.category,
     paymentMethod: row.payment_method ?? undefined,
@@ -512,20 +591,28 @@ function mapTransaction(row: TransactionRow): BudgetTransaction {
     date: occurredOnDate ?? row.date,
     createdAt: row.created_at,
     recurrenceRule: row.recurrence_rule ?? undefined,
-    splits: mapSplits(row.splits),
+    splits: mapSplits(row.splits, row.splits_minor_units, currencyCode),
     rowVersion: row.row_version == null ? undefined : Number(row.row_version)
   };
 }
 
 function mapSettlement(row: SettlementRow): Settlement {
   const occurredOnDate = row.occurred_on ? localNoonISOString(row.occurred_on) : undefined;
+  const currencyCode = row.currency_code?.trim().toUpperCase() || undefined;
+  const parsedAmountMinorUnits = row.amount_minor_units == null ? undefined : Number(row.amount_minor_units);
+  const exactAmount = currencyCode && parsedAmountMinorUnits !== undefined && Number.isSafeInteger(parsedAmountMinorUnits)
+    ? amountFromMinorUnits(parsedAmountMinorUnits, currencyCode)
+    : undefined;
   return {
     id: row.id,
     budgetId: row.budget_id,
     userId: row.user_id,
+    createdByUserId: row.created_by_user_id ?? undefined,
     fromMemberId: row.from_member_id,
     toMemberId: row.to_member_id,
-    amount: Number(row.amount),
+    amount: exactAmount ?? Number(row.amount),
+    amountMinorUnits: exactAmount === undefined ? undefined : parsedAmountMinorUnits,
+    currencyCode,
     date: occurredOnDate ?? row.date,
     rowVersion: row.row_version == null ? undefined : Number(row.row_version)
   };

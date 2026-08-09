@@ -361,7 +361,7 @@ struct TransactionsTabMetrics {
         }
 
         let groupedByDay = Dictionary(grouping: filteredTransactions) { calendar.startOfDay(for: $0.date) }
-            .map { (date: $0.key, items: sortedNewestFirst($0.value)) }
+            .map { (date: $0.key, items: sortedNewestAddedFirst($0.value)) }
             .sorted { $0.date > $1.date }
 
         let summaryTotals = DashboardViewModel.totals(
@@ -378,13 +378,13 @@ struct TransactionsTabMetrics {
         )
     }
 
-    private static func sortedNewestFirst(_ transactions: [Transaction]) -> [Transaction] {
+    private static func sortedNewestAddedFirst(_ transactions: [Transaction]) -> [Transaction] {
         transactions.sorted { lhs, rhs in
-            if lhs.date != rhs.date {
-                return lhs.date > rhs.date
-            }
             if lhs.createdAt != rhs.createdAt {
                 return lhs.createdAt > rhs.createdAt
+            }
+            if lhs.date != rhs.date {
+                return lhs.date > rhs.date
             }
             return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
         }

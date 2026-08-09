@@ -37,6 +37,33 @@ final class DashboardCharacterizationTests: XCTestCase {
         )
     }
 
+    func testTransactionsWithinEachDayShowNewestAddedFirst() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Toronto"))
+        let dayStart = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 8, day: 8)))
+        let morning = try XCTUnwrap(calendar.date(byAdding: .hour, value: 9, to: dayStart))
+        let evening = try XCTUnwrap(calendar.date(byAdding: .hour, value: 18, to: dayStart))
+        let monthEnd = try XCTUnwrap(calendar.date(byAdding: .month, value: 1, to: dayStart))
+        let addedFirst = BudgetMateTestFixtures.expense(title: "Added first", date: evening)
+        addedFirst.createdAt = morning
+        let addedSecond = BudgetMateTestFixtures.expense(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000109")!,
+            title: "Added second",
+            date: morning
+        )
+        addedSecond.createdAt = evening
+
+        let metrics = TransactionsTabMetrics.compute(
+            transactions: [addedFirst, addedSecond],
+            monthInterval: DateInterval(start: dayStart, end: monthEnd),
+            selectedMemberId: nil,
+            monthlyBudget: 500,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(metrics.groupedByDay.first?.items.map(\.title), ["Added second", "Added first"])
+    }
+
     func testNewTransactionPreservesAuthenticatedCreatorIdentity() throws {
         let viewModel = AddTransactionViewModel()
         viewModel.title = "Paycheque"

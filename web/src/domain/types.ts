@@ -30,12 +30,17 @@ export interface TransactionSplit {
   id: string;
   memberId: string;
   amount: number;
+  amountMinorUnits?: number;
+  currencyCode?: string;
 }
 
 export interface BudgetTransaction {
   id: string;
   budgetId: string;
   userId: string;
+  createdByUserId?: string;
+  amountMinorUnits?: number;
+  currencyCode?: string;
   title: string;
   amount: number;
   type: TransactionType;
@@ -54,9 +59,12 @@ export interface Settlement {
   id: string;
   budgetId: string;
   userId: string;
+  createdByUserId?: string;
   fromMemberId: string;
   toMemberId: string;
   amount: number;
+  amountMinorUnits?: number;
+  currencyCode?: string;
   date: string;
   /** Server-owned CAS value used only by Gate C mutation RPCs. */
   rowVersion?: number;
