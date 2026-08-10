@@ -494,12 +494,11 @@ function knownMemberIds(members: BudgetMember[], aliases: Map<string, string>) {
   return new Set([...members.map((member) => member.id), ...aliases.values()]);
 }
 
-function remapTransactionMembers(
+export function remapTransactionMembers(
   transaction: BudgetTransaction,
   aliases: Map<string, string>,
   validMemberIds = new Set<string>()
 ): BudgetTransaction {
-  if (aliases.size === 0) return transaction;
   const resolvedCreatedByMemberId = aliases.get(transaction.createdByMemberId) ?? transaction.createdByMemberId;
   const resolvedUserMemberId = aliases.get(transaction.userId) ?? transaction.userId;
   const createdByMemberId =
