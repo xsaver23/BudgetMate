@@ -2173,8 +2173,8 @@ function DashboardView({
               <div key={settlement.id} className="settlement-row-wrap">
                 <div className="settlement-row">
                 <div className="avatar-pair" aria-hidden="true">
-                  <MemberBadge member={settlement.from} />
-                  <MemberBadge member={settlement.to} />
+                  <MemberBadge member={settlement.from} compact />
+                  <MemberBadge member={settlement.to} compact />
                 </div>
                 <button
                   className="settlement-copy settlement-explanation-trigger"
@@ -4363,7 +4363,7 @@ function CategoryRow({
   );
 }
 
-function MemberBadge({ member }: { member: BudgetMember }) {
+function MemberBadge({ member, compact = false }: { member: BudgetMember; compact?: boolean }) {
   return (
     <span
       className="member-badge"
@@ -4372,7 +4372,7 @@ function MemberBadge({ member }: { member: BudgetMember }) {
         "--member-text-color": contrastTextColor(member.color)
       } as CSSProperties}
     >
-      {member.initials}
+      {compact ? member.initials.slice(0, 1) : member.initials}
     </span>
   );
 }
