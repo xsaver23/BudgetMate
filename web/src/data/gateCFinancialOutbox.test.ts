@@ -5,6 +5,7 @@ import {
   buildTransactionDeleteGateCMutation,
   buildTransactionGateCMutation,
   mapTransaction,
+  memberIdentityScopesByBudget,
   remapTransactionMembers
 } from "./cloudRepository";
 import {
@@ -151,6 +152,45 @@ describe("Gate C durable financial outbox", () => {
     );
 
     expect(mapped.createdByMemberId).toBe(currentMemberId);
+  });
+
+  it("resolves the same user to the member in the transaction budget", () => {
+    const personalBudgetId = userA;
+    const householdBudgetId = budgetId;
+    const personalMemberId = "00000000-0000-0000-0000-000000000018";
+    const householdMemberId = "00000000-0000-0000-0000-000000000019";
+    const members = [
+      {
+        id: personalMemberId,
+        budgetId: personalBudgetId,
+        displayName: "Avery",
+        initials: "AM",
+        color: "#000000",
+        authUserId: userA,
+        role: "owner" as const,
+        inviteStatus: "active" as const,
+        createdDate: "2026-07-30T12:00:00Z"
+      },
+      {
+        id: householdMemberId,
+        budgetId: householdBudgetId,
+        displayName: "Avery",
+        initials: "AM",
+        color: "#000000",
+        authUserId: userA,
+        role: "member" as const,
+        inviteStatus: "active" as const,
+        createdDate: "2026-07-30T12:00:00Z"
+      }
+    ];
+    const householdScope = memberIdentityScopesByBudget(members, members, userA).get(householdBudgetId);
+    const mapped = remapTransactionMembers(
+      { ...transaction(), createdByMemberId: personalMemberId },
+      householdScope?.aliases ?? new Map(),
+      householdScope?.validMemberIds
+    );
+
+    expect(mapped.createdByMemberId).toBe(householdMemberId);
   });
 
   it("builds settlement RPC requests with the same CAS/delete contract", () => {
