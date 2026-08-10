@@ -4,7 +4,8 @@ import {
   buildSettlementGateCMutation,
   buildTransactionDeleteGateCMutation,
   buildTransactionGateCMutation,
-  mapTransaction
+  mapTransaction,
+  remapTransactionMembers
 } from "./cloudRepository";
 import {
   GateCFinancialOutbox,
@@ -135,6 +136,21 @@ describe("Gate C durable financial outbox", () => {
 
     expect(mapped.amount).toBe(10.01);
     expect(mapped.splits[0].amount).toBe(10.01);
+  });
+
+  it("falls back to the row user member when a stale payer ID has no aliases", () => {
+    const currentMemberId = "00000000-0000-0000-0000-000000000016";
+    const mapped = remapTransactionMembers(
+      {
+        ...transaction(),
+        userId: currentMemberId,
+        createdByMemberId: "00000000-0000-0000-0000-000000000017"
+      },
+      new Map(),
+      new Set([currentMemberId])
+    );
+
+    expect(mapped.createdByMemberId).toBe(currentMemberId);
   });
 
   it("builds settlement RPC requests with the same CAS/delete contract", () => {
