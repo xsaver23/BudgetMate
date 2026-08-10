@@ -494,6 +494,20 @@ function knownMemberIds(members: BudgetMember[], aliases: Map<string, string>) {
   return new Set([...members.map((member) => member.id), ...aliases.values()]);
 }
 
+export function memberIdentityScopesByBudget(
+  members: BudgetMember[],
+  canonicalMembers: BudgetMember[],
+  userId: string,
+  userEmail?: string | null
+) {
+  return new Map(Array.from(new Set(members.map((member) => member.budgetId))).map((budgetId) => {
+    const scopedMembers = members.filter((member) => member.budgetId === budgetId);
+    const scopedCanonicalMembers = canonicalMembers.filter((member) => member.budgetId === budgetId);
+    const aliases = memberAliasMap(scopedMembers, scopedCanonicalMembers, userId, userEmail);
+    return [budgetId, { aliases, validMemberIds: knownMemberIds(scopedMembers, aliases) }] as const;
+  }));
+}
+
 export function remapTransactionMembers(
   transaction: BudgetTransaction,
   aliases: Map<string, string>,
@@ -829,13 +843,17 @@ export async function fetchCloudState(user: User, preferredBudgetId?: string): P
   const allMemberships = (membershipsResult.data ?? []) as MembershipRow[];
   const membersWithRoles = applyMembershipRoles(cloudMembers, allMemberships);
   const normalizedMembers = deduplicateMembersForBudget(membersWithRoles);
-  const memberAliases = memberAliasMap(membersWithRoles, normalizedMembers, user.id, user.email);
-  const validMemberIds = knownMemberIds(membersWithRoles, memberAliases);
+  const memberScopes = memberIdentityScopesByBudget(membersWithRoles, normalizedMembers, user.id, user.email);
 
   const transactions = uniqueTransactions(
     ((transactionsResult.data ?? []) as TransactionRow[])
       .map(mapTransaction)
-      .map((transaction) => remapTransactionMembers(transaction, memberAliases, validMemberIds))
+      .map((transaction) => {
+        const scope = memberScopes.get(transaction.budgetId);
+        return scope
+          ? remapTransactionMembers(transaction, scope.aliases, scope.validMemberIds)
+          : transaction;
+      })
   );
 
   return {
@@ -844,9 +862,10 @@ export async function fetchCloudState(user: User, preferredBudgetId?: string): P
     currentUserId: user.id,
     members: normalizedMembers,
     transactions,
-    settlements: ((settlementsResult.data ?? []) as SettlementRow[]).map(mapSettlement).map((settlement) =>
-      remapSettlementMembers(settlement, memberAliases)
-    ),
+    settlements: ((settlementsResult.data ?? []) as SettlementRow[]).map(mapSettlement).map((settlement) => {
+      const scope = memberScopes.get(settlement.budgetId);
+      return scope ? remapSettlementMembers(settlement, scope.aliases) : settlement;
+    }),
     settingsByBudgetId
   };
 }
