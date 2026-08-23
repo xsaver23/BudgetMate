@@ -17,6 +17,7 @@ struct AddTransactionView: View {
     private let hasInitialSettings: Bool
     @State private var selectedMemberId: UUID?
     @State private var saveErrorMessage: String?
+    @State private var isSaving = false
     @State private var isShowingTransactionDatePicker = false
     @State private var editorAppearedAtUptime: TimeInterval?
     @State private var hasLoggedFirstKeyboard = false
@@ -268,7 +269,9 @@ struct AddTransactionView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     TransactionSaveToolbarButton(
                         title: transactionToEdit == nil ? "Save" : "Update",
-                        isEnabled: viewModel.canSave(currencyCode: settingsStore.settings.currencyCode) && !isEditingRestrictedSharedRecord
+                        isEnabled: !isSaving &&
+                            viewModel.canSave(currencyCode: settingsStore.settings.currencyCode) &&
+                            !isEditingRestrictedSharedRecord
                     ) { cloudSyncStore in
                         saveTransaction(using: cloudSyncStore)
                     }
@@ -496,11 +499,19 @@ struct AddTransactionView: View {
     }
 
     private func saveTransaction(using cloudSyncStore: CloudSyncStore) {
+        guard !isSaving else { return }
+        isSaving = true
         focusedInput = nil
         saveErrorMessage = nil
+        guard settingsStore.hasObservedCloudSettingsBaseline else {
+            saveErrorMessage = "Sync this budget before saving money changes."
+            isSaving = false
+            return
+        }
         let member = memberViewModel.members.first(where: { $0.id == selectedMemberId }) ?? defaultTransactionMember
         guard recordMutationDecision.isAllowed else {
             saveErrorMessage = recordMutationDecision.readOnlyMessage
+            isSaving = false
             return
         }
         if let transactionToEdit {
@@ -514,8 +525,10 @@ struct AddTransactionView: View {
             do {
                 try modelContext.save()
             } catch {
+                modelContext.rollback()
                 cloudSyncStore.recordSyncIssue(error, context: "Saving edited transaction")
                 saveErrorMessage = "Couldn't save this transaction. Check your data and try again."
+                isSaving = false
                 return
             }
             cloudSyncStore.saveTransaction(
@@ -532,7 +545,10 @@ struct AddTransactionView: View {
             addedBy: member,
             createdByUserId: UUID(uuidString: authStore.currentUserScopeId),
             currencyCode: settingsStore.settings.currencyCode
-        ) else { return }
+        ) else {
+            isSaving = false
+            return
+        }
         transaction.ownerUserId = authStore.currentBudgetScopeId
         modelContext.insert(transaction)
         insertSplits(for: transaction, paidBy: member)
@@ -543,6 +559,7 @@ struct AddTransactionView: View {
             cloudSyncStore.recordSyncIssue(error, context: "Saving new transaction")
             modelContext.delete(transaction)
             saveErrorMessage = "Couldn't save this transaction. Check your data and try again."
+            isSaving = false
             return
         }
         cloudSyncStore.saveTransaction(

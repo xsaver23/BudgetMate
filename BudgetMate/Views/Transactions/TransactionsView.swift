@@ -318,17 +318,22 @@ struct TransactionsView: View {
             recordCreatorUserId: transaction.createdByUserId
         ).isAllowed else { return }
         guard transaction.ownerUserId == authStore.currentBudgetScopeId else { return }
-        cloudSyncStore.deleteTransaction(
-            transaction,
-            userScopeId: authStore.currentUserScopeId,
-            budgetScopeId: authStore.currentBudgetScopeId
-        )
+        let transactionId = transaction.id
+        let expectedRowVersion = transaction.rowVersion
         modelContext.delete(transaction)
         do {
             try modelContext.save()
         } catch {
+            modelContext.rollback()
             cloudSyncStore.recordSyncIssue(error, context: "Deleting transaction locally")
+            return
         }
+        cloudSyncStore.deleteTransaction(
+            id: transactionId,
+            expectedRowVersion: expectedRowVersion,
+            userScopeId: authStore.currentUserScopeId,
+            budgetScopeId: authStore.currentBudgetScopeId
+        )
     }
 
     private var emptyStateMessage: String {

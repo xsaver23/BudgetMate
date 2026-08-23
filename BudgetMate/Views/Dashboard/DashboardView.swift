@@ -19,6 +19,7 @@ struct DashboardView: View {
     @State private var selectedMemberId: UUID? = nil
     @State private var selectedTransaction: Transaction?
     @State private var pendingSettlement: SettlementSuggestion?
+    @State private var settlementErrorMessage: String?
     @State private var breakdownPresentation: BreakdownPresentation?
     @State private var isShowingSettlementList = false
     @State private var derivedMetrics = DashboardDerivedMetrics()
@@ -203,6 +204,12 @@ struct DashboardView: View {
     }
 
     private func settle(_ settlement: SettlementSuggestion) {
+        guard settingsStore.hasObservedCloudSettingsBaseline else {
+            presentPendingSettlement(settlement)
+            settlementErrorMessage = "Sync this budget before marking a settlement paid."
+            return
+        }
+        settlementErrorMessage = nil
         let mutationDecision = SharedRecordMutationCapability.decision(
             currentUserScopeId: authStore.currentUserScopeId,
             activeBudgetScopeId: authStore.currentBudgetScopeId,
@@ -233,6 +240,9 @@ struct DashboardView: View {
             try modelContext.save()
         } catch {
             cloudSyncStore.recordSyncIssue(error, context: "Saving settle-up record")
+            modelContext.delete(record)
+            settlementErrorMessage = "Couldn't save this settlement locally. Try again."
+            return
         }
         cloudSyncStore.saveSettlement(
             record,
@@ -253,12 +263,24 @@ struct DashboardView: View {
     private func presentPendingSettlement(_ settlement: SettlementSuggestion) {
         withAnimation(settlementOverlayAnimation) {
             pendingSettlement = settlement
+            settlementErrorMessage = nil
         }
     }
 
     private func clearPendingSettlement() {
         withAnimation(settlementOverlayAnimation) {
             pendingSettlement = nil
+            settlementErrorMessage = nil
+        }
+    }
+
+    private func retrySettlementSync() {
+        settlementErrorMessage = nil
+        Task {
+            await appRefreshStore.refreshCurrentBudget(forceSync: true)
+            if !settingsStore.hasObservedCloudSettingsBaseline {
+                settlementErrorMessage = "Sync is still required before marking this settlement paid."
+            }
         }
     }
 
@@ -581,6 +603,20 @@ struct DashboardView: View {
                     .foregroundStyle(BudgetBeaverPalette.amountDark)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
+
+                if let settlementErrorMessage {
+                    VStack(spacing: 8) {
+                        Label(settlementErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(AppTheme.expenseText)
+                            .multilineTextAlignment(.center)
+
+                        Button("Retry Sync", action: retrySettlementSync)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(AppTheme.brand)
+                    }
+                    .padding(.horizontal, 8)
+                }
 
                 VStack(spacing: 10) {
                     Button {

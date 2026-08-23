@@ -415,17 +415,22 @@ private struct SettlementDetailView: View {
     private var deleteButton: some View {
         Button(role: .destructive) {
             guard mutationDecision.isAllowed else { return }
-            cloudSyncStore.deleteSettlement(
-                settlement,
-                userScopeId: authStore.currentUserScopeId,
-                budgetScopeId: authStore.currentBudgetScopeId
-            )
+            let settlementId = settlement.id
+            let expectedRowVersion = settlement.rowVersion
             modelContext.delete(settlement)
             do {
                 try modelContext.save()
             } catch {
+                modelContext.rollback()
                 cloudSyncStore.recordSyncIssue(error, context: "Removing settle-up record")
+                return
             }
+            cloudSyncStore.deleteSettlement(
+                id: settlementId,
+                expectedRowVersion: expectedRowVersion,
+                userScopeId: authStore.currentUserScopeId,
+                budgetScopeId: authStore.currentBudgetScopeId
+            )
             dismiss()
         } label: {
             Label("Remove Settle Up Record", systemImage: "trash")

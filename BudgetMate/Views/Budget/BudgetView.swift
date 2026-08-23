@@ -206,6 +206,10 @@ struct BudgetView: View {
                     Spacer()
 
                     Button(isEditingCategories ? "Done" : "Edit") {
+                        guard settingsStore.hasObservedCloudSettingsBaseline else {
+                            saveMessage = "Sync this budget before editing category budgets."
+                            return
+                        }
                         withAnimation(.easeInOut(duration: 0.2)) {
                             if isEditingCategories {
                                 saveCategoryBudgets(showMessage: false)
@@ -224,9 +228,19 @@ struct BudgetView: View {
                     .font(.caption)
                     .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.7))
 
+                if !settingsStore.hasObservedCloudSettingsBaseline {
+                    Label(
+                        "Sync this budget before editing category budgets.",
+                        systemImage: "lock.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.78))
+                    .accessibilityIdentifier("budget.categoryAmountsUnavailable")
+                }
+
                 if isEditingCategories, !recordMutationDecision.isAllowed {
                     Label(
-                        "Only the household owner can rename or remove shared transaction categories.",
+                        "Only the household owner can add, rename, remove, or change shared transaction categories.",
                         systemImage: "lock.fill"
                     )
                     .font(.caption)
@@ -254,7 +268,7 @@ struct BudgetView: View {
                     }
                 }
 
-                if isEditingCategories {
+                if isEditingCategories, recordMutationDecision.isAllowed {
                     Button {
                         categoryBeingEdited = nil
                         isShowingCategoryEditor = true
@@ -333,6 +347,7 @@ struct BudgetView: View {
                         .multilineTextAlignment(.trailing)
                         .frame(width: 96)
                         .textFieldStyle(.roundedBorder)
+                        .disabled(!settingsStore.hasObservedCloudSettingsBaseline)
                 } else {
                     Text(budgetDisplayValue(for: category))
                         .font(.subheadline.weight(.semibold))
@@ -526,6 +541,11 @@ struct BudgetView: View {
     }
 
     private func saveCategoryBudgets(showMessage: Bool = true) {
+        guard settingsStore.hasObservedCloudSettingsBaseline else {
+            saveMessage = "Sync this budget before saving money changes."
+            return
+        }
+
         var updates: [TransactionCategory: Double] = [:]
         for category in categories {
             let raw = categoryBudgetInputs[category.rawValue]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -545,6 +565,11 @@ struct BudgetView: View {
     }
 
     private func saveCategoryName(_ name: String, emoji: String?) {
+        guard recordMutationDecision.isAllowed else {
+            saveMessage = recordMutationDecision.readOnlyMessage
+            return
+        }
+
         guard let rawValue = TransactionCategory.customRawValue(from: name) else {
             saveMessage = "Enter a category name."
             return
@@ -609,16 +634,19 @@ struct BudgetView: View {
         changedTransactions.forEach { transaction in
             transaction.category = newCategory
         }
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            cloudSyncStore.recordSyncIssue(error, context: "Saving reassigned categories")
+            return
+        }
+
         cloudSyncStore.saveTransactions(
             changedTransactions,
             userScopeId: authStore.currentUserScopeId,
             budgetScopeId: authStore.currentBudgetScopeId
         )
-        do {
-            try modelContext.save()
-        } catch {
-            cloudSyncStore.recordSyncIssue(error, context: "Saving reassigned categories")
-        }
         refreshTabMetrics()
     }
 

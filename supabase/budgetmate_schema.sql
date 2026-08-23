@@ -3379,12 +3379,7 @@ begin
   if household_currency is not null
      and (
        (new.amount_minor_units is null and new.currency_code is null)
-       or (
-         tg_op = 'UPDATE'
-         and legacy_amount_changed
-         and new.amount_minor_units is not distinct from old.amount_minor_units
-         and new.currency_code is not distinct from old.currency_code
-       )
+       or legacy_amount_changed
      ) then
     new.amount_minor_units := public.money_bridge_minor_units(
       new.amount, household_currency
@@ -3395,11 +3390,7 @@ begin
   if household_currency is not null
      and (
        new.splits_minor_units is null
-       or (
-         tg_op = 'UPDATE'
-         and legacy_splits_changed
-         and new.splits_minor_units is not distinct from old.splits_minor_units
-       )
+       or legacy_splits_changed
      ) then
     new.splits_minor_units := public.money_bridge_splits_minor_units(
       new.splits, household_currency
@@ -3447,12 +3438,7 @@ begin
   if household_currency is not null
      and (
        (new.amount_minor_units is null and new.currency_code is null)
-       or (
-         tg_op = 'UPDATE'
-         and legacy_amount_changed
-         and new.amount_minor_units is not distinct from old.amount_minor_units
-         and new.currency_code is not distinct from old.currency_code
-       )
+       or legacy_amount_changed
      ) then
     new.amount_minor_units := public.money_bridge_minor_units(
       new.amount, household_currency

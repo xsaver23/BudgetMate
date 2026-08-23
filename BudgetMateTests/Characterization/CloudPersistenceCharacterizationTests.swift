@@ -28,11 +28,12 @@ final class CloudPersistenceCharacterizationTests: XCTestCase {
         let row = BudgetMateTestFixtures.cloudTransactionRow
         let data = try JSONEncoder().encode(row)
         let decoded = try JSONDecoder().decode(CloudTransactionRow.self, from: data)
-        try decoded.validateDates()
+        try decoded.validateDates(rolloutEnabled: false)
 
         let local = decoded.makeTransaction(
             ownerUserId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
-            validMemberIds: [BudgetMateTestFixtures.aliceMemberID, BudgetMateTestFixtures.bobMemberID]
+            validMemberIds: [BudgetMateTestFixtures.aliceMemberID, BudgetMateTestFixtures.bobMemberID],
+            rolloutEnabled: false
         )
         local.splits = decoded.splits.map {
             TransactionSplit(
@@ -50,10 +51,11 @@ final class CloudPersistenceCharacterizationTests: XCTestCase {
                 local,
                 ownerUserId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
                 memberAliases: [:],
-                validMemberIds: [BudgetMateTestFixtures.aliceMemberID, BudgetMateTestFixtures.bobMemberID]
+                validMemberIds: [BudgetMateTestFixtures.aliceMemberID, BudgetMateTestFixtures.bobMemberID],
+                rolloutEnabled: false
             )
         )
-        XCTAssertTrue(decoded.splitsMatch(local, memberAliases: [:]))
+        XCTAssertTrue(decoded.splitsMatch(local, memberAliases: [:], rolloutEnabled: false))
     }
 
     func testCloudSettlementRowRoundTripsAndKeepsBusinessDateCompatibilityField() throws {
@@ -76,7 +78,14 @@ final class CloudPersistenceCharacterizationTests: XCTestCase {
     }
 
     func testPendingCloudDeletionEncodingAndRestorationAreStable() throws {
-        let expected = BudgetMateTestFixtures.pendingDeletion
+        let expected = PendingCloudDeletion(
+            entity: .transaction,
+            recordId: BudgetMateTestFixtures.equalSplitTransactionID,
+            userScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+            budgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            expectedRowVersion: 4,
+            mutationId: UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa0001")!
+        )
         let encoded = try JSONEncoder().encode([expected])
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [[String: Any]])
         let first = try XCTUnwrap(object.first)
@@ -98,6 +107,122 @@ final class CloudPersistenceCharacterizationTests: XCTestCase {
         )
 
         XCTAssertEqual(restored, [expected])
+    }
+
+    func testLegacyFinancialPendingDeletionsWithoutRowVersionsAreSanitized() throws {
+        let defaults = BudgetMateTestFixtures.isolatedDefaults()
+        defaults.set(
+            CloudSyncStore.currentPendingCloudDeletionSafetyVersion,
+            forKey: CloudSyncStore.pendingCloudDeletionSafetyVersionKey
+        )
+        let invalidTransaction = PendingCloudDeletion(
+            entity: .transaction,
+            recordId: BudgetMateTestFixtures.expenseTransactionID,
+            userScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+            budgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            mutationId: UUID()
+        )
+        let validSettlement = PendingCloudDeletion(
+            entity: .settlement,
+            recordId: BudgetMateTestFixtures.settlementID,
+            userScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+            budgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            expectedRowVersion: 3,
+            mutationId: UUID()
+        )
+        defaults.set(
+            try JSONEncoder().encode([invalidTransaction, validSettlement]),
+            forKey: CloudSyncStore.pendingCloudDeletionsKey
+        )
+
+        let restored = CloudSyncStore.loadPendingCloudDeletions(
+            from: defaults,
+            key: CloudSyncStore.pendingCloudDeletionsKey
+        )
+
+        XCTAssertEqual(restored, [validSettlement])
+        let persistedData = try XCTUnwrap(
+            defaults.data(forKey: CloudSyncStore.pendingCloudDeletionsKey)
+        )
+        XCTAssertEqual(
+            try JSONDecoder().decode([PendingCloudDeletion].self, from: persistedData),
+            [validSettlement]
+        )
+    }
+
+    func testFinancialDeletionWaitsForFirstAcknowledgementBeforeBecomingDurable() {
+        let deletion = PendingCloudDeletion(
+            entity: .transaction,
+            recordId: BudgetMateTestFixtures.expenseTransactionID,
+            userScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+            budgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            mutationId: UUID()
+        )
+
+        XCTAssertNil(
+            CloudSyncStore.resolvedPendingCloudDeletion(
+                deletion,
+                acknowledgedRowVersion: nil
+            )
+        )
+
+        let resolved = CloudSyncStore.resolvedPendingCloudDeletion(
+            deletion,
+            acknowledgedRowVersion: 1
+        )
+        XCTAssertEqual(resolved?.expectedRowVersion, 1)
+        XCTAssertEqual(resolved?.mutationId, deletion.mutationId)
+    }
+
+    func testDeleteBeforeFirstCloudAcknowledgementDoesNotPersistAnUnsafeDeletion() {
+        let defaults = BudgetMateTestFixtures.isolatedDefaults()
+        defaults.set(
+            CloudSyncStore.currentPendingCloudDeletionSafetyVersion,
+            forKey: CloudSyncStore.pendingCloudDeletionSafetyVersionKey
+        )
+        let store = CloudSyncStore(userDefaults: defaults)
+
+        store.deleteTransaction(
+            BudgetMateTestFixtures.expense(),
+            userScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+            budgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString
+        )
+        store.deleteSettlement(
+            BudgetMateTestFixtures.settlement(),
+            userScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
+            budgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString
+        )
+
+        XCTAssertNil(defaults.data(forKey: CloudSyncStore.pendingCloudDeletionsKey))
+    }
+
+    func testCloudValidationErrorsAreNonRetryable() {
+        let errors: [SupabaseBudgetSyncError] = [
+            .missingUser,
+            .notBudgetOwner,
+            .invalidCloudDate("bad date"),
+            .invalidCloudMoneyContract
+        ]
+
+        for error in errors {
+            XCTAssertFalse(CloudSyncStore.isRetryable(error), "Unexpected retry classification for \(error)")
+        }
+    }
+
+    func testNewFullSyncScopeClearsPriorStatusButSameScopeDoesNot() {
+        let store = CloudSyncStore(userDefaults: BudgetMateTestFixtures.isolatedDefaults())
+        store.activateFullSyncScope(userScopeId: "user-a", budgetScopeId: "budget-a")
+        store.markSynced()
+        store.recordSyncIssue(SupabaseBudgetSyncError.invalidCloudDate("old"), context: "old scope")
+
+        store.activateFullSyncScope(userScopeId: "user-a", budgetScopeId: "budget-a")
+        XCTAssertNotNil(store.lastErrorMessage)
+        XCTAssertNotNil(store.lastSyncedAt)
+
+        store.activateFullSyncScope(userScopeId: "user-a", budgetScopeId: "budget-b")
+        XCTAssertNil(store.lastErrorMessage)
+        XCTAssertNil(store.lastDiagnosticMessage)
+        XCTAssertNil(store.lastSyncedAt)
     }
 
     func testGateCPendingDeletionPreservesExpectedVersionAndMutationID() throws {
@@ -138,7 +263,8 @@ final class CloudPersistenceCharacterizationTests: XCTestCase {
         XCTAssertTrue(
             SupabaseBudgetSyncService.shouldDeferFinancialWrites(
                 transactions: [transaction],
-                settlements: [settlement]
+                settlements: [settlement],
+                gateEnabled: false
             )
         )
         XCTAssertTrue(
@@ -223,7 +349,7 @@ final class CloudPersistenceCharacterizationTests: XCTestCase {
             key: CloudSyncStore.pendingCloudDeletionsKey
         )
 
-        XCTAssertEqual(restored, [legacyBatch[3]])
+        XCTAssertTrue(restored.isEmpty)
         let persistedData = try XCTUnwrap(
             defaults.data(forKey: CloudSyncStore.pendingCloudDeletionsKey)
         )
@@ -296,9 +422,7 @@ final class CloudPersistenceCharacterizationTests: XCTestCase {
         )
     }
 
-    func testMoneyServerBridgeRolloutDefaultsOffAndOmitsAdditiveWrites() throws {
-        XCTAssertFalse(MoneyServerBridgeRollout.isEnabled)
-
+    func testDisabledMoneyServerBridgeOmitsAdditiveWrites() throws {
         let transaction = BudgetMateTestFixtures.equalSplitExpense()
         transaction.amountMinorUnits = 10_000
         transaction.currencyCode = "USD"
@@ -309,7 +433,8 @@ final class CloudPersistenceCharacterizationTests: XCTestCase {
         let transactionRow = CloudTransactionRow(
             transaction: transaction,
             userId: BudgetMateTestFixtures.aliceUserID,
-            budgetId: BudgetMateTestFixtures.sharedBudgetID
+            budgetId: BudgetMateTestFixtures.sharedBudgetID,
+            rolloutEnabled: false
         )
         let transactionObject = try XCTUnwrap(
             JSONSerialization.jsonObject(
@@ -332,7 +457,8 @@ final class CloudPersistenceCharacterizationTests: XCTestCase {
         let settingsRow = CloudBudgetSettingsRow(
             settings: exactSettings,
             userId: BudgetMateTestFixtures.aliceUserID,
-            budgetId: BudgetMateTestFixtures.sharedBudgetID
+            budgetId: BudgetMateTestFixtures.sharedBudgetID,
+            rolloutEnabled: false
         )
         let settingsObject = try XCTUnwrap(
             JSONSerialization.jsonObject(

@@ -370,6 +370,22 @@ final class ScopedPersistenceCharacterizationTests: XCTestCase {
         )
     }
 
+    func testSharedNonOwnerCategoryStructureUsesOwnerOnlyCapability() {
+        // Category add, rename, remove, and emoji edits all use the existing
+        // modify-existing capability check; category structure is not a
+        // member-created shared record.
+        let decision = SharedRecordMutationCapability.decision(
+            currentUserScopeId: BudgetMateTestFixtures.bobUserID.uuidString,
+            activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            recordBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
+            members: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob],
+            serverGateEnabled: true
+        )
+
+        XCTAssertFalse(decision.isAllowed)
+        XCTAssertEqual(decision.reason, .restrictedSharedMember)
+    }
+
     func testActiveHouseholdMemberCanCreateSharedRecordsWhenGateIsEnabled() {
         let decision = SharedRecordMutationCapability.decision(
             currentUserScopeId: BudgetMateTestFixtures.bobUserID.uuidString,
@@ -646,6 +662,20 @@ final class ScopedPersistenceCharacterizationTests: XCTestCase {
         XCTAssertEqual(store.settings.currencyCode, CurrencyOption.cad.code)
         XCTAssertEqual(history.state, .populated)
         XCTAssertFalse(decision.isAllowed)
+    }
+
+    func testCategoryBudgetEditingWaitsForTheCurrentBudgetCurrencyBaseline() {
+        let defaults = BudgetMateTestFixtures.isolatedDefaults()
+        let store = SettingsStore(userDefaults: defaults)
+
+        store.switchUser(to: BudgetMateTestFixtures.sharedBudgetID.uuidString)
+        XCTAssertFalse(store.hasObservedCloudSettingsBaseline)
+
+        store.recordCloudSettingsBaseline(BudgetMateTestFixtures.settings)
+        XCTAssertTrue(store.hasObservedCloudSettingsBaseline)
+
+        store.switchUser(to: BudgetMateTestFixtures.personalBudgetID.uuidString)
+        XCTAssertFalse(store.hasObservedCloudSettingsBaseline)
     }
 
     func testRemoteRecordBaselineAdoptsCurrencyBeforePendingSettingsPush() {

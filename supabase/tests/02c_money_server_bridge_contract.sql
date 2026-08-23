@@ -219,6 +219,79 @@ begin
     when check_violation then null;
   end;
 
+  insert into public.budget_transactions (
+    id, user_id, title, amount, amount_minor_units, currency_code, type,
+    category, created_by_member_id, date, created_at, splits,
+    splits_minor_units, budget_id
+  ) values (
+    '20000000-0000-0000-0000-000000000005',
+    '90000000-0000-0000-0000-000000000001',
+    'Stale-currency insert', 12.42, 1242, 'CAD', 'expense', 'food',
+    '80000000-0000-0000-0000-000000000001', now(), now(),
+    '[{"id":"30000000-0000-0000-0000-000000000005","member_id":"80000000-0000-0000-0000-000000000001","amount":12.42}]',
+    '[{"id":"30000000-0000-0000-0000-000000000005","member_id":"80000000-0000-0000-0000-000000000001","amount_minor_units":1242,"currency_code":"CAD"}]',
+    '10000000-0000-0000-0000-000000000001'
+  );
+
+  if (select amount_minor_units from public.budget_transactions
+      where id = '20000000-0000-0000-0000-000000000005') <> 1242
+     or (select currency_code from public.budget_transactions
+         where id = '20000000-0000-0000-0000-000000000005') <> 'USD'
+     or (select splits_minor_units -> 0 ->> 'currency_code'
+         from public.budget_transactions
+         where id = '20000000-0000-0000-0000-000000000005') <> 'USD' then
+    raise exception 'Stale-currency transaction insert was not repaired';
+  end if;
+
+  update public.budget_transactions
+  set
+    amount = 13.42,
+    amount_minor_units = 1342,
+    currency_code = 'CAD',
+    splits = '[{"id":"30000000-0000-0000-0000-000000000005","member_id":"80000000-0000-0000-0000-000000000001","amount":13.42}]',
+    splits_minor_units = '[{"id":"30000000-0000-0000-0000-000000000005","member_id":"80000000-0000-0000-0000-000000000001","amount_minor_units":1342,"currency_code":"CAD"}]'
+  where id = '20000000-0000-0000-0000-000000000005';
+
+  if (select amount_minor_units from public.budget_transactions
+      where id = '20000000-0000-0000-0000-000000000005') <> 1342
+     or (select currency_code from public.budget_transactions
+         where id = '20000000-0000-0000-0000-000000000005') <> 'USD'
+     or (select splits_minor_units -> 0 ->> 'currency_code'
+         from public.budget_transactions
+         where id = '20000000-0000-0000-0000-000000000005') <> 'USD' then
+    raise exception 'Stale-currency transaction update was not repaired';
+  end if;
+
+  insert into public.budget_settlements (
+    id, user_id, from_member_id, to_member_id, amount,
+    amount_minor_units, currency_code, date, budget_id
+  ) values (
+    '40000000-0000-0000-0000-000000000002',
+    '90000000-0000-0000-0000-000000000001',
+    '80000000-0000-0000-0000-000000000002',
+    '80000000-0000-0000-0000-000000000001',
+    12.42, 1242, 'CAD', now(),
+    '10000000-0000-0000-0000-000000000001'
+  );
+
+  if (select amount_minor_units from public.budget_settlements
+      where id = '40000000-0000-0000-0000-000000000002') <> 1242
+     or (select currency_code from public.budget_settlements
+         where id = '40000000-0000-0000-0000-000000000002') <> 'USD' then
+    raise exception 'Stale-currency settlement insert was not repaired';
+  end if;
+
+  update public.budget_settlements
+  set amount = 13.42, amount_minor_units = 1342, currency_code = 'CAD'
+  where id = '40000000-0000-0000-0000-000000000002';
+
+  if (select amount_minor_units from public.budget_settlements
+      where id = '40000000-0000-0000-0000-000000000002') <> 1342
+     or (select currency_code from public.budget_settlements
+         where id = '40000000-0000-0000-0000-000000000002') <> 'USD' then
+    raise exception 'Stale-currency settlement update was not repaired';
+  end if;
+
   begin
     update public.budget_transactions
     set splits_minor_units = '[]'::jsonb

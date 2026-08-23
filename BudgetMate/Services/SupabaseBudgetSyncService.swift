@@ -2057,6 +2057,40 @@ final class SupabaseBudgetSyncService {
         }
     }
 
+    func mutateTransaction(
+        id: UUID,
+        expectedRowVersion: Int64,
+        payload: TransactionMutationPayload,
+        operation: String,
+        userScopeId: String,
+        budgetScopeId: String? = nil,
+        mutationId: UUID = UUID()
+    ) async throws -> SharedDataSafetyMutationResult {
+        guard SharedDataSafetyGate.isEnabled else {
+            throw SupabaseBudgetSyncError.sharedDataSafetyDisabled
+        }
+        guard let userId = UUID(uuidString: userScopeId) else {
+            throw SupabaseBudgetSyncError.missingUser
+        }
+        let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
+        let params = SharedDataSafetyMutationParameters(
+            budgetId: budgetId,
+            recordId: id,
+            expectedRowVersion: expectedRowVersion,
+            clientMutationId: mutationId,
+            operation: operation,
+            payload: payload
+        )
+        do {
+            return try await client
+                .rpc(SharedDataSafetyMutationRPC.transaction.name, params: params)
+                .execute()
+                .value
+        } catch {
+            throw Self.mapMutationError(error)
+        }
+    }
+
     func deleteTransactionSafely(
         id: UUID,
         expectedRowVersion: Int64?,
@@ -2181,6 +2215,40 @@ final class SupabaseBudgetSyncService {
             clientMutationId: mutationId,
             operation: operation,
             payload: SettlementMutationPayload(settlement: settlement, memberAliases: memberAliases)
+        )
+        do {
+            return try await client
+                .rpc(SharedDataSafetyMutationRPC.settlement.name, params: params)
+                .execute()
+                .value
+        } catch {
+            throw Self.mapMutationError(error)
+        }
+    }
+
+    func mutateSettlement(
+        id: UUID,
+        expectedRowVersion: Int64,
+        payload: SettlementMutationPayload,
+        operation: String,
+        userScopeId: String,
+        budgetScopeId: String? = nil,
+        mutationId: UUID = UUID()
+    ) async throws -> SharedDataSafetyMutationResult {
+        guard SharedDataSafetyGate.isEnabled else {
+            throw SupabaseBudgetSyncError.sharedDataSafetyDisabled
+        }
+        guard let userId = UUID(uuidString: userScopeId) else {
+            throw SupabaseBudgetSyncError.missingUser
+        }
+        let budgetId = UUID(uuidString: budgetScopeId ?? userScopeId) ?? userId
+        let params = SharedDataSafetyMutationParameters(
+            budgetId: budgetId,
+            recordId: id,
+            expectedRowVersion: expectedRowVersion,
+            clientMutationId: mutationId,
+            operation: operation,
+            payload: payload
         )
         do {
             return try await client

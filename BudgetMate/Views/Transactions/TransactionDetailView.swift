@@ -362,7 +362,9 @@ struct TransactionDetailView: View {
         do {
             try modelContext.save()
         } catch {
+            modelContext.rollback()
             cloudSyncStore.recordSyncIssue(error, context: "Stopping recurring transaction")
+            return
         }
         cloudSyncStore.saveTransaction(
             source,
@@ -375,17 +377,22 @@ struct TransactionDetailView: View {
     private func deleteTransaction(_ transactionToDelete: Transaction) {
         guard mutationDecision.isAllowed else { return }
         guard transactionToDelete.ownerUserId == authStore.currentBudgetScopeId else { return }
-        cloudSyncStore.deleteTransaction(
-            transactionToDelete,
-            userScopeId: authStore.currentUserScopeId,
-            budgetScopeId: authStore.currentBudgetScopeId
-        )
+        let transactionId = transactionToDelete.id
+        let expectedRowVersion = transactionToDelete.rowVersion
         modelContext.delete(transactionToDelete)
         do {
             try modelContext.save()
         } catch {
+            modelContext.rollback()
             cloudSyncStore.recordSyncIssue(error, context: "Deleting transaction locally")
+            return
         }
+        cloudSyncStore.deleteTransaction(
+            id: transactionId,
+            expectedRowVersion: expectedRowVersion,
+            userScopeId: authStore.currentUserScopeId,
+            budgetScopeId: authStore.currentBudgetScopeId
+        )
         dismiss()
     }
 

@@ -171,6 +171,17 @@ struct SettingsView: View {
                                 await authStore.signOut()
                             }
                         }
+                        .accessibilityIdentifier("settings.signOut")
+                        .accessibilityHint("Attempts to sign out of BudgetMate.")
+                        .disabled(authStore.isLoading)
+
+                        if let message = authStore.errorMessage {
+                            Text("Couldn’t finish signing out: \(message) Tap Sign Out to retry.")
+                                .font(settingsHelperFont)
+                                .foregroundStyle(AppTheme.danger)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("settings.signOutError")
+                        }
                     }
 
                     settingsSection("Shared Budget") {

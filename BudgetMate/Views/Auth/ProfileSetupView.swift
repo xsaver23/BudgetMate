@@ -5,16 +5,26 @@ struct ProfileSetupView: View {
     @EnvironmentObject private var cloudSyncStore: CloudSyncStore
     @EnvironmentObject private var memberViewModel: MemberViewModel
     @EnvironmentObject private var settingsStore: SettingsStore
+    private let recoveryState: ProfileRecoveryState
+    private let onRetryRecovery: () -> Void
     @State private var displayName = ""
     @State private var validationMessage: String?
     @FocusState private var isNameFocused: Bool
+
+    init(
+        recoveryState: ProfileRecoveryState = .idle,
+        onRetryRecovery: @escaping () -> Void = {}
+    ) {
+        self.recoveryState = recoveryState
+        self.onRetryRecovery = onRetryRecovery
+    }
 
     private var trimmedName: String {
         displayName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var canContinue: Bool {
-        !trimmedName.isEmpty && !displayName.containsEmoji
+        !trimmedName.isEmpty && !displayName.containsEmoji && !recoveryState.isChecking
     }
 
     var body: some View {
@@ -74,6 +84,8 @@ struct ProfileSetupView: View {
                     .font(.subheadline)
                 }
 
+                recoveryStatus
+
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Name")
                         .font(.caption.weight(.semibold))
@@ -111,6 +123,42 @@ struct ProfileSetupView: View {
                 .opacity(canContinue ? 1 : 0.45)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private var recoveryStatus: some View {
+        switch recoveryState {
+        case .idle, .recovered:
+            EmptyView()
+        case .checking:
+            HStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Checking for a saved cloud profile…")
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.textSecondary)
+                Spacer(minLength: 0)
+            }
+            .accessibilityIdentifier("profileRecovery.checking")
+        case .notFound:
+            Text("No saved profile found. Choose a name to continue.")
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("profileRecovery.notFound")
+        case .transientFailure:
+            VStack(alignment: .leading, spacing: 10) {
+                Text("We couldn’t check your saved profile right now.")
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.textSecondary)
+                Button("Retry cloud recovery", action: onRetryRecovery)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.brand)
+                    .accessibilityIdentifier("profileRecovery.retry")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("profileRecovery.transientFailure")
         }
     }
 

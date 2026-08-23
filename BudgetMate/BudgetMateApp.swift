@@ -2,6 +2,18 @@ import OSLog
 import SwiftData
 import SwiftUI
 
+enum ProfileRecoveryState: Equatable {
+    case idle
+    case checking
+    case recovered
+    case notFound
+    case transientFailure
+
+    var isChecking: Bool {
+        self == .checking
+    }
+}
+
 @main
 @MainActor
 struct BudgetMateApp: App {
@@ -16,6 +28,7 @@ struct BudgetMateApp: App {
     @StateObject private var persistenceStartup: PersistenceStartupCoordinator
     @Environment(\.scenePhase) private var scenePhase
     @State private var appliedUserScopeId: String?
+    @State private var appliedBudgetScopeId: String?
     @State private var lastAutoSyncedAtByScope: [String: Date] = [:]
     @State private var autoSyncFailureCountByScope: [String: Int] = [:]
     @State private var nextAutoSyncAllowedAtByScope: [String: Date] = [:]
@@ -26,7 +39,9 @@ struct BudgetMateApp: App {
     @State private var loggedLaunchMilestones: Set<String> = []
     @State private var foregroundRefreshTask: Task<Void, Never>?
     @State private var checkedCloudProfileUserScopeId: String?
-    @State private var isCheckingCloudProfile = false
+    @State private var profileRecoveryState = ProfileRecoveryState.idle
+    @State private var profileRecoveryStateUserScopeId: String?
+    @State private var profileRecoveryInFlightUserScopeId: String?
     private let activeSyncInterval: Duration = .seconds(60)
     private let minimumPassiveSyncInterval: TimeInterval = 60
     private let launchInteractionGracePeriod: Duration = .seconds(2)
@@ -138,16 +153,23 @@ struct BudgetMateApp: App {
                                 // Profile state must be internally consistent in
                                 // the personal scope before a shared budget can
                                 // become the selected local model.
+                                appliedUserScopeId = nil
+                                appliedBudgetScopeId = nil
                                 applyUserScope(authStore.currentUserScopeId, budgetScopeId: authStore.currentUserScopeId)
-                                await restoreCloudProfileIfNeeded(authStore.currentUserScopeId)
-                                guard !Task.isCancelled else { return }
-                                // Reveal the app with on-device data as soon as the
-                                // profile is known, instead of blocking the tabs on the
-                                // shared-budget lookup and full sync that follow.
                                 appliedUserScopeId = authStore.currentUserScopeId
+                                if memberViewModel.isProfileComplete {
+                                    applyUserScope(
+                                        authStore.currentUserScopeId,
+                                        budgetScopeId: authStore.currentBudgetScopeId
+                                    )
+                                    appliedBudgetScopeId = authStore.currentBudgetScopeId
+                                }
                                 if recordLaunchMilestone("Local UI ready") {
                                     Self.launchSignposter.emitEvent("Local UI Ready")
                                 }
+
+                                await restoreCloudProfileIfNeeded(authStore.currentUserScopeId)
+                                guard !Task.isCancelled else { return }
 
                                 guard memberViewModel.isProfileComplete,
                                       await waitForLaunchInteractionWindow(
@@ -159,6 +181,7 @@ struct BudgetMateApp: App {
                                 }
                                 guard !Task.isCancelled else { return }
                                 applyUserScope(authStore.currentUserScopeId, budgetScopeId: authStore.currentBudgetScopeId)
+                                appliedBudgetScopeId = authStore.currentBudgetScopeId
                                 let syncKey = makeSyncKey(
                                     userScopeId: authStore.currentUserScopeId,
                                     budgetScopeId: authStore.currentBudgetScopeId
@@ -223,14 +246,21 @@ struct BudgetMateApp: App {
 
     @ViewBuilder
     private var authenticatedContent: some View {
-        if appliedUserScopeId != authStore.currentUserScopeId || isCheckingCloudProfile {
+        if appliedUserScopeId != authStore.currentUserScopeId {
             ProgressView("Preparing your budget")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(AppTheme.background)
-        } else if memberViewModel.isProfileComplete {
-            RootTabView()
+        } else if !memberViewModel.isProfileComplete {
+            ProfileSetupView(
+                recoveryState: currentProfileRecoveryState,
+                onRetryRecovery: retryCloudProfileRecovery
+            )
+        } else if appliedBudgetScopeId != authStore.currentBudgetScopeId {
+            ProgressView("Preparing your budget")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(AppTheme.background)
         } else {
-            ProfileSetupView()
+            RootTabView()
         }
     }
 
@@ -300,24 +330,43 @@ struct BudgetMateApp: App {
     @MainActor
     private func restoreCloudProfileIfNeeded(_ userScopeId: String) async {
         guard !memberViewModel.isProfileComplete,
+              authStore.isAuthenticated,
+              authStore.currentUserScopeId == userScopeId,
+              profileRecoveryInFlightUserScopeId != userScopeId,
               checkedCloudProfileUserScopeId != userScopeId else {
             return
         }
 
-        isCheckingCloudProfile = true
-        defer { isCheckingCloudProfile = false }
+        if profileRecoveryStateUserScopeId != userScopeId {
+            profileRecoveryStateUserScopeId = userScopeId
+            profileRecoveryState = .idle
+        }
+        profileRecoveryState = .checking
+        profileRecoveryInFlightUserScopeId = userScopeId
+        defer {
+            if profileRecoveryInFlightUserScopeId == userScopeId {
+                profileRecoveryInFlightUserScopeId = nil
+            }
+        }
 
         do {
             let cloudMembers = try await cloudSyncStore.fetchMembers(
                 userScopeId: userScopeId,
                 budgetScopeId: userScopeId
             )
+            guard !Task.isCancelled,
+                  !memberViewModel.isProfileComplete,
+                  authStore.isAuthenticated,
+                  authStore.currentUserScopeId == userScopeId else {
+                return
+            }
             if memberViewModel.restoreProfileIfPresent(
                 from: cloudMembers,
                 userScopeId: userScopeId,
                 email: authStore.userEmail
             ) {
                 checkedCloudProfileUserScopeId = userScopeId
+                profileRecoveryState = .recovered
                 return
             }
 
@@ -326,36 +375,111 @@ struct BudgetMateApp: App {
             if selectedScopeId != userScopeId {
                 sharedScopeIds.append(selectedScopeId)
             }
-            if let memberships = try? await cloudSyncStore.fetchMemberships(userScopeId: userScopeId) {
-                for sharedScopeId in memberships.map({ $0.budgetId.uuidString })
-                where sharedScopeId != userScopeId && !sharedScopeIds.contains(sharedScopeId) {
-                    sharedScopeIds.append(sharedScopeId)
+
+            let memberships: [BudgetMembership]
+            do {
+                memberships = try await cloudSyncStore.fetchMemberships(userScopeId: userScopeId)
+            } catch {
+                guard !Task.isCancelled,
+                      !memberViewModel.isProfileComplete,
+                      authStore.isAuthenticated,
+                      authStore.currentUserScopeId == userScopeId else {
+                    return
                 }
+                profileRecoveryState = .transientFailure
+                return
+            }
+            for sharedScopeId in memberships.map({ $0.budgetId.uuidString })
+            where sharedScopeId != userScopeId && !sharedScopeIds.contains(sharedScopeId) {
+                sharedScopeIds.append(sharedScopeId)
             }
 
+            guard !Task.isCancelled,
+                  !memberViewModel.isProfileComplete,
+                  authStore.isAuthenticated,
+                  authStore.currentUserScopeId == userScopeId else {
+                return
+            }
+
+            var sharedLookupFailed = false
             for sharedScopeId in sharedScopeIds {
+                guard !Task.isCancelled,
+                      !memberViewModel.isProfileComplete,
+                      authStore.isAuthenticated,
+                      authStore.currentUserScopeId == userScopeId else {
+                    return
+                }
                 do {
                     let sharedMembers = try await cloudSyncStore.fetchMembers(
                         userScopeId: userScopeId,
                         budgetScopeId: sharedScopeId
                     )
+                    guard !Task.isCancelled,
+                          !memberViewModel.isProfileComplete,
+                          authStore.isAuthenticated,
+                          authStore.currentUserScopeId == userScopeId else {
+                        return
+                    }
                     if memberViewModel.restoreProfileIfPresent(
                         from: sharedMembers,
                         userScopeId: userScopeId,
                         email: authStore.userEmail
                     ) {
                         checkedCloudProfileUserScopeId = userScopeId
+                        profileRecoveryState = .recovered
                         return
                     }
                 } catch {
                     // A stale or inaccessible membership should not prevent
                     // recovery from another active shared budget.
+                    guard !Task.isCancelled else { return }
+                    sharedLookupFailed = true
                 }
             }
 
+            guard !Task.isCancelled,
+                  !memberViewModel.isProfileComplete,
+                  authStore.isAuthenticated,
+                  authStore.currentUserScopeId == userScopeId else {
+                return
+            }
+            guard !sharedLookupFailed else {
+                profileRecoveryState = .transientFailure
+                return
+            }
+
             checkedCloudProfileUserScopeId = userScopeId
+            profileRecoveryState = .notFound
         } catch {
+            guard !Task.isCancelled,
+                  !memberViewModel.isProfileComplete,
+                  authStore.isAuthenticated,
+                  authStore.currentUserScopeId == userScopeId else {
+                return
+            }
+            profileRecoveryState = .transientFailure
             cloudSyncStore.recordSyncIssue(error, context: "Restoring cloud profile")
+        }
+    }
+
+    private var currentProfileRecoveryState: ProfileRecoveryState {
+        guard profileRecoveryStateUserScopeId == authStore.currentUserScopeId else {
+            return .idle
+        }
+        return profileRecoveryState
+    }
+
+    @MainActor
+    private func retryCloudProfileRecovery() {
+        guard authStore.isAuthenticated,
+              !memberViewModel.isProfileComplete else {
+            return
+        }
+
+        checkedCloudProfileUserScopeId = nil
+        let userScopeId = authStore.currentUserScopeId
+        Task { @MainActor in
+            await restoreCloudProfileIfNeeded(userScopeId)
         }
     }
 
