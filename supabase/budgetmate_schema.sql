@@ -2871,11 +2871,14 @@ language sql
 immutable
 set search_path = pg_catalog, public
 as $$
-  select p_category_budgets_minor_units is not null
+  select coalesce(
+    p_category_budgets_minor_units is not null
     and public.money_bridge_settings_minor_units(
       p_category_budgets, p_monthly_budget, p_currency_code
     ) = p_category_budgets_minor_units
-    and public.money_bridge_valid_visibility(p_category_budgets, p_category_visibility)
+    and public.money_bridge_valid_visibility(p_category_budgets, p_category_visibility),
+    false
+  )
 $$;
 
 create or replace function public.money_bridge_preflight(p_budget_id uuid default null)
@@ -3261,6 +3264,9 @@ as $$
 declare
   household_currency text;
   legacy_payload_changed boolean := true;
+  derived_visibility jsonb;
+  old_derived_visibility jsonb;
+  visibility_category text;
 begin
   new.currency_code := upper(btrim(new.currency_code));
   if new.currency_code not in ('USD', 'CAD', 'EUR', 'GBP', 'AUD', 'PHP', 'JPY') then
@@ -3294,25 +3300,39 @@ begin
       or new.category_budgets is distinct from old.category_budgets;
   end if;
 
-  if new.category_budgets_minor_units is null
-     or (
-       tg_op = 'UPDATE'
-       and legacy_payload_changed
-       and new.category_budgets_minor_units is not distinct from old.category_budgets_minor_units
-     ) then
+  if new.category_budgets_minor_units is null or legacy_payload_changed then
     new.category_budgets_minor_units := public.money_bridge_settings_minor_units(
       new.category_budgets, new.monthly_budget, household_currency
     );
   end if;
-  if new.category_visibility is null
-     or (
-       tg_op = 'UPDATE'
-       and legacy_payload_changed
-       and new.category_visibility is not distinct from old.category_visibility
-     ) then
-    new.category_visibility := public.money_bridge_category_visibility(
-      new.category_budgets, new.monthly_budget
+  derived_visibility := public.money_bridge_category_visibility(
+    new.category_budgets, new.monthly_budget
+  );
+  if new.category_visibility is null then
+    new.category_visibility := derived_visibility;
+  elsif tg_op = 'UPDATE' and legacy_payload_changed
+        and jsonb_typeof(new.category_visibility) = 'object'
+        and jsonb_typeof(derived_visibility) = 'object' then
+    old_derived_visibility := public.money_bridge_category_visibility(
+      old.category_budgets, old.monthly_budget
     );
+    for visibility_category in
+      select key
+      from (
+        select jsonb_object_keys(coalesce(old_derived_visibility, '{}'::jsonb)) as key
+        union
+        select jsonb_object_keys(derived_visibility) as key
+      ) categories
+      where old_derived_visibility -> key is distinct from derived_visibility -> key
+    loop
+      if derived_visibility ? visibility_category then
+        new.category_visibility := new.category_visibility || jsonb_build_object(
+          visibility_category, derived_visibility -> visibility_category
+        );
+      else
+        new.category_visibility := new.category_visibility - visibility_category;
+      end if;
+    end loop;
   end if;
 
   if new.category_visibility is not null
