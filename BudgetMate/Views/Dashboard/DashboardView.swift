@@ -16,9 +16,11 @@ struct DashboardView: View {
     let budgetScopeId: String
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var selectedMemberId: UUID? = nil
     @State private var selectedTransaction: Transaction?
     @State private var pendingSettlement: SettlementSuggestion?
+    @State private var settlementErrorMessage: String?
     @State private var breakdownPresentation: BreakdownPresentation?
     @State private var isShowingSettlementList = false
     @State private var derivedMetrics = DashboardDerivedMetrics()
@@ -156,21 +158,36 @@ struct DashboardView: View {
                     }
                 )
             }
+            .allowsHitTesting(pendingSettlement == nil)
+            .accessibilityHidden(pendingSettlement != nil)
             .overlay {
                 if let settlement = pendingSettlement {
                     settlementConfirmationOverlay(settlement)
                         .transition(settlementOverlayTransition)
+                        .zIndex(1)
                 }
             }
         }
     }
 
     private var moneyAnomalyNotice: some View {
-        Label("Some money records need attention", systemImage: "exclamationmark.triangle.fill")
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(BudgetBeaverPalette.amountRed)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityLabel("Some money records need attention")
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Some money records need attention", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AppTheme.expenseText)
+
+            Button {
+                onOpenSettings()
+            } label: {
+                Label("Review in Settings", systemImage: "gearshape")
+                    .font(.caption.weight(.bold))
+            }
+            .foregroundStyle(AppTheme.brandForeground)
+            .accessibilityHint("Opens Settings, where you can review sync recovery options.")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Some money records need attention")
     }
 
     @MainActor
@@ -203,6 +220,12 @@ struct DashboardView: View {
     }
 
     private func settle(_ settlement: SettlementSuggestion) {
+        guard settingsStore.hasObservedCloudSettingsBaseline else {
+            presentPendingSettlement(settlement)
+            settlementErrorMessage = "Sync this budget before completing this settlement."
+            return
+        }
+        settlementErrorMessage = nil
         let mutationDecision = SharedRecordMutationCapability.decision(
             currentUserScopeId: authStore.currentUserScopeId,
             activeBudgetScopeId: authStore.currentBudgetScopeId,
@@ -233,6 +256,9 @@ struct DashboardView: View {
             try modelContext.save()
         } catch {
             cloudSyncStore.recordSyncIssue(error, context: "Saving settle-up record")
+            modelContext.delete(record)
+            settlementErrorMessage = "Couldn't save this settlement locally. Try again."
+            return
         }
         cloudSyncStore.saveSettlement(
             record,
@@ -253,12 +279,24 @@ struct DashboardView: View {
     private func presentPendingSettlement(_ settlement: SettlementSuggestion) {
         withAnimation(settlementOverlayAnimation) {
             pendingSettlement = settlement
+            settlementErrorMessage = nil
         }
     }
 
     private func clearPendingSettlement() {
         withAnimation(settlementOverlayAnimation) {
             pendingSettlement = nil
+            settlementErrorMessage = nil
+        }
+    }
+
+    private func retrySettlementSync() {
+        settlementErrorMessage = nil
+        Task {
+            await appRefreshStore.refreshCurrentBudget(forceSync: true)
+            if !settingsStore.hasObservedCloudSettingsBaseline {
+                settlementErrorMessage = "Sync is still required before completing this settlement."
+            }
         }
     }
 
@@ -321,19 +359,29 @@ struct DashboardView: View {
                     .minimumScaleFactor(0.48)
             }
 
-            HStack(alignment: .center, spacing: 14) {
+            let metricLayout: AnyLayout = dynamicTypeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(spacing: 14))
+                : AnyLayout(HStackLayout(alignment: .center, spacing: 14))
+            metricLayout {
                 miniStat(
-                    title: "Income",
+                    title: hasProjectedTransactions ? "Projected income" : "Income",
                     value: derivedMetrics.totals.totalIncome,
                     tint: AppTheme.income,
                     systemImage: "arrow.down.left"
                 )
                 miniStat(
-                    title: "Expenses",
+                    title: hasProjectedTransactions ? "Projected expenses" : "Expenses",
                     value: derivedMetrics.totals.totalExpenses,
                     tint: AppTheme.expense,
                     systemImage: "arrow.up.right"
                 )
+            }
+
+            if hasProjectedTransactions {
+                Text("Projected figures include upcoming transactions.")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.vertical, 4)
@@ -344,7 +392,7 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 20) {
             Image(systemName: systemImage)
                 .font(.headline.weight(.black))
-                .foregroundStyle(AppTheme.brand)
+                .foregroundStyle(AppTheme.brandForeground)
                 .frame(width: 40, height: 40)
                 .background(AppTheme.brandSoft, in: Circle())
 
@@ -395,9 +443,27 @@ struct DashboardView: View {
     }
 
     private var netScopeLabel: String {
+        if hasProjectedTransactions {
+            return monthSelectionStore.isCurrentMonth
+                ? "Projected net this month"
+                : "Projected net for \(monthSelectionStore.selectedMonthTitle)"
+        }
         return monthSelectionStore.isCurrentMonth
             ? "Net this month"
             : "Net for \(monthSelectionStore.selectedMonthTitle)"
+    }
+
+    private var hasProjectedTransactions: Bool {
+        derivedMetrics.monthTransactions.contains { $0.isUpcomingTransaction }
+    }
+
+    private var actualMonthExpenses: Double {
+        DashboardViewModel.totals(
+            transactions: derivedMetrics.monthTransactions.filter { !$0.isUpcomingTransaction },
+            monthlyBudget: monthlyBudget,
+            forMember: selectedMemberId,
+            currencyCode: settingsStore.settings.currencyCode
+        ).totalExpenses
     }
 
     private var damBarSummary: some View {
@@ -405,13 +471,24 @@ struct DashboardView: View {
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Budget pacing")
-                    .font(.title3.weight(.black))
-                    .foregroundStyle(BudgetBeaverPalette.wood)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Budget pacing")
+                        .font(.title3.weight(.black))
+                        .foregroundStyle(BudgetBeaverPalette.wood)
+                    Text(hasProjectedTransactions ? "Projected spend" : "Spend")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.textSecondary)
+                }
                 Spacer()
                 Text(spentPercentageText)
                     .font(.title3.weight(.black))
                     .foregroundStyle(BudgetBeaverPalette.wood)
+            }
+
+            if hasProjectedTransactions {
+                Label("Includes projected upcoming transactions", systemImage: "calendar.badge.clock")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.textSecondary)
             }
 
             ProgressView(value: clampedProgress)
@@ -423,15 +500,6 @@ struct DashboardView: View {
             pacingStatusBox
         }
         .padding(20)
-    }
-
-    private func spentLabel(_ spent: Double) -> Text {
-        Text("Spent: ")
-            .font(.footnote.weight(.medium))
-            .foregroundColor(BudgetBeaverPalette.wood.opacity(0.7)) +
-        Text(amount(spent))
-            .font(.footnote.weight(.bold))
-            .foregroundColor(BudgetBeaverPalette.ink)
     }
 
     private var spentPercentageText: String {
@@ -453,7 +521,7 @@ struct DashboardView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.surface.opacity(0.55), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(insight.background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     // MARK: - Who owes whom
@@ -464,9 +532,14 @@ struct DashboardView: View {
 
         return VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("Settle up")
-                    .font(.title3.weight(.black))
-                    .foregroundStyle(BudgetBeaverPalette.ink)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Settle up")
+                        .font(.title3.weight(.black))
+                        .foregroundStyle(BudgetBeaverPalette.ink)
+                    Text("All-time balances")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.textSecondary)
+                }
 
                 Spacer()
 
@@ -506,11 +579,21 @@ struct DashboardView: View {
             } label: {
                 HStack(spacing: 10) {
                     HStack(spacing: 10) {
-                        settlementAvatar(member: settlement.from, color: avatarColor(for: settlement.from), borderColor: BudgetBeaverPalette.innerSurface)
+                        MemberInitialsBadge(
+                            initials: settlement.from.displayInitials,
+                            colorHex: settlement.from.colorHex,
+                            size: 44,
+                            accessibilityLabel: "Member \(settlement.from.displayName)"
+                        )
                         Image(systemName: "arrow.right")
                             .font(.headline.weight(.bold))
                             .foregroundStyle(BudgetBeaverPalette.wood)
-                        settlementAvatar(member: settlement.to, color: avatarColor(for: settlement.to), borderColor: BudgetBeaverPalette.innerSurface)
+                        MemberInitialsBadge(
+                            initials: settlement.to.displayInitials,
+                            colorHex: settlement.to.colorHex,
+                            size: 44,
+                            accessibilityLabel: "Member \(settlement.to.displayName)"
+                        )
                     }
 
                     VStack(alignment: .leading, spacing: 3) {
@@ -520,7 +603,7 @@ struct DashboardView: View {
                             .lineLimit(2)
                             .minimumScaleFactor(0.75)
 
-                        Text("Tap for breakdown")
+                        Text("Why this amount ›")
                             .font(.caption.weight(.bold))
                             .foregroundStyle(BudgetBeaverPalette.wood)
                     }
@@ -551,26 +634,14 @@ struct DashboardView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(settlement.from.displayName) owes \(settlement.to.displayName)")
         .accessibilityValue(amount(settlement.amount))
-        .accessibilityHint("Tap for breakdown.")
-    }
-
-    private func settlementAvatar(member: BudgetMember, color: Color, borderColor: Color) -> some View {
-        Text(member.displayInitials)
-            .font(.system(size: 20, weight: .black, design: .rounded))
-            .foregroundStyle(Color.white)
-            .frame(width: 44, height: 44)
-            .background(color, in: Circle())
-            .overlay(Circle().stroke(borderColor, lineWidth: 3))
-    }
-
-    private func avatarColor(for member: BudgetMember) -> Color {
-        Color(hex: member.colorHex)
+        .accessibilityHint("Opens an explanation of this all-time balance.")
     }
 
     private func settlementConfirmationOverlay(_ settlement: SettlementSuggestion) -> some View {
         ZStack {
             Color.black.opacity(0.5)
                 .ignoresSafeArea()
+                .accessibilityHidden(true)
                 .onTapGesture {
                     clearPendingSettlement()
                 }
@@ -582,6 +653,20 @@ struct DashboardView: View {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
 
+                if let settlementErrorMessage {
+                    VStack(spacing: 8) {
+                        Label(settlementErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(AppTheme.expenseText)
+                            .multilineTextAlignment(.center)
+
+                        Button("Retry Sync", action: retrySettlementSync)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(AppTheme.brandForeground)
+                    }
+                    .padding(.horizontal, 8)
+                }
+
                 VStack(spacing: 10) {
                     Button {
                         settle(settlement)
@@ -590,7 +675,7 @@ struct DashboardView: View {
                             .font(.headline.weight(.bold))
                             .foregroundStyle(Color.white)
                             .frame(maxWidth: .infinity, minHeight: 50)
-                            .background(BudgetBeaverPalette.jenBlue, in: Capsule())
+                            .background(AppTheme.brand, in: Capsule())
                     }
                     .buttonStyle(PressableButtonStyle())
 
@@ -611,6 +696,10 @@ struct DashboardView: View {
             .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .padding(.horizontal, 24)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isModal)
     }
 
     private func firstName(_ member: BudgetMember) -> String {
@@ -637,9 +726,9 @@ struct DashboardView: View {
 
                 Spacer()
 
-                Text("THIS MONTH")
+                Text(hasProjectedTransactions ? "PROJECTED MONTH" : "THIS MONTH")
                     .font(.caption2.weight(.bold))
-                    .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.6))
+                    .foregroundStyle(AppTheme.textSecondary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .background(AppTheme.warningTint, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -675,7 +764,7 @@ struct DashboardView: View {
     }
 
     private func podiumHeroCard(_ item: ExpenseCategoryBreakdown) -> some View {
-        let iconName = categoryIconName(for: item.category)
+        let iconName = item.category.systemImageName
 
         return VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top) {
@@ -725,7 +814,7 @@ struct DashboardView: View {
     private func podiumSplitCard(_ item: ExpenseCategoryBreakdown, tint: Color) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 8) {
-                Image(systemName: categoryIconName(for: item.category))
+                Image(systemName: item.category.systemImageName)
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(tint)
 
@@ -751,33 +840,6 @@ struct DashboardView: View {
         )
     }
 
-    private func categoryIconName(for category: TransactionCategory) -> String {
-        switch category {
-        case .shopping:
-            return "bag.fill"
-        case .restaurant, .food:
-            return "fork.knife"
-        case .groceries:
-            return "cart.fill"
-        case .rent, .household:
-            return "house.fill"
-        case .transportation, .gas, .parking:
-            return "car.fill"
-        case .bills, .subscription:
-            return "doc.text.fill"
-        case .health:
-            return "cross.case.fill"
-        case .entertainment:
-            return "sparkles.tv.fill"
-        case .vacation:
-            return "airplane"
-        case .gift:
-            return "gift.fill"
-        default:
-            return "tag.fill"
-        }
-    }
-
     private func amount(_ value: Double) -> String {
         CurrencyFormatter.amountString(value, symbol: currencySymbol)
     }
@@ -786,7 +848,7 @@ struct DashboardView: View {
         if derivedMetrics.totals.remainingBudget < 0 {
             let overAmount = amount(abs(derivedMetrics.totals.remainingBudget))
             return (
-                Text("You're over budget by ")
+                Text(hasProjectedTransactions ? "Projected spend is over budget by " : "You're over budget by ")
                     .fontWeight(.regular) +
                 Text(overAmount)
                     .fontWeight(.bold) +
@@ -845,15 +907,18 @@ struct DashboardView: View {
         let elapsedDays = max((calendar.dateComponents([.day], from: start, to: now).day ?? 0) + 1, 1)
         let remainingDays = max(totalDays - elapsedDays + 1, 1)
         let dailyRemaining = derivedMetrics.totals.remainingBudget / Double(remainingDays)
-        let expectedSpend = monthlyBudget * (Double(elapsedDays) / Double(totalDays))
-        let tolerance = monthlyBudget * 0.05
         let dailyPhrase = remainingDays == 1
             ? "\(amount(derivedMetrics.totals.remainingBudget)) left for today"
             : "about \(amount(dailyRemaining)) per day left"
 
-        if derivedMetrics.totals.totalExpenses <= expectedSpend + tolerance {
+        if !Self.isSpendingFasterThanPlanned(
+            actualExpenses: actualMonthExpenses,
+            monthlyBudget: monthlyBudget,
+            elapsedDays: elapsedDays,
+            totalDays: totalDays
+        ) {
             return (
-                Text("You're on track. You have ")
+                Text(hasProjectedTransactions ? "Projected spend is on track. You have " : "You're on track. You have ")
                     .fontWeight(.regular) +
                 Text(dailyPhrase)
                     .fontWeight(.bold) +
@@ -866,7 +931,7 @@ struct DashboardView: View {
         }
 
         return (
-            Text("You're spending faster than planned. You have ")
+            Text(hasProjectedTransactions ? "Projected spend is running faster than planned. You have " : "You're spending faster than planned. You have ")
                 .fontWeight(.regular) +
             Text(dailyPhrase)
                 .fontWeight(.bold) +
@@ -885,7 +950,9 @@ struct DashboardView: View {
 
         if derivedMetrics.totals.remainingBudget < 0 {
             return (
-                "You're over budget by \(amount(abs(derivedMetrics.totals.remainingBudget))).",
+                hasProjectedTransactions
+                    ? "Projected spend is over budget by \(amount(abs(derivedMetrics.totals.remainingBudget)))."
+                    : "You're over budget by \(amount(abs(derivedMetrics.totals.remainingBudget))).",
                 "exclamationmark.triangle.fill",
                 AppTheme.expense
             )
@@ -920,22 +987,29 @@ struct DashboardView: View {
         let elapsedDays = max((calendar.dateComponents([.day], from: start, to: now).day ?? 0) + 1, 1)
         let remainingDays = max(totalDays - elapsedDays + 1, 1)
         let dailyRemaining = derivedMetrics.totals.remainingBudget / Double(remainingDays)
-        let expectedSpend = monthlyBudget * (Double(elapsedDays) / Double(totalDays))
-        let tolerance = monthlyBudget * 0.05
         let remainingPhrase = remainingDays == 1
             ? "\(amount(derivedMetrics.totals.remainingBudget)) left for today"
             : "about \(amount(dailyRemaining)) per day left"
 
-        if derivedMetrics.totals.totalExpenses <= expectedSpend + tolerance {
+        if !Self.isSpendingFasterThanPlanned(
+            actualExpenses: actualMonthExpenses,
+            monthlyBudget: monthlyBudget,
+            elapsedDays: elapsedDays,
+            totalDays: totalDays
+        ) {
             return (
-                "You're on track. \(remainingPhrase).",
+                hasProjectedTransactions
+                    ? "Projected spend is on track. \(remainingPhrase)."
+                    : "You're on track. \(remainingPhrase).",
                 "checkmark.circle.fill",
                 AppTheme.income
             )
         }
 
         return (
-            "You're spending faster than planned. \(remainingPhrase).",
+            hasProjectedTransactions
+                ? "Projected spend is running faster than planned. \(remainingPhrase)."
+                : "You're spending faster than planned. \(remainingPhrase).",
             "speedometer",
             AppTheme.expense
         )
@@ -945,7 +1019,7 @@ struct DashboardView: View {
         VStack(spacing: 8) {
             Image(systemName: systemImage)
                 .font(.system(size: 26, weight: .semibold))
-                .foregroundStyle(AppTheme.brand)
+                .foregroundStyle(AppTheme.brandForeground)
             Text(title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.textPrimary)
@@ -956,6 +1030,31 @@ struct DashboardView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
+    }
+
+    static func pacingTargetSpend(
+        monthlyBudget: Double,
+        elapsedDays: Int,
+        totalDays: Int,
+        includesProjectedTransactions: Bool
+    ) -> Double {
+        guard !includesProjectedTransactions else { return monthlyBudget }
+        return monthlyBudget * (Double(max(elapsedDays, 0)) / Double(max(totalDays, 1)))
+    }
+
+    static func isSpendingFasterThanPlanned(
+        actualExpenses: Double,
+        monthlyBudget: Double,
+        elapsedDays: Int,
+        totalDays: Int
+    ) -> Bool {
+        let target = pacingTargetSpend(
+            monthlyBudget: monthlyBudget,
+            elapsedDays: elapsedDays,
+            totalDays: totalDays,
+            includesProjectedTransactions: false
+        )
+        return actualExpenses > target + monthlyBudget * 0.05
     }
 
     private func filterLabel(for member: BudgetMember) -> String {

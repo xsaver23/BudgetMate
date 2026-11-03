@@ -27,6 +27,8 @@ struct SettingsView: View {
     @State private var currencyHistoryValidatedBudgetScopeId: String?
     @State private var isAdvancedSupportExpanded = false
     @State private var localSyncScrollRequest = 0
+    @State private var isShowingSignOutConfirmation = false
+    @State private var isShowingResetConfirmation = false
 
     private var scopedTransactions: [Transaction] {
         transactions.filter { $0.ownerUserId == budgetScopeId }
@@ -137,7 +139,7 @@ struct SettingsView: View {
                             }
                         }
                         .pickerStyle(.segmented)
-                        .tint(AppTheme.brand)
+                        .tint(AppTheme.brandForeground)
                     }
 
                     settingsSection("Account") {
@@ -160,16 +162,25 @@ struct SettingsView: View {
 
                         Divider()
 
-                        rowButton("Update Profile Name", tint: AppTheme.brand) {
+                        rowButton("Update Profile Name", tint: AppTheme.brandForeground) {
                             isShowingProfileEditor = true
                         }
 
                         Divider()
 
                         rowButton("Sign Out", tint: AppTheme.danger) {
-                            Task {
-                                await authStore.signOut()
-                            }
+                            isShowingSignOutConfirmation = true
+                        }
+                        .accessibilityIdentifier("settings.signOut")
+                        .accessibilityHint("Attempts to sign out of BudgetMate.")
+                        .disabled(authStore.isLoading)
+
+                        if let message = authStore.errorMessage {
+                            Text("Couldn’t finish signing out: \(message) Tap Sign Out to retry.")
+                                .font(settingsHelperFont)
+                                .foregroundStyle(AppTheme.danger)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("settings.signOutError")
                         }
                     }
 
@@ -309,7 +320,7 @@ struct SettingsView: View {
                                 Link(destination: URL(string: "https://budgetmate.pages.dev/privacy.html")!) {
                                     Label("Privacy Policy", systemImage: "hand.raised")
                                         .font(settingsRowLabelFont)
-                                        .foregroundStyle(AppTheme.brand)
+                                        .foregroundStyle(AppTheme.brandForeground)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                                 .accessibilityIdentifier("settings.privacyPolicy")
@@ -319,7 +330,7 @@ struct SettingsView: View {
                                 Link(destination: URL(string: "https://budgetmate.pages.dev/support.html")!) {
                                     Label("Support", systemImage: "questionmark.circle")
                                         .font(settingsRowLabelFont)
-                                        .foregroundStyle(AppTheme.brand)
+                                        .foregroundStyle(AppTheme.brandForeground)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                                 .accessibilityIdentifier("settings.support")
@@ -332,13 +343,8 @@ struct SettingsView: View {
                             }
 
                             settingsSection("Data") {
-                                rowButton("Reset Settings", tint: AppTheme.brand) {
-                                    let currentDecision = freshCurrencyChangeDecision()
-                                    settingsStore.resetSettings(
-                                        preservingCurrencyCode: !currentDecision.isAllowed
-                                    )
-                                    syncFieldsFromStore()
-                                    saveCurrentSettingsToCloud()
+                                rowButton("Reset Settings", tint: AppTheme.brandForeground) {
+                                    isShowingResetConfirmation = true
                                 }
 
                                 Divider()
@@ -410,6 +416,27 @@ struct SettingsView: View {
                 } message: {
                     Text(clearFeedbackMessage ?? "")
                 }
+                .confirmationDialog("Sign Out", isPresented: $isShowingSignOutConfirmation) {
+                    Button("Sign Out", role: .destructive) {
+                        Task { await authStore.signOut() }
+                    }
+                    Button("Cancel", role: .cancel) { }
+                } message: {
+                    Text("You’ll be signed out of this device. Changes that have not synced may not be available after you sign in elsewhere.")
+                }
+                .confirmationDialog("Reset Settings", isPresented: $isShowingResetConfirmation) {
+                    Button("Reset Settings", role: .destructive) {
+                        let currentDecision = freshCurrencyChangeDecision()
+                        settingsStore.resetSettings(
+                            preservingCurrencyCode: !currentDecision.isAllowed
+                        )
+                        syncFieldsFromStore()
+                        saveCurrentSettingsToCloud()
+                    }
+                    Button("Cancel", role: .cancel) { }
+                } message: {
+                    Text("This restores appearance and budget settings—including monthly and category budgets—to defaults. Currency may be preserved when transaction history requires it. Transactions and members are not deleted.")
+                }
             }
         }
     }
@@ -432,31 +459,31 @@ struct SettingsView: View {
     }
 
     private var settingsSectionTitleFont: Font {
-        .system(size: 20, weight: .bold, design: .rounded)
+        .title3.weight(.bold)
     }
 
     private var settingsRowLabelFont: Font {
-        .system(size: 16, weight: .semibold, design: .rounded)
+        .body.weight(.semibold)
     }
 
     private var settingsRowValueFont: Font {
-        .system(size: 16, weight: .semibold, design: .rounded)
+        .body.weight(.semibold)
     }
 
     private var settingsCompactValueFont: Font {
-        .system(size: 15, weight: .bold, design: .rounded)
+        .callout.weight(.bold)
     }
 
     private var settingsHelperFont: Font {
-        .system(size: 14, weight: .medium, design: .rounded)
+        .footnote.weight(.medium)
     }
 
     private var settingsBadgeFont: Font {
-        .system(size: 12, weight: .black, design: .rounded)
+        .caption.weight(.black)
     }
 
     private var settingsActionFont: Font {
-        .system(size: 16, weight: .semibold, design: .rounded)
+        .body.weight(.semibold)
     }
 
     private func settingsSection<Content: View>(
@@ -515,7 +542,7 @@ struct SettingsView: View {
         HStack(spacing: 6) {
             Text(value)
             Image(systemName: "chevron.up.chevron.down")
-                .font(.system(size: 12, weight: .black, design: .rounded))
+                .font(.caption.weight(.black))
         }
         .font(settingsRowValueFont)
         .foregroundStyle(BudgetBeaverPalette.ink)
@@ -554,13 +581,13 @@ struct SettingsView: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "lock.shield.fill")
                 .font(settingsActionFont)
-                .foregroundStyle(AppTheme.danger)
+                .foregroundStyle(BudgetBeaverPalette.wood)
                 .frame(width: 24, height: 24)
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(restriction.title)
                     .font(settingsActionFont)
-                    .foregroundStyle(AppTheme.danger)
+                    .foregroundStyle(BudgetBeaverPalette.wood)
 
                 Text(restriction.message)
                     .font(settingsHelperFont)
@@ -853,7 +880,7 @@ struct SettingsView: View {
         case .local:
             return AppTheme.warningText
         case .cloudPlaceholder:
-            return AppTheme.brand
+            return AppTheme.brandForeground
         }
     }
 
@@ -865,7 +892,7 @@ struct SettingsView: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "arrow.triangle.2.circlepath")
                 .font(settingsBadgeFont)
-                .foregroundStyle(AppTheme.brand)
+                .foregroundStyle(AppTheme.brandForeground)
                 .frame(width: 30, height: 30)
                 .background(Circle().fill(AppTheme.brandSoft))
 
@@ -894,7 +921,7 @@ struct SettingsView: View {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "person.2.badge.plus")
                     .font(settingsBadgeFont)
-                    .foregroundStyle(AppTheme.brand)
+                    .foregroundStyle(AppTheme.brandForeground)
                     .frame(width: 30, height: 30)
                     .background(Circle().fill(AppTheme.brandSoft))
 

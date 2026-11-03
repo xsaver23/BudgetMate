@@ -4,6 +4,9 @@ import Supabase
 
 @MainActor
 final class AuthSessionStore: ObservableObject {
+    static let passwordResetConfirmation = "If an account matches that email, check your inbox for a password reset link."
+    private static let passwordResetFailure = "We couldn't send a reset email right now. Please try again."
+
     @Published private(set) var isLoading = true
     @Published private(set) var isAuthenticated = false
     @Published private(set) var userId: String?
@@ -14,6 +17,7 @@ final class AuthSessionStore: ObservableObject {
     private let client: SupabaseClient
     let configurationIssue: String?
     private let activeBudgetScopeKey = "budgetmate.activeBudgetScopeId"
+    private var authStateRevision = 0
     private static let launchLogger = Logger(subsystem: "BudgetMate", category: "Launch")
     private static let launchSignposter = OSSignposter(subsystem: "BudgetMate", category: "Launch")
 
@@ -83,12 +87,7 @@ final class AuthSessionStore: ObservableObject {
         if !isLoading {
             isLoading = true
         }
-        defer {
-            if isLoading {
-                isLoading = false
-            }
-        }
-
+        let restoreRevision = authStateRevision
         // Apply any locally-persisted session immediately so the UI can render
         // from on-device data without waiting for a network token refresh.
         // Supabase's synchronous getter runs storage migrations, repeated
@@ -106,17 +105,18 @@ final class AuthSessionStore: ObservableObject {
         )
         Self.launchSignposter.emitEvent("Cached Auth Session Read Finished")
 
+        guard authStateRevision == restoreRevision else { return }
         if let cachedSession {
             apply(session: cachedSession)
-            if isLoading {
-                isLoading = false
-            }
         }
+        isLoading = false
 
         do {
             let session = try await client.auth.session
+            guard authStateRevision == restoreRevision else { return }
             apply(session: session)
         } catch {
+            guard authStateRevision == restoreRevision else { return }
             // Only drop back to sign-in when there was no usable cached session.
             // With a cached session we keep the user on their local data (e.g.
             // an offline launch) and let background sync recover later.
@@ -150,25 +150,55 @@ final class AuthSessionStore: ObservableObject {
         }
     }
 
-    func signOut() async {
-        await runAuthAction {
-            let signedOutUserId = userId
-            try await client.auth.signOut()
-            isAuthenticated = false
-            userId = nil
-            userEmail = nil
-            activeBudgetScopeId = nil
-            if let signedOutUserId {
-                UserDefaults.standard.removeObject(forKey: activeBudgetScopeKey(for: signedOutUserId))
-            }
+    func requestPasswordReset(email: String) async {
+        await runAuthAction(failureMessage: Self.passwordResetFailure) {
+            try await client.auth.resetPasswordForEmail(normalized(email))
+            errorMessage = Self.passwordResetConfirmation
         }
     }
 
-    private func runAuthAction(_ action: () async throws -> Void) async {
+    func signOut() async {
         guard configurationIssue == nil else {
             errorMessage = configurationIssue
             return
         }
+        guard !isLoading else { return }
+
+        authStateRevision += 1
+        let signedOutUserId = userId
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        do {
+            try await client.auth.signOut()
+            if client.auth.currentSession == nil {
+                clearAuthenticatedState(for: signedOutUserId)
+            } else {
+                errorMessage = "Please try again."
+            }
+        } catch {
+            // Supabase removes the local session before remote revocation. If
+            // revocation fails, keep the local sign-out and explain what could
+            // not be confirmed instead of leaving app state inconsistent.
+            if client.auth.currentSession == nil {
+                clearAuthenticatedState(for: signedOutUserId)
+                errorMessage = "Signed out on this device, but remote sign-out could not be confirmed. \(friendlyMessage(for: error))"
+            } else {
+                errorMessage = friendlyMessage(for: error)
+            }
+        }
+    }
+
+    private func runAuthAction(
+        failureMessage: String? = nil,
+        _ action: () async throws -> Void
+    ) async {
+        guard configurationIssue == nil else {
+            errorMessage = configurationIssue
+            return
+        }
+        authStateRevision += 1
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
@@ -176,7 +206,7 @@ final class AuthSessionStore: ObservableObject {
         do {
             try await action()
         } catch {
-            errorMessage = friendlyMessage(for: error)
+            errorMessage = failureMessage ?? friendlyMessage(for: error)
         }
     }
 
@@ -193,6 +223,17 @@ final class AuthSessionStore: ObservableObject {
         if userEmail != nextUserEmail { userEmail = nextUserEmail }
         if activeBudgetScopeId != nextBudgetScopeId { activeBudgetScopeId = nextBudgetScopeId }
         if errorMessage != nil { errorMessage = nil }
+    }
+
+    private func clearAuthenticatedState(for signedOutUserId: String?) {
+        isAuthenticated = false
+        userId = nil
+        userEmail = nil
+        activeBudgetScopeId = nil
+        errorMessage = nil
+        if let signedOutUserId {
+            UserDefaults.standard.removeObject(forKey: activeBudgetScopeKey(for: signedOutUserId))
+        }
     }
 
     private func activeBudgetScopeKey(for userId: String) -> String {

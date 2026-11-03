@@ -1,5 +1,19 @@
 import SwiftUI
 
+extension BudgetMateSchemaV3.Transaction {
+    /// A projected occurrence is still included in month totals, but belongs
+    /// in the Upcoming section rather than Recent activity.
+    var isUpcomingTransaction: Bool {
+        isUpcomingTransaction(on: .now, calendar: .current)
+    }
+
+    /// Compares calendar days rather than instants so a transaction later today
+    /// remains part of today's activity instead of being pushed into Upcoming.
+    func isUpcomingTransaction(on now: Date, calendar: Calendar) -> Bool {
+        calendar.compare(date, to: now, toGranularity: .day) == .orderedDescending
+    }
+}
+
 enum TransactionRowPresentation {
     static func signedAmount(
         amount: Double,
@@ -38,11 +52,14 @@ struct TransactionRowView: View {
     }
 
     private var categoryLine: String {
+        var line = transaction.category.displayName
         if let paymentMethod = transaction.paymentMethod {
-            return "\(transaction.category.displayName) • \(paymentMethod.displayName)"
+            line += " • \(paymentMethod.displayName)"
         }
-
-        return transaction.category.displayName
+        if transaction.isUpcomingTransaction {
+            line += " • Upcoming"
+        }
+        return line
     }
 
     var body: some View {
@@ -122,6 +139,9 @@ struct CompactTransactionRow: View {
         if transaction.isMonthlyRecurring {
             line += " • Monthly"
         }
+        if transaction.isUpcomingTransaction {
+            line += " • Upcoming"
+        }
         return line
     }
 
@@ -155,7 +175,7 @@ struct CompactTransactionRow: View {
 
             Text(signedAmount)
                 .font(.roundedBold(16))
-                .foregroundStyle(transaction.type == .income ? AppTheme.brand : AppTheme.danger)
+                .foregroundStyle(transaction.type == .income ? AppTheme.brandForeground : AppTheme.danger)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }

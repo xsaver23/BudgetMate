@@ -127,6 +127,89 @@ begin
     raise exception 'Old-client writes did not preserve the exact bridge';
   end if;
 
+  -- Establish a newer cloud visibility baseline than the stale member saw.
+  update public.budget_settings
+  set
+    category_budgets = '{"food":20}',
+    category_visibility = '{"food":"visible"}'
+  where budget_id = '10000000-0000-0000-0000-000000000001';
+
+  -- A shared member can submit legacy budgets from a stale device whose exact
+  -- and visibility mirrors no longer match either the payload or current row.
+  update public.budget_settings
+  set
+    category_budgets = '{"food":30,"__hiddenCategory__restaurant":1}',
+    category_budgets_minor_units = '{"food":1234}',
+    category_visibility = '{"food":"hidden"}'
+  where budget_id = '10000000-0000-0000-0000-000000000001';
+
+  if (select category_budgets_minor_units ->> 'food'
+      from public.budget_settings
+      where budget_id = '10000000-0000-0000-0000-000000000001') <> '3000'
+     or (select category_visibility ->> 'restaurant'
+         from public.budget_settings
+         where budget_id = '10000000-0000-0000-0000-000000000001') <> 'hidden'
+     or (select category_visibility ->> 'food'
+         from public.budget_settings
+         where budget_id = '10000000-0000-0000-0000-000000000001') <> 'hidden' then
+    raise exception 'Stale shared-member exact settings or visibility were not repaired';
+  end if;
+
+  -- A stale hidden value must not defeat a legacy unhide, while unrelated
+  -- exact-only visibility remains intact.
+  update public.budget_settings
+  set
+    category_budgets = '{"food":30,"restaurant":10}',
+    category_budgets_minor_units = '{"food":3000}',
+    category_visibility = '{"food":"hidden","restaurant":"hidden","orphan":"hidden"}'
+  where budget_id = '10000000-0000-0000-0000-000000000001';
+
+  if (select category_budgets_minor_units ->> 'restaurant'
+      from public.budget_settings
+      where budget_id = '10000000-0000-0000-0000-000000000001') <> '1000'
+     or (select category_visibility ->> 'restaurant'
+         from public.budget_settings
+         where budget_id = '10000000-0000-0000-0000-000000000001') <> 'visible'
+     or (select category_visibility ->> 'food'
+         from public.budget_settings
+         where budget_id = '10000000-0000-0000-0000-000000000001') <> 'hidden'
+     or (select category_visibility ->> 'orphan'
+         from public.budget_settings
+         where budget_id = '10000000-0000-0000-0000-000000000001') <> 'hidden' then
+    raise exception 'Legacy visibility delta did not merge safely';
+  end if;
+
+  -- A legacy-only client omits the exact visibility field. Apply only the
+  -- derived hide/unhide delta and retain unrelated exact-only choices.
+  update public.budget_settings
+  set category_budgets = '{"food":30,"restaurant":10,"__hiddenCategory__restaurant":1}'
+  where budget_id = '10000000-0000-0000-0000-000000000001';
+
+  if (select category_visibility ->> 'restaurant'
+      from public.budget_settings
+      where budget_id = '10000000-0000-0000-0000-000000000001') <> 'hidden'
+     or (select category_visibility ->> 'food'
+         from public.budget_settings
+         where budget_id = '10000000-0000-0000-0000-000000000001') <> 'hidden'
+     or (select category_visibility ->> 'orphan'
+         from public.budget_settings
+         where budget_id = '10000000-0000-0000-0000-000000000001') <> 'hidden' then
+    raise exception 'Legacy-only visibility delta discarded exact-only choices';
+  end if;
+
+  update public.budget_settings
+  set category_budgets = '{"food":30,"restaurant":10}'
+  where budget_id = '10000000-0000-0000-0000-000000000001';
+
+  if (select category_visibility ->> 'restaurant'
+      from public.budget_settings
+      where budget_id = '10000000-0000-0000-0000-000000000001') <> 'visible'
+     or (select category_visibility ->> 'orphan'
+         from public.budget_settings
+         where budget_id = '10000000-0000-0000-0000-000000000001') <> 'hidden' then
+    raise exception 'Legacy-only unhide did not preserve exact-only visibility';
+  end if;
+
   begin
     update public.budget_transactions
     set amount_minor_units = 999
@@ -135,6 +218,79 @@ begin
   exception
     when check_violation then null;
   end;
+
+  insert into public.budget_transactions (
+    id, user_id, title, amount, amount_minor_units, currency_code, type,
+    category, created_by_member_id, date, created_at, splits,
+    splits_minor_units, budget_id
+  ) values (
+    '20000000-0000-0000-0000-000000000005',
+    '90000000-0000-0000-0000-000000000001',
+    'Stale-currency insert', 12.42, 1242, 'CAD', 'expense', 'food',
+    '80000000-0000-0000-0000-000000000001', now(), now(),
+    '[{"id":"30000000-0000-0000-0000-000000000005","member_id":"80000000-0000-0000-0000-000000000001","amount":12.42}]',
+    '[{"id":"30000000-0000-0000-0000-000000000005","member_id":"80000000-0000-0000-0000-000000000001","amount_minor_units":1242,"currency_code":"CAD"}]',
+    '10000000-0000-0000-0000-000000000001'
+  );
+
+  if (select amount_minor_units from public.budget_transactions
+      where id = '20000000-0000-0000-0000-000000000005') <> 1242
+     or (select currency_code from public.budget_transactions
+         where id = '20000000-0000-0000-0000-000000000005') <> 'USD'
+     or (select splits_minor_units -> 0 ->> 'currency_code'
+         from public.budget_transactions
+         where id = '20000000-0000-0000-0000-000000000005') <> 'USD' then
+    raise exception 'Stale-currency transaction insert was not repaired';
+  end if;
+
+  update public.budget_transactions
+  set
+    amount = 13.42,
+    amount_minor_units = 1342,
+    currency_code = 'CAD',
+    splits = '[{"id":"30000000-0000-0000-0000-000000000005","member_id":"80000000-0000-0000-0000-000000000001","amount":13.42}]',
+    splits_minor_units = '[{"id":"30000000-0000-0000-0000-000000000005","member_id":"80000000-0000-0000-0000-000000000001","amount_minor_units":1342,"currency_code":"CAD"}]'
+  where id = '20000000-0000-0000-0000-000000000005';
+
+  if (select amount_minor_units from public.budget_transactions
+      where id = '20000000-0000-0000-0000-000000000005') <> 1342
+     or (select currency_code from public.budget_transactions
+         where id = '20000000-0000-0000-0000-000000000005') <> 'USD'
+     or (select splits_minor_units -> 0 ->> 'currency_code'
+         from public.budget_transactions
+         where id = '20000000-0000-0000-0000-000000000005') <> 'USD' then
+    raise exception 'Stale-currency transaction update was not repaired';
+  end if;
+
+  insert into public.budget_settlements (
+    id, user_id, from_member_id, to_member_id, amount,
+    amount_minor_units, currency_code, date, budget_id
+  ) values (
+    '40000000-0000-0000-0000-000000000002',
+    '90000000-0000-0000-0000-000000000001',
+    '80000000-0000-0000-0000-000000000002',
+    '80000000-0000-0000-0000-000000000001',
+    12.42, 1242, 'CAD', now(),
+    '10000000-0000-0000-0000-000000000001'
+  );
+
+  if (select amount_minor_units from public.budget_settlements
+      where id = '40000000-0000-0000-0000-000000000002') <> 1242
+     or (select currency_code from public.budget_settlements
+         where id = '40000000-0000-0000-0000-000000000002') <> 'USD' then
+    raise exception 'Stale-currency settlement insert was not repaired';
+  end if;
+
+  update public.budget_settlements
+  set amount = 13.42, amount_minor_units = 1342, currency_code = 'CAD'
+  where id = '40000000-0000-0000-0000-000000000002';
+
+  if (select amount_minor_units from public.budget_settlements
+      where id = '40000000-0000-0000-0000-000000000002') <> 1342
+     or (select currency_code from public.budget_settlements
+         where id = '40000000-0000-0000-0000-000000000002') <> 'USD' then
+    raise exception 'Stale-currency settlement update was not repaired';
+  end if;
 
   begin
     update public.budget_transactions
@@ -153,6 +309,33 @@ begin
   exception
     when check_violation then null;
   end;
+
+  -- Malformed legacy data may remain pending for preflight, but it must not
+  -- allow a later exact-only write to persist an unvalidated mirror.
+  update public.budget_settings
+  set
+    category_budgets = '{"food":"invalid"}',
+    category_budgets_minor_units = '{"food":999}'
+  where budget_id = '10000000-0000-0000-0000-000000000001';
+
+  if (select category_budgets_minor_units is not null
+      from public.budget_settings
+      where budget_id = '10000000-0000-0000-0000-000000000001') then
+    raise exception 'Malformed legacy settings retained a contradictory exact mirror';
+  end if;
+
+  begin
+    update public.budget_settings
+    set category_budgets_minor_units = '{"food":999}'
+    where budget_id = '10000000-0000-0000-0000-000000000001';
+    raise exception 'Malformed legacy settings accepted an exact-only mirror';
+  exception
+    when check_violation then null;
+  end;
+
+  update public.budget_settings
+  set category_budgets = '{"food":30,"restaurant":10}'
+  where budget_id = '10000000-0000-0000-0000-000000000001';
 end
 $$;
 

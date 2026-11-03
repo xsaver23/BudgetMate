@@ -19,11 +19,14 @@ struct MemberFilterButton: View {
                 .background(color, in: Circle())
                 .overlay {
                     Circle()
-                        .stroke(isSelected ? AppTheme.secondaryAction : .clear, lineWidth: 4)
+                        .stroke(isSelected ? AppTheme.background : .clear, lineWidth: 7)
+                    Circle()
+                        .stroke(isSelected ? AppTheme.selection : .clear, lineWidth: 4)
                 }
         }
         .buttonStyle(PressableButtonStyle(scale: 0.92))
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue(isSelected ? "Selected" : "Not selected")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

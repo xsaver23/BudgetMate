@@ -36,15 +36,15 @@ final class AddTransactionViewModel: ObservableObject {
 
     var isSplittable: Bool { type == .expense }
 
-    init(transaction: Transaction? = nil) {
+    init(transaction: Transaction? = nil, locale: Locale = .current) {
         guard let transaction else { return }
         type = transaction.type
         title = transaction.title
         let transactionCurrencyCode = transaction.currencyCode ?? CurrencyOption.usd.code
-        amountText = CurrencyFormatter.numberString(
+        amountText = Self.editableAmountText(
             transaction.amount,
             currencyCode: transactionCurrencyCode,
-            locale: Locale(identifier: "en_US_POSIX")
+            locale: locale
         )
         category = transaction.category
         paymentMethod = transaction.paymentMethod ?? .card
@@ -61,10 +61,10 @@ final class AddTransactionViewModel: ObservableObject {
             participants = Set(transaction.splits.map(\.memberId))
             customAmounts = Dictionary(
                 transaction.splits.map {
-                    ($0.memberId, CurrencyFormatter.numberString(
+                    ($0.memberId, Self.editableAmountText(
                         $0.amount,
                         currencyCode: $0.currencyCode ?? transactionCurrencyCode,
-                        locale: Locale(identifier: "en_US_POSIX")
+                        locale: locale
                     ))
                 },
                 uniquingKeysWith: { first, _ in first }
@@ -85,22 +85,21 @@ final class AddTransactionViewModel: ObservableObject {
     }
 
     var parsedAmount: Double? {
-        guard let value = Double(amountText), value > 0 else { return nil }
-        return value
+        parsedAmount(currencyCode: CurrencyOption.usd.code, locale: .current)
     }
 
     func parsedAmount(currencyCode: String, locale: Locale = .current) -> Double? {
+        guard Self.isPlainMoneyInput(amountText) else { return nil }
         guard let money = try? Money.parse(
             amountText,
             currencyCode: currencyCode,
-            locale: Locale(identifier: "en_US_POSIX")
+            locale: locale
         ), money.minorUnits > 0 else { return nil }
         return MoneyAccounting.doubleValue(of: money)
     }
 
     func updateAmountText(_ text: String, currencyCode: String = CurrencyOption.usd.code) {
-        let sanitized = Self.sanitizedMoneyText(text, currencyCode: currencyCode)
-        amountText = sanitized
+        amountText = text
     }
 
     func customAmountText(for memberId: UUID) -> String {
@@ -108,37 +107,26 @@ final class AddTransactionViewModel: ObservableObject {
     }
 
     func updateCustomAmount(_ text: String, for memberId: UUID, currencyCode: String = CurrencyOption.usd.code) {
-        let sanitized = Self.sanitizedMoneyText(text, currencyCode: currencyCode)
-        customAmounts[memberId] = sanitized
-    }
-
-    func normalizeInput(currencyCode: String) {
-        amountText = Self.sanitizedMoneyText(amountText, currencyCode: currencyCode)
-        customAmounts = customAmounts.mapValues {
-            Self.sanitizedMoneyText($0, currencyCode: currencyCode)
-        }
+        customAmounts[memberId] = text
     }
 
     // MARK: - Split helpers
 
     /// Sum of the amounts typed into the custom split fields for participants.
-    var customSplitTotal: Double {
-        participants.reduce(0) { $0 + (Double(customAmounts[$1] ?? "") ?? 0) }
-    }
-
     func customSplitTotal(currencyCode: String) -> Double {
-        guard let money = customSplitMoneyTotal(currencyCode: currencyCode) else { return customSplitTotal }
+        guard let money = customSplitMoneyTotal(currencyCode: currencyCode) else { return 0 }
         return MoneyAccounting.doubleValue(of: money)
     }
 
-    func customSplitMoneyTotal(currencyCode: String) -> Money? {
+    func customSplitMoneyTotal(currencyCode: String, locale: Locale = .current) -> Money? {
         guard !participants.isEmpty else { return nil }
         var values: [Money] = []
         for memberId in participants {
+            guard Self.isPlainMoneyInput(customAmounts[memberId] ?? "") else { return nil }
             guard let money = try? Money.parse(
                 customAmounts[memberId] ?? "",
                 currencyCode: currencyCode,
-                locale: Locale(identifier: "en_US_POSIX")
+                locale: locale
             ) else { return nil }
             values.append(money)
         }
@@ -152,12 +140,12 @@ final class AddTransactionViewModel: ObservableObject {
     func isSplitValid(currencyCode: String, locale: Locale = .current) -> Bool {
         guard isSplit, isSplittable else { return true }
         guard !participants.isEmpty, parsedAmount(currencyCode: currencyCode, locale: locale) != nil else { return false }
-        guard let totalMoney = parsedMoney(currencyCode: currencyCode) else { return false }
+        guard let totalMoney = parsedMoney(currencyCode: currencyCode, locale: locale) else { return false }
         switch splitMethod {
         case .equally:
             return true
         case .custom:
-            guard let splitMoney = customSplitMoneyTotal(currencyCode: currencyCode) else { return false }
+            guard let splitMoney = customSplitMoneyTotal(currencyCode: currencyCode, locale: locale) else { return false }
             return splitMoney.currencyCode == totalMoney.currencyCode && splitMoney.minorUnits == totalMoney.minorUnits
         }
     }
@@ -170,9 +158,9 @@ final class AddTransactionViewModel: ObservableObject {
         guard isSplit, isSplittable else { return nil }
         if participants.isEmpty { return "Select at least one member to split with." }
         guard parsedAmount(currencyCode: currencyCode, locale: locale) != nil else { return "Enter an amount to split." }
-        guard let totalMoney = parsedMoney(currencyCode: currencyCode) else { return "Enter an amount to split." }
+        guard let totalMoney = parsedMoney(currencyCode: currencyCode, locale: locale) else { return "Enter an amount to split." }
         if splitMethod == .custom {
-            guard let splitMoney = customSplitMoneyTotal(currencyCode: currencyCode) else {
+            guard let splitMoney = customSplitMoneyTotal(currencyCode: currencyCode, locale: locale) else {
                 return "Enter valid split amounts."
             }
             let difference = totalMoney.minorUnits.subtractingReportingOverflow(splitMoney.minorUnits)
@@ -217,10 +205,11 @@ final class AddTransactionViewModel: ObservableObject {
         switch splitMethod {
         case .custom:
             let shares: [(UUID, Money)] = ids.compactMap { id in
+                guard Self.isPlainMoneyInput(customAmounts[id] ?? "") else { return nil }
                 guard let money = try? Money.parse(
                     customAmounts[id] ?? "",
                     currencyCode: currencyCode,
-                    locale: Locale(identifier: "en_US_POSIX")
+                    locale: .current
                 ) else { return nil }
                 return (id, money)
             }
@@ -311,12 +300,28 @@ final class AddTransactionViewModel: ObservableObject {
         return Transaction.monthlyRecurrenceRule(until: hasRecurrenceEndDate ? recurrenceEndDate : nil)
     }
 
-    private func parsedMoney(currencyCode: String) -> Money? {
-        try? Money.parse(
+    private func parsedMoney(currencyCode: String, locale: Locale = .current) -> Money? {
+        guard Self.isPlainMoneyInput(amountText) else { return nil }
+        return try? Money.parse(
             amountText,
             currencyCode: currencyCode,
-            locale: Locale(identifier: "en_US_POSIX")
+            locale: locale
         )
+    }
+
+    private static func editableAmountText(
+        _ amount: Double,
+        currencyCode: String,
+        locale: Locale
+    ) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = locale
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = false
+        let fractionDigits = (try? CurrencyMetadata(code: currencyCode))?.fractionDigits ?? 2
+        formatter.minimumFractionDigits = fractionDigits
+        formatter.maximumFractionDigits = fractionDigits
+        return formatter.string(from: NSNumber(value: amount)) ?? String(amount)
     }
 
     private func ensureCategoryMatchesType() {
@@ -325,31 +330,9 @@ final class AddTransactionViewModel: ObservableObject {
         }
     }
 
-    private static func sanitizedMoneyText(_ text: String, currencyCode: String) -> String {
-        let maximumFractionDigits = (try? CurrencyMetadata(code: currencyCode))?.fractionDigits ?? 2
-        var result = ""
-        var hasDecimalSeparator = false
-        var fractionalDigitCount = 0
-
-        for character in text {
-            if character.isNumber {
-                if hasDecimalSeparator {
-                    guard maximumFractionDigits > 0,
-                          fractionalDigitCount < maximumFractionDigits else { continue }
-                    fractionalDigitCount += 1
-                }
-                result.append(character)
-            } else if character == "." || character == "," {
-                if maximumFractionDigits == 0 {
-                    hasDecimalSeparator = true
-                    continue
-                }
-                guard !hasDecimalSeparator else { continue }
-                hasDecimalSeparator = true
-                result.append(".")
-            }
+    private static func isPlainMoneyInput(_ text: String) -> Bool {
+        !text.isEmpty && text.allSatisfy {
+            $0.isNumber || $0 == "." || $0 == "," || $0.isWhitespace
         }
-
-        return result
     }
 }

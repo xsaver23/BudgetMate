@@ -79,6 +79,16 @@ struct SettlementBreakdownView: View {
                     .foregroundStyle(BudgetBeaverPalette.wood)
                     .multilineTextAlignment(.center)
 
+                Text("All-time balance")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.textSecondary)
+
+                Text("Includes shared split bills and recorded settlements across this budget's history.")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 Text(suggestionAmount)
                     .font(.roundedBold(40))
                     .foregroundStyle(AppTheme.danger)
@@ -89,6 +99,7 @@ struct SettlementBreakdownView: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(suggestion.from.displayName) owes \(suggestion.to.displayName)")
             .accessibilityValue(suggestionAmount)
+            .accessibilityHint("All-time balance. Includes shared split bills and recorded settlements across this budget's history.")
         }
     }
 
@@ -155,7 +166,7 @@ struct SettlementBreakdownView: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     Text(signedString(item))
                         .font(.roundedBold(15))
-                        .foregroundStyle(item.signedAmount >= 0 ? AppTheme.danger : AppTheme.brand)
+                        .foregroundStyle(item.signedAmount >= 0 ? AppTheme.danger : AppTheme.brandForeground)
 
                     if item.isTappable {
                         Image(systemName: "chevron.right")
@@ -195,7 +206,7 @@ struct SettlementBreakdownView: View {
             tint = item.category.map { CategoryColor.color(for: $0) } ?? AppTheme.income
             systemImage = "arrow.down.left"
         case .settlement:
-            tint = AppTheme.brand
+            tint = AppTheme.brandForeground
             systemImage = "checkmark"
         }
         return Image(systemName: systemImage)
@@ -210,7 +221,7 @@ struct SettlementBreakdownView: View {
             onSettle()
             dismiss()
         } label: {
-            Text("Settle Up · \(suggestionAmount)")
+            Text("Settle up · \(suggestionAmount)")
                 .font(.headline.weight(.black))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
@@ -277,6 +288,7 @@ private struct SettlementDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var authStore: AuthSessionStore
     @EnvironmentObject private var cloudSyncStore: CloudSyncStore
+    @State private var isShowingDeleteConfirmation = false
 
     private var payer: BudgetMember? {
         members.first(where: { $0.id == settlement.fromMemberId })
@@ -312,13 +324,25 @@ private struct SettlementDetailView: View {
                 .padding()
             }
             .background(AppTheme.background)
-            .navigationTitle("Settle Up")
+            .navigationTitle("Settle up")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                         .fontWeight(.semibold)
                 }
+            }
+            .confirmationDialog(
+                "Remove recorded settlement?",
+                isPresented: $isShowingDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Remove settlement", role: .destructive) {
+                    deleteSettlement()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Remove \(amount(settlement.amount)) recorded between \(firstName(debtor)) and \(firstName(creditor))? This will change the balance.")
             }
         }
     }
@@ -332,14 +356,14 @@ private struct SettlementDetailView: View {
 
                 Text(amount(settlement.amount))
                     .font(.roundedBold(40))
-                    .foregroundStyle(AppTheme.brand)
+                    .foregroundStyle(AppTheme.brandForeground)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
 
                 Text("Recorded payment")
                     .font(.caption.weight(.semibold))
                     .tracking(0.5)
-                    .foregroundStyle(AppTheme.brand)
+                    .foregroundStyle(AppTheme.brandForeground)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 5)
                     .background(Capsule().fill(AppTheme.brandSoft))
@@ -415,26 +439,36 @@ private struct SettlementDetailView: View {
     private var deleteButton: some View {
         Button(role: .destructive) {
             guard mutationDecision.isAllowed else { return }
-            cloudSyncStore.deleteSettlement(
-                settlement,
-                userScopeId: authStore.currentUserScopeId,
-                budgetScopeId: authStore.currentBudgetScopeId
-            )
-            modelContext.delete(settlement)
-            do {
-                try modelContext.save()
-            } catch {
-                cloudSyncStore.recordSyncIssue(error, context: "Removing settle-up record")
-            }
-            dismiss()
+            isShowingDeleteConfirmation = true
         } label: {
-            Label("Remove Settle Up Record", systemImage: "trash")
+            Label("Remove recorded settlement", systemImage: "trash")
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
         }
         .buttonStyle(.bordered)
         .tint(AppTheme.expense)
         .controlSize(.large)
+    }
+
+    private func deleteSettlement() {
+        guard mutationDecision.isAllowed else { return }
+        let settlementId = settlement.id
+        let expectedRowVersion = settlement.rowVersion
+        modelContext.delete(settlement)
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            cloudSyncStore.recordSyncIssue(error, context: "Removing settle-up record")
+            return
+        }
+        cloudSyncStore.deleteSettlement(
+            id: settlementId,
+            expectedRowVersion: expectedRowVersion,
+            userScopeId: authStore.currentUserScopeId,
+            budgetScopeId: authStore.currentBudgetScopeId
+        )
+        dismiss()
     }
 
     private var readOnlyCard: some View {

@@ -72,7 +72,7 @@ struct BudgetMembersView: View {
                     memberChip(
                         title: member.role.displayName,
                         systemImage: member.role == .owner ? "crown.fill" : "person.fill",
-                        tint: member.role == .owner ? AppTheme.warning : AppTheme.brand
+                        tint: member.role == .owner ? AppTheme.warning : AppTheme.brandForeground
                     )
                     inviteStatusChip(member.inviteStatus)
                 }
@@ -114,7 +114,7 @@ struct BudgetMembersView: View {
         case .active:
             return ("checkmark.circle.fill", AppTheme.income)
         case .invited:
-            return ("paperplane.fill", AppTheme.brand)
+            return ("paperplane.fill", AppTheme.brandForeground)
         case .pending:
             return ("clock.fill", AppTheme.warning)
         }
@@ -127,20 +127,20 @@ struct BudgetMembersView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(tint.opacity(0.14), in: Capsule())
-            .foregroundStyle(AppTheme.brand)
+            .foregroundStyle(tint)
     }
 
     private func unavailableActionRow(_ restriction: RestrictedDestructiveAction) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "lock.shield.fill")
                 .font(.headline.weight(.bold))
-                .foregroundStyle(AppTheme.danger)
+                .foregroundStyle(BudgetBeaverPalette.wood)
                 .frame(width: 24, height: 24)
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(restriction.title)
                     .font(.headline.weight(.bold))
-                    .foregroundStyle(AppTheme.danger)
+                    .foregroundStyle(BudgetBeaverPalette.wood)
 
                 Text(restriction.message)
                     .font(.caption)

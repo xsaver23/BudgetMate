@@ -1,5 +1,6 @@
 import OSLog
 import SwiftUI
+import UIKit
 
 struct RootTabView: View {
     @EnvironmentObject private var authStore: AuthSessionStore
@@ -74,6 +75,7 @@ struct RootTabView: View {
         .padding(.top, 9)
         .padding(.bottom, 3)
         .frame(maxWidth: .infinity)
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .background(
             AppTheme.background
                 .ignoresSafeArea(edges: .bottom)
@@ -93,18 +95,20 @@ struct RootTabView: View {
                 Image(systemName: tabState.selectedTab == tab ? "\(icon).fill" : icon)
                     .font(.system(size: 21, weight: .semibold))
                 Text(title)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .font(.system(.caption2, design: .rounded, weight: .bold))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.72)
+                    .minimumScaleFactor(0.55)
                     .allowsTightening(true)
             }
-                .foregroundStyle(tabState.selectedTab == tab ? AppTheme.brand : BudgetBeaverPalette.wood)
+                .foregroundStyle(tabState.selectedTab == tab ? AppTheme.link : AppTheme.textSecondary)
                 .frame(height: 50)
                 .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle(scale: 0.97, pressedOpacity: 0.86))
         .accessibilityLabel(title)
+        .accessibilityValue(tabState.selectedTab == tab ? "Selected" : "Not selected")
+        .accessibilityAddTraits(tabState.selectedTab == tab ? .isSelected : [])
         .accessibilityIdentifier("tab.\(String(describing: tab))")
     }
 
@@ -117,17 +121,23 @@ private struct LocalSaveToast: View {
     @EnvironmentObject private var transactionFlow: TransactionFlowCoordinator
 
     var body: some View {
-        if let message = transactionFlow.lastActionMessage {
-            Label(message, systemImage: "checkmark.circle.fill")
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(AppTheme.textPrimary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-                .background(AppTheme.surface, in: Capsule())
-                .overlay(Capsule().stroke(AppTheme.surfaceStroke, lineWidth: 1))
-                .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(.isStaticText)
+        Group {
+            if let message = transactionFlow.lastActionMessage {
+                Label(message, systemImage: "checkmark.circle.fill")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(AppTheme.textPrimary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+                    .background(AppTheme.surface, in: Capsule())
+                    .overlay(Capsule().stroke(AppTheme.surfaceStroke, lineWidth: 1))
+                    .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.isStaticText)
+            }
+        }
+        .onChange(of: transactionFlow.lastActionMessage) { _, message in
+            guard let message else { return }
+            UIAccessibility.post(notification: .announcement, argument: message)
         }
     }
 }

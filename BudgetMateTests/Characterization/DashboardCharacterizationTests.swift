@@ -1,4 +1,6 @@
 import XCTest
+import UIKit
+import SwiftUI
 @testable import BudgetMate
 
 @MainActor
@@ -12,6 +14,50 @@ final class DashboardCharacterizationTests: XCTestCase {
 
         XCTAssertEqual(state.selectedTab, .dashboard)
         XCTAssertEqual(state.visitedTabs, [.dashboard, .settings, .transactions])
+    }
+
+    func testMemberInitialsForegroundMaintainsReadableContrast() {
+        for hex in ["#F97316", "#06B6D4", "#22C55E"] {
+            XCTAssertGreaterThanOrEqual(
+                contrastRatio(
+                    UIColor(Color.accessibleForeground(forHex: hex)),
+                    rgbColor(hex)
+                ),
+                4.5,
+                "Initials need readable contrast on \(hex)"
+            )
+        }
+    }
+
+    private func rgbColor(_ hex: String) -> UIColor {
+        let value = Int(hex.dropFirst(), radix: 16)!
+        return UIColor(
+            red: CGFloat((value >> 16) & 0xFF) / 255,
+            green: CGFloat((value >> 8) & 0xFF) / 255,
+            blue: CGFloat(value & 0xFF) / 255,
+            alpha: 1
+        )
+    }
+
+    private func contrastRatio(_ foreground: UIColor, _ background: UIColor) -> CGFloat {
+        func luminance(_ color: UIColor) -> CGFloat {
+            var red: CGFloat = 0
+            var green: CGFloat = 0
+            var blue: CGFloat = 0
+            var alpha: CGFloat = 0
+            color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+
+            func channel(_ value: CGFloat) -> CGFloat {
+                value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+            }
+
+            return 0.2126 * channel(red) + 0.7152 * channel(green) + 0.0722 * channel(blue)
+        }
+
+        let foregroundLuminance = luminance(foreground)
+        let backgroundLuminance = luminance(background)
+        return (max(foregroundLuminance, backgroundLuminance) + 0.05)
+            / (min(foregroundLuminance, backgroundLuminance) + 0.05)
     }
 
     func testTransactionCalendarDismissesOnlyAfterSelectingAnotherDay() throws {
@@ -294,7 +340,9 @@ final class DashboardCharacterizationTests: XCTestCase {
         XCTAssertFalse(addMoreMessage?.contains("CAD") ?? true)
         XCTAssertFalse(addMoreMessage?.contains("CA$") ?? true)
 
-        viewModel.updateCustomAmount("60.02", for: BudgetMateTestFixtures.bobMemberID)
+        viewModel.amountText = "100,00"
+        viewModel.customAmounts[BudgetMateTestFixtures.aliceMemberID] = "40,00"
+        viewModel.updateCustomAmount("60,02", for: BudgetMateTestFixtures.bobMemberID)
         let overTotalMessage = viewModel.splitValidationMessage(
             currencyCode: "CAD",
             locale: Locale(identifier: "fr_CA")
@@ -371,7 +419,7 @@ final class DashboardCharacterizationTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(result.first?.amount), 25, accuracy: 0.001)
     }
 
-    func testJPYInputNormalizesFractionalTextAndPreservesExactShares() throws {
+    func testJPYInputRejectsFractionalTextThenPreservesExactIntegerShares() throws {
         let viewModel = AddTransactionViewModel()
         viewModel.title = "Yen dinner"
         viewModel.amountText = "100.5"
@@ -380,18 +428,26 @@ final class DashboardCharacterizationTests: XCTestCase {
         viewModel.participants = [BudgetMateTestFixtures.aliceMemberID, BudgetMateTestFixtures.bobMemberID]
         viewModel.updateAmountText("100.5", currencyCode: "JPY")
 
-        XCTAssertEqual(viewModel.amountText, "100")
-        XCTAssertEqual(viewModel.parsedAmount(currencyCode: "JPY"), 100)
+        XCTAssertEqual(viewModel.amountText, "100.5")
+        XCTAssertNil(viewModel.parsedAmount(currencyCode: "JPY"))
+        XCTAssertNil(viewModel.resolvedSplits(
+            payerId: BudgetMateTestFixtures.aliceMemberID,
+            currencyCode: "JPY"
+        ))
+
+        viewModel.updateAmountText("101", currencyCode: "JPY")
+        XCTAssertEqual(viewModel.amountText, "101")
+        XCTAssertEqual(viewModel.parsedAmount(currencyCode: "JPY"), 101)
         let shares = try XCTUnwrap(viewModel.resolvedSplits(
             payerId: BudgetMateTestFixtures.aliceMemberID,
             currencyCode: "JPY"
         ))
-        XCTAssertEqual(shares.map(\.amount).reduce(0, +), 100, accuracy: 0.001)
+        XCTAssertEqual(shares.map(\.amount).reduce(0, +), 101, accuracy: 0.001)
         let exactShares = try XCTUnwrap(viewModel.resolvedMoneySplits(
             payerId: BudgetMateTestFixtures.aliceMemberID,
             currencyCode: "JPY"
         ))
-        XCTAssertEqual(exactShares.map(\.money.minorUnits).reduce(0, +), 100)
+        XCTAssertEqual(exactShares.map(\.money.minorUnits).reduce(0, +), 101)
     }
 
     func testJPYProgrammaticFractionalCustomSplitIsRejectedWithoutDoubleTolerance() {
@@ -528,5 +584,38 @@ final class DashboardCharacterizationTests: XCTestCase {
         let changed = FinancialDataFingerprint.hash(transactions: [transaction], settlements: [])
 
         XCTAssertNotEqual(initial, changed)
+    }
+
+    func testDefaultSplitParticipantsExcludeInvitedMembers() {
+        let invited = BudgetMember(
+            id: BudgetMateTestFixtures.invitedMemberID,
+            displayName: "Jordan Jones",
+            initials: "JJ",
+            color: "#22C55E",
+            inviteStatus: .invited
+        )
+
+        let ids = AddTransactionView.defaultSplitParticipantIDs(
+            from: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob, invited]
+        )
+
+        XCTAssertEqual(
+            ids,
+            Set([BudgetMateTestFixtures.aliceMemberID, BudgetMateTestFixtures.bobMemberID])
+        )
+        XCTAssertFalse(ids.contains(BudgetMateTestFixtures.invitedMemberID))
+    }
+
+    func testFinancialFingerprintChangesWhenSplitMemberOrLegacyAmountChanges() {
+        let transaction = BudgetMateTestFixtures.equalSplitExpense()
+        let initial = FinancialDataFingerprint.hash(transactions: [transaction], settlements: [])
+
+        transaction.splits[0].memberId = BudgetMateTestFixtures.carolMemberID
+        let memberChanged = FinancialDataFingerprint.hash(transactions: [transaction], settlements: [])
+        XCTAssertNotEqual(initial, memberChanged)
+
+        transaction.splits[0].amount = 51
+        let amountChanged = FinancialDataFingerprint.hash(transactions: [transaction], settlements: [])
+        XCTAssertNotEqual(memberChanged, amountChanged)
     }
 }

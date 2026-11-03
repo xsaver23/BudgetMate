@@ -75,7 +75,16 @@ import {
   uniqueTransactions
 } from "./domain/budgetMath";
 import { defaultBudgetSettings } from "./domain/defaults";
-import { memberFilterLabels, organizeCategoryBudgetRows } from "./domain/uxClarity";
+import {
+  categoryBudgetMinorUnits,
+  categoryBudgetStatus,
+  categoryBudgetStatusLabel,
+  draftHasChanges,
+  isUpcomingTransaction,
+  memberFilterLabels,
+  organizeCategoryBudgetRows,
+  syncAgeLabel
+} from "./domain/uxClarity";
 import { activeRecurringExpenses, buildMonthlyRecurrence, parseMonthlyRecurrence, previousLocalDate } from "./domain/recurrence";
 import { validateProfileName } from "./domain/profile";
 import { allocateEqualSplitMinorUnits, validateCustomSplitAmounts } from "./domain/splits";
@@ -113,6 +122,7 @@ import { gateCFinancialWritesEnabled, gateCFinancialWritesReadOnlyMessage } from
 import {
   appStatesEqual,
   clearState,
+  cloudSelectedBudgetStorageKey,
   cloudStateStorageKey,
   exportState,
   importState,
@@ -294,20 +304,6 @@ function categoryPillStyle(category: string): CSSProperties {
   } as CSSProperties;
 }
 
-function budgetPaceTone(spent: number, budget: number): "good" | "watch" | "over" {
-  if (budget <= 0) {
-    return "good";
-  }
-  const ratio = spent / budget;
-  if (ratio >= 1) {
-    return "over";
-  }
-  if (ratio >= 0.8) {
-    return "watch";
-  }
-  return "good";
-}
-
 function activateTransactionOnKeyDown(event: ReactKeyboardEvent, onOpen: () => void) {
   if (event.target !== event.currentTarget) {
     return;
@@ -331,6 +327,9 @@ function App() {
   const [pendingInvites, setPendingInvites] = useState<BudgetInvite[]>([]);
   const [verifiedCloudBudgetIds, setVerifiedCloudBudgetIds] = useState<string[]>([]);
   const [isCloudSyncing, setIsCloudSyncing] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  const [isOnline, setIsOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
+  const [syncClock, setSyncClock] = useState(() => Date.now());
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
   const [selectedMonth, setSelectedMonth] = useState(currentMonthKey());
   const [selectedMemberId, setSelectedMemberId] = useState<string>("all");
@@ -355,11 +354,37 @@ function App() {
   const settingsWrites = useRef(new Map<string, PendingSettingsWrite>());
   const addTransactionButtonRef = useRef<HTMLButtonElement | null>(null);
 
+  useEffect(() => {
+    const updateOnlineState = () => setIsOnline(navigator.onLine);
+    window.addEventListener("online", updateOnlineState);
+    window.addEventListener("offline", updateOnlineState);
+    return () => {
+      window.removeEventListener("online", updateOnlineState);
+      window.removeEventListener("offline", updateOnlineState);
+    };
+  }, []);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setSyncClock(Date.now()), 30_000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
   sessionUser.current = session?.user ?? null;
   syncModeRef.current = syncMode;
   currentBudgetIdRef.current = state.currentBudgetId;
 
   const canUseCloud = syncMode === "cloud" && !!session?.user && !!supabase;
+  const syncStatus = syncMode !== "cloud"
+    ? "Saved on this device"
+    : isCloudLoading || isCloudSyncing
+      ? "Syncing…"
+      : !isOnline
+        ? "Offline"
+        : cloudError
+          ? "Needs attention"
+          : lastSyncedAt
+            ? `Synced ${syncAgeLabel(lastSyncedAt, syncClock)}`
+            : "Not synced yet";
   const activeStorageKey =
     syncMode === "cloud" && session?.user ? cloudStateStorageKey(session.user.id) : localStateStorageKey;
   const canPersistState = syncMode === "local" || (!!session?.user && state.currentUserId === session.user.id);
@@ -406,6 +431,20 @@ function App() {
   const displayedTransactions = useMemo(
     () => monthTransactions.filter((transaction) => (memberFilter ? involvesMember(transaction, memberFilter) : true)),
     [monthTransactions, memberFilter]
+  );
+  const recentTransactions = useMemo(
+    () => displayedTransactions.filter((transaction) => !isUpcomingTransaction(transaction)),
+    [displayedTransactions]
+  );
+  const upcomingTransactions = useMemo(
+    () => displayedTransactions
+      .filter((transaction) => isUpcomingTransaction(transaction))
+      .sort((left, right) => localDateKey(new Date(left.date)).localeCompare(localDateKey(new Date(right.date)))),
+    [displayedTransactions]
+  );
+  const hasUpcomingProjection = useMemo(
+    () => upcomingTransactions.length > 0,
+    [upcomingTransactions]
   );
   const categoryTransactions = useMemo(
     () => selectedCategory
@@ -518,6 +557,7 @@ function App() {
       setSession(data.session);
       if (data.session?.user && isAccountTransition) {
         setVerifiedCloudBudgetIds([]);
+        setLastSyncedAt(null);
         setState(loadCloudState(data.session.user.id));
       }
       setAuthLoading(false);
@@ -537,6 +577,7 @@ function App() {
         setSyncMode("cloud");
         if (isAccountTransition) {
           setVerifiedCloudBudgetIds([]);
+          setLastSyncedAt(null);
           setState(loadCloudState(nextSession.user.id));
           setCloudMessage("Signed in. Loading cloud data.");
         }
@@ -544,6 +585,7 @@ function App() {
       if (!nextSession) {
         setPendingInvites([]);
         setVerifiedCloudBudgetIds([]);
+        setLastSyncedAt(null);
         setCloudMessage("You are signed out. Sign in to continue, or use this computer for local mode.");
       }
       setAuthLoading(false);
@@ -737,6 +779,7 @@ function App() {
           setVerifiedCloudBudgetIds(nextState.budgets.map((budget) => budget.id));
           setPendingInvites(invites);
           setCloudError("");
+          setLastSyncedAt(Date.now());
           setCloudMessage("Synced just now");
         } catch (error) {
           if (sessionUser.current?.id !== activeUser.id) {
@@ -792,6 +835,7 @@ function App() {
           const message = error instanceof Error ? error.message : "Cloud write failed.";
           setCloudError(message);
           setCloudMessage("Needs attention");
+          setToastMessage(message);
         }
         return false;
       } finally {
@@ -1255,10 +1299,10 @@ function App() {
       setToastMessage(cloudFinancialWritesReadOnly ? gateCFinancialWritesReadOnlyMessage : decision.readOnlyMessage ?? sharedRecordMutationReadOnlyMessage);
       return false;
     }
-    if (
-      transaction?.recurrenceRule?.startsWith("monthly") &&
-      !window.confirm(`Delete "${transaction.title}" and its entire recurring series? This cannot be undone.`)
-    ) {
+    const deleteMessage = transaction.recurrenceRule?.startsWith("monthly")
+      ? `Delete "${transaction.title}" and its entire recurring series? This cannot be undone.`
+      : `Delete "${transaction.title}"? This cannot be undone.`;
+    if (!window.confirm(deleteMessage)) {
       return false;
     }
 
@@ -1431,6 +1475,7 @@ function App() {
         setSyncMode("cloud");
         if (isAccountTransition) {
           setVerifiedCloudBudgetIds([]);
+          setLastSyncedAt(null);
         }
         if (isAccountTransition) {
           setState(loadCloudState(nextSession.user.id));
@@ -1455,6 +1500,7 @@ function App() {
       activeUserId.current = null;
       sessionUser.current = null;
       setVerifiedCloudBudgetIds([]);
+      setLastSyncedAt(null);
       const nextSyncMode = modeAfterSignOut(supabaseConfigStatus === "configured");
       syncModeRef.current = nextSyncMode;
       setSession(null);
@@ -1474,6 +1520,9 @@ function App() {
   }
 
   function selectBudget(budgetId: string) {
+    if (syncModeRef.current === "cloud" && sessionUser.current?.id) {
+      window.localStorage.setItem(cloudSelectedBudgetStorageKey(sessionUser.current.id), budgetId);
+    }
     setState((current) => ({
       ...current,
       currentBudgetId: budgetId
@@ -1547,8 +1596,6 @@ function App() {
       <Sidebar
         activeTab={activeTab}
         onTabChange={setActiveTab}
-        syncMode={syncMode}
-        statusText={cloudError ? "Needs attention" : cloudMessage}
       />
       <main className="workspace">
         <header className="topbar">
@@ -1584,9 +1631,16 @@ function App() {
               </label>
             )}
             {canUseCloud && (
-              <button className="secondary-action compact" onClick={() => void reloadCloudState()} disabled={isCloudLoading}>
+              <button
+                className="ghost-button compact sync-status-chip"
+                onClick={() => void reloadCloudState()}
+                disabled={isCloudLoading}
+                title={cloudError ? "Retry cloud sync" : "Refresh cloud data"}
+                aria-label={`${syncStatus}. Refresh cloud data`}
+                aria-busy={isCloudLoading || isCloudSyncing}
+              >
                 <RefreshCcw size={17} aria-hidden="true" />
-                {isCloudLoading ? "Syncing…" : "Sync now"}
+                {syncStatus}
               </button>
             )}
             {syncMode === "local" && supabase && (
@@ -1639,7 +1693,9 @@ function App() {
             settlements={settlements}
             budgetTransactions={budgetTransactions}
             budgetSettlements={budgetSettlements}
-            transactions={displayedTransactions}
+            transactions={recentTransactions}
+            upcomingTransactions={upcomingTransactions}
+            hasUpcomingProjection={hasUpcomingProjection}
             selectedMonth={selectedMonth}
             members={budgetMembers}
             onViewAll={() => setActiveTab("transactions")}
@@ -1682,6 +1738,7 @@ function App() {
             members={budgetMembers}
             memberId={memberFilter}
             selectedMonth={selectedMonth}
+            hasUpcomingProjection={hasUpcomingProjection}
             onSettingsChange={updateSettings}
             onOpenCategory={setSelectedCategory}
           />
@@ -1723,7 +1780,7 @@ function App() {
             }}
             syncMode={syncMode}
             user={session?.user}
-            cloudMessage={cloudMessage}
+            syncStatus={syncStatus}
             cloudError={cloudError}
             isCloudLoading={isCloudLoading}
             pendingInvites={pendingInvites}
@@ -1922,14 +1979,10 @@ function AuthGate({
 
 function Sidebar({
   activeTab,
-  onTabChange,
-  syncMode,
-  statusText
+  onTabChange
 }: {
   activeTab: Tab;
   onTabChange: (tab: Tab) => void;
-  syncMode: SyncMode;
-  statusText: string;
 }) {
   const tabs: Array<{ id: Tab; label: string; icon: typeof Home }> = [
     { id: "dashboard", label: "Dashboard", icon: Home },
@@ -1964,13 +2017,6 @@ function Sidebar({
           );
         })}
       </nav>
-      <div className="sync-card">
-        <span className={syncMode === "cloud" ? "sync-dot cloud" : "sync-dot local"} aria-hidden="true" />
-        <div>
-          <strong>{syncMode === "cloud" ? "Cloud sync" : "Local data"}</strong>
-          <span>{statusText}</span>
-        </div>
-      </div>
     </aside>
   );
 }
@@ -2028,6 +2074,8 @@ function DashboardView({
   budgetTransactions,
   budgetSettlements,
   transactions,
+  upcomingTransactions,
+  hasUpcomingProjection,
   selectedMonth,
   members,
   onViewAll,
@@ -2046,6 +2094,8 @@ function DashboardView({
   budgetTransactions: BudgetTransaction[];
   budgetSettlements: Settlement[];
   transactions: BudgetTransaction[];
+  upcomingTransactions: BudgetTransaction[];
+  hasUpcomingProjection: boolean;
   selectedMonth: string;
   members: BudgetMember[];
   onViewAll: () => void;
@@ -2063,21 +2113,22 @@ function DashboardView({
   const savingsRate = totals.totalIncome > 0
     ? Math.max(0, ((totals.totalIncome - totals.totalExpenses) / totals.totalIncome) * 100)
     : 0;
+  const incomeCount = transactions.filter((transaction) => transaction.type === "income").length;
   const topCategory = categoryTotals[0];
   const topCategoryPercent = topCategory && totals.totalExpenses > 0 ? Math.round((topCategory.amount / totals.totalExpenses) * 100) : 0;
   const insightText = topCategory
-    ? `${categoryName(topCategory.category)} is your largest expense this month - ${topCategoryPercent}% of all spending.`
+    ? `${categoryName(topCategory.category)} is your largest ${hasUpcomingProjection ? "projected " : ""}expense this month - ${topCategoryPercent}% of ${hasUpcomingProjection ? "projected spending" : "all spending"}.`
     : "Add expenses to unlock category insights.";
 
   return (
     <section className="dashboard-grid">
       <div className="kpi-band">
         <div className="balance-panel">
-          <p className="eyebrow">{netScopeLabel(selectedMonth)}</p>
+          <p className="eyebrow">{hasUpcomingProjection ? `Projected ${netScopeLabel(selectedMonth).toLowerCase()}` : netScopeLabel(selectedMonth)}</p>
           <strong>{formatMoney(totals.currentBalance, settings.currencyCode)}</strong>
           <div className="pacing">
             <div>
-              <span>Monthly budget pacing</span>
+              <span>{hasUpcomingProjection ? "Projected monthly budget pacing" : "Monthly budget pacing"}</span>
               <b>{Math.round(spentRatio * 100)}%</b>
             </div>
             <div className="progress-track" aria-hidden="true">
@@ -2090,26 +2141,26 @@ function DashboardView({
         </div>
 
         <SummaryTile
-          label="Income"
+          label={hasUpcomingProjection ? "Projected income" : "Income"}
           amount={totals.totalIncome}
           currencyCode={settings.currencyCode}
           tone="income"
-          footnote={`${transactions.filter((transaction) => transaction.type === "income").length} deposit this month`}
+          footnote={hasUpcomingProjection ? "forecast includes upcoming items" : `${incomeCount} ${incomeCount === 1 ? "deposit" : "deposits"} this month`}
         />
         <SummaryTile
-          label="Expenses"
+          label={hasUpcomingProjection ? "Projected expenses" : "Expenses"}
           amount={totals.totalExpenses}
           currencyCode={settings.currencyCode}
           tone="expense"
           footnote={`across ${categoryTotals.length} ${categoryTotals.length === 1 ? "category" : "categories"}`}
         />
         <SummaryTile
-          label="Savings rate"
+          label={hasUpcomingProjection ? "Projected savings rate" : "Savings rate"}
           amount={savingsRate}
           currencyCode={settings.currencyCode}
           tone="warning"
           format="percent"
-          footnote={savingsRate >= 30 ? "healthy - target 30%" : "target 30%"}
+          footnote={hasUpcomingProjection ? "forecast · target 30%" : savingsRate >= 30 ? "healthy · target 30%" : "target 30%"}
         />
       </div>
 
@@ -2117,7 +2168,7 @@ function DashboardView({
         <div className="panel-heading">
           <h2>Expense breakdown</h2>
           <span>
-            {formatMoney(totals.totalExpenses, settings.currencyCode)} · {categoryTotals.length} active
+            {formatMoney(totals.totalExpenses, settings.currencyCode)}{hasUpcomingProjection ? " · projected" : ""}
           </span>
         </div>
         <ExpenseBreakdownChart
@@ -2128,12 +2179,25 @@ function DashboardView({
         />
       </section>
 
-      <section className="panel settlement-panel">
+      <section className="panel upcoming-panel">
         <div className="panel-heading">
-          <h2>Top categories</h2>
-          <span>This month</span>
+          <h2>Upcoming</h2>
+          <span>{upcomingTransactions.length}</span>
         </div>
-        <TopSpendingChart items={categoryTotals.slice(0, 6)} currencyCode={settings.currencyCode} onOpenCategory={onOpenCategory} />
+        {upcomingTransactions.length > 0 ? (
+          <TransactionList
+            transactions={upcomingTransactions.slice(0, 5)}
+            settings={settings}
+            members={members}
+            onOpenTransaction={onOpenTransaction}
+          />
+        ) : (
+          <div className="empty-state">
+            {selectedMonth > currentMonthKey()
+              ? `No scheduled transactions in ${formatMonthLabel(selectedMonth)} yet.`
+              : "No upcoming transactions in this view."}
+          </div>
+        )}
       </section>
 
       <section className="panel recent-panel">
@@ -2148,6 +2212,11 @@ function DashboardView({
           settings={settings}
           members={members}
           onOpenTransaction={onOpenTransaction}
+          emptyMessage={upcomingTransactions.length > 0
+            ? `${upcomingTransactions.length} upcoming ${upcomingTransactions.length === 1 ? "item" : "items"} are included in this projection.`
+            : undefined}
+          emptyActionLabel={upcomingTransactions.length > 0 ? "View all" : undefined}
+          onEmptyAction={upcomingTransactions.length > 0 ? onViewAll : undefined}
         />
       </section>
 
@@ -2183,9 +2252,10 @@ function DashboardView({
                   aria-expanded={expandedSettlementId === settlement.id}
                 >
                   <strong>
-                    {firstName(settlement.from.displayName)} pays {firstName(settlement.to.displayName)}
+                    All-time · {firstName(settlement.from.displayName)} pays {firstName(settlement.to.displayName)}
                   </strong>
                   <span className="settlement-amount">{formatMoney(settlement.amount, settings.currencyCode)}</span>
+                  <small className="settlement-why">Why ›</small>
                 </button>
                 <button
                   className="ghost-button small settlement-action"
@@ -2221,9 +2291,13 @@ function DashboardView({
           <strong>{insightText}</strong>
           <span>
             {budgetLimit > 0
-              ? `${Math.round(spentRatio * 100)}% of your ${formatMoney(budgetLimit, settings.currencyCode)} monthly budget is used${
-                  daysLeftInMonth(selectedMonth) ? ` with ${daysLeftInMonth(selectedMonth)} days left` : ""
-                }.`
+              ? hasUpcomingProjection
+                ? `Projected spending reaches ${Math.round(spentRatio * 100)}% of your ${formatMoney(budgetLimit, settings.currencyCode)} monthly budget by month end${
+                    daysLeftInMonth(selectedMonth) ? ` · ${daysLeftInMonth(selectedMonth)} days left` : ""
+                  }.`
+                : `${Math.round(spentRatio * 100)}% of your ${formatMoney(budgetLimit, settings.currencyCode)} monthly budget is used${
+                    daysLeftInMonth(selectedMonth) ? ` with ${daysLeftInMonth(selectedMonth)} days left` : ""
+                  }.`
               : "Set up category budgets to track your pacing."}
           </span>
           {budgetLimit <= 0 && (
@@ -2253,7 +2327,7 @@ function SummaryTile({
   format?: "money" | "percent";
   footnote: string;
 }) {
-  const displayValue = format === "percent" ? `${amount.toFixed(2)}%` : formatMoney(amount, currencyCode);
+  const displayValue = format === "percent" ? `${Math.round(amount)}%` : formatMoney(amount, currencyCode);
   return (
     <section className={`summary-tile ${tone}`} aria-label={`${label}: ${displayValue}`}>
       <span className="metric-label">
@@ -2454,6 +2528,7 @@ function TransactionsView({
   });
   const summaryTotals = dashboardTotals(filteredTransactions, monthlyBudget(settings, selectedMonth), memberId);
   const summaryScope = filteredTransactions.length === transactions.length ? "this month" : "this view";
+  const hasUpcomingProjection = filteredTransactions.some((transaction) => isUpcomingTransaction(transaction));
   const hasActiveFilters = search.trim().length > 0 || categoryFilter !== "all" || typeFilter !== "all";
 
   function clearFilters() {
@@ -2505,6 +2580,7 @@ function TransactionsView({
         totals={summaryTotals}
         currencyCode={settings.currencyCode}
         scopeLabel={summaryScope}
+        projected={hasUpcomingProjection}
       />
       <div className="panel table-panel">
         {filteredTransactions.length === 0 ? (
@@ -2551,8 +2627,14 @@ function TransactionsView({
                     </div>
                     <div>
                       <strong>{transaction.title}</strong>
-                      <span className="category-pill" style={categoryPillStyle(transaction.category)}>
-                        {categoryName(transaction.category)}
+                      <div className="transaction-main-meta">
+                        <span className="category-pill" style={categoryPillStyle(transaction.category)}>
+                          {categoryName(transaction.category)}
+                        </span>
+                        {isUpcomingTransaction(transaction) && <span className="upcoming-pill">Upcoming</span>}
+                      </div>
+                      <span className="transaction-mobile-context">
+                        {formatShortDate(transaction.date)} · {member?.displayName ?? "Member unavailable"}
                       </span>
                     </div>
                   </div>
@@ -2601,24 +2683,26 @@ function TransactionsView({
 function TransactionSummaryStrip({
   totals,
   currencyCode,
-  scopeLabel
+  scopeLabel,
+  projected
 }: {
   totals: ReturnType<typeof dashboardTotals>;
   currencyCode: string;
   scopeLabel: string;
+  projected: boolean;
 }) {
   return (
     <section className="transaction-summary-strip" aria-label={`Transaction summary for ${scopeLabel}`}>
       <TransactionSummaryMetric
-        label="Income"
+        label={projected ? "Projected income" : "Income"}
         value={formatMoney(totals.totalIncome, currencyCode)}
       />
       <TransactionSummaryMetric
-        label="Expenses"
+        label={projected ? "Projected expenses" : "Expenses"}
         value={formatMoney(totals.totalExpenses, currencyCode)}
       />
       <TransactionSummaryMetric
-        label="Net"
+        label={projected ? "Projected net" : "Net"}
         value={formatMoney(totals.currentBalance, currencyCode)}
       />
     </section>
@@ -2647,6 +2731,7 @@ function BudgetView({
   members,
   memberId,
   selectedMonth,
+  hasUpcomingProjection,
   onSettingsChange,
   onOpenCategory
 }: {
@@ -2656,9 +2741,12 @@ function BudgetView({
   members: BudgetMember[];
   memberId?: string;
   selectedMonth: string;
+  hasUpcomingProjection: boolean;
   onSettingsChange: (settings: BudgetSettings) => void;
   onOpenCategory: (category: string) => void;
 }) {
+  const [draftBudgets, setDraftBudgets] = useState<Record<string, string>>({});
+  const savedBudgetDrafts = useRef<Record<string, string>>({});
   const spending = categoryBreakdown(transactions, memberId);
   const spendingByCategory = new Map(spending.map((item) => [item.category, item.amount]));
   const memberSpending = memberExpenseTotals(transactions, members);
@@ -2674,19 +2762,59 @@ function BudgetView({
   const budgetedCategoryCount = visibleCategoryRows.filter((row) => row.budget > 0).length;
   const maxMemberSpend = Math.max(...memberSpending.map((item) => item.amount), 0);
 
-  function updateCategoryBudget(category: string, value: string) {
+  useEffect(() => {
+    savedBudgetDrafts.current = {};
+    setDraftBudgets({});
+  }, [selectedMonth, settings.budgetId]);
+
+  function budgetDraftKey(category: string) {
+    return `${settings.budgetId}:${selectedMonth}:${category}`;
+  }
+
+  function saveCategoryBudget(category: string, value: string) {
+    const draftKey = budgetDraftKey(category);
+    if (savedBudgetDrafts.current[draftKey] === value) {
+      setDraftBudgets((current) => {
+        const next = { ...current };
+        delete next[category];
+        return next;
+      });
+      return;
+    }
+    const parsedMinorUnits = categoryBudgetMinorUnits(value, settings.currencyCode);
+    const currentBudget = activeCategoryBudgets[category] ?? 0;
+    const currentMinorUnits = categoryBudgetMinorUnits(currentBudget, settings.currencyCode);
+    if (parsedMinorUnits === undefined) {
+      return;
+    }
+    if (currentMinorUnits === undefined || parsedMinorUnits === currentMinorUnits) {
+      savedBudgetDrafts.current[draftKey] = value;
+      setDraftBudgets((current) => {
+        const next = { ...current };
+        delete next[category];
+        return next;
+      });
+      return;
+    }
+    savedBudgetDrafts.current[draftKey] = value;
     onSettingsChange({
       ...settings,
       categoryBudgets: {
         ...settings.categoryBudgets,
-        [monthBudgetKey(selectedMonth, category)]: normalizeAmount(Number(value))
+        [monthBudgetKey(selectedMonth, category)]: amountFromMinorUnits(parsedMinorUnits, settings.currencyCode)
       }
+    });
+    setDraftBudgets((current) => {
+      const next = { ...current };
+      delete next[category];
+      return next;
     });
   }
 
   function renderBudgetRow({ category, spent, budget }: (typeof visibleCategoryRows)[number]) {
     const ratio = budget > 0 ? Math.min(1, spent / budget) : 0;
-    const tone = budgetPaceTone(spent, budget);
+    const tone = categoryBudgetStatus(spent, budget, settings.currencyCode);
+    const status = categoryBudgetStatusLabel(spent, budget, settings.currencyCode);
     return (
       <div key={category.id} className={`budget-row ${tone}`}>
         <button className="budget-category-trigger" type="button" onClick={() => onOpenCategory(category.id)}>
@@ -2697,6 +2825,7 @@ function BudgetView({
           <span>
               {formatMoney(spent, settings.currencyCode)} of {formatMoney(budget, settings.currencyCode)}
           </span>
+          <small className="budget-status">{status}</small>
           <div className="budget-progress" aria-hidden="true">
             <b style={{ width: `${ratio * 100}%` }} />
           </div>
@@ -2707,8 +2836,18 @@ function BudgetView({
             type="number"
             min="0"
             step="10"
-            value={activeCategoryBudgets[category.id] ?? 0}
-            onChange={(event) => updateCategoryBudget(category.id, event.target.value)}
+            value={draftBudgets[category.id] ?? String(activeCategoryBudgets[category.id] ?? 0)}
+            onChange={(event) => {
+              delete savedBudgetDrafts.current[budgetDraftKey(category.id)];
+              setDraftBudgets((current) => ({ ...current, [category.id]: event.target.value }));
+            }}
+            onBlur={(event) => saveCategoryBudget(category.id, event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                saveCategoryBudget(category.id, event.currentTarget.value);
+              }
+            }}
             aria-label={`${category.name} budget`}
           />
         </label>
@@ -2721,10 +2860,10 @@ function BudgetView({
       <section className="panel">
         <div className="panel-heading">
           <h2>Category budgets</h2>
-          <span>{formatMoney(totals.remainingBudget, settings.currencyCode)} left</span>
+          <span>{formatMoney(totals.remainingBudget, settings.currencyCode)} {hasUpcomingProjection ? "projected remaining" : "left"}</span>
         </div>
         <p className="panel-intro">
-          {budgetedCategoryCount} of {expenseCategoryOptions.length} categories have a budget for {formatMonthLabel(selectedMonth)}. Category budget changes save automatically.
+          {budgetedCategoryCount} of {expenseCategoryOptions.length} categories have a budget for {formatMonthLabel(selectedMonth)}. {hasUpcomingProjection ? "Spent and remaining totals are projected and include upcoming items. " : ""}Changes save when you leave a field or press Enter.
         </p>
         <div className="budget-list">
           {visibleRows.map(renderBudgetRow)}
@@ -2750,12 +2889,12 @@ function BudgetView({
             <strong>{formatMoney(budgetLimit, settings.currencyCode)}</strong>
           </div>
           <div>
-            <span>Spent</span>
+            <span>{hasUpcomingProjection ? "Projected spent" : "Spent"}</span>
             <strong>{formatMoney(totals.totalExpenses, settings.currencyCode)}</strong>
           </div>
           <hr />
           <div>
-            <span>Remaining</span>
+            <span>{hasUpcomingProjection ? "Projected remaining" : "Remaining"}</span>
             <strong>{formatMoney(totals.remainingBudget, settings.currencyCode)}</strong>
           </div>
         </section>
@@ -2795,7 +2934,7 @@ function SettingsView({
   importError,
   syncMode,
   user,
-  cloudMessage,
+  syncStatus,
   cloudError,
   isCloudLoading,
   pendingInvites,
@@ -2826,7 +2965,7 @@ function SettingsView({
   importError: string;
   syncMode: SyncMode;
   user?: User;
-  cloudMessage: string;
+  syncStatus: string;
   cloudError: string;
   isCloudLoading: boolean;
   pendingInvites: BudgetInvite[];
@@ -2995,14 +3134,21 @@ function SettingsView({
           {syncMode === "cloud" ? <CheckCircle2 size={18} aria-hidden="true" /> : <HardDrive size={18} aria-hidden="true" />}
           <div>
             <strong>{syncMode === "cloud" ? user?.email ?? "Signed in" : "Desktop local"}</strong>
-            <span>{syncMode === "cloud" ? (cloudError ? "Needs attention. Try Sync now." : cloudMessage) : "Saved on this device"}</span>
+            <span>{syncStatus}</span>
           </div>
           <em className="status-pill">{syncMode === "cloud" ? "Cloud" : "Active"}</em>
         </div>
         <div className="data-actions">
-          <button className="ghost-button" onClick={onRefresh} disabled={syncMode !== "cloud" || isCloudLoading}>
+          <button
+            className="ghost-button sync-status-chip"
+            onClick={onRefresh}
+            disabled={syncMode !== "cloud" || isCloudLoading}
+            title={cloudError ? "Retry cloud sync" : "Refresh cloud data"}
+            aria-label={`${syncStatus}. Refresh cloud data`}
+            aria-busy={isCloudLoading}
+          >
             <RefreshCcw size={17} aria-hidden="true" />
-            {isCloudLoading ? "Syncing…" : "Sync now"}
+            {syncStatus}
           </button>
           <button className="ghost-button" onClick={onSignOut} disabled={syncMode !== "cloud"}>
             <LogOut size={17} aria-hidden="true" />
@@ -3084,7 +3230,7 @@ function SettingsView({
             <strong>Cloud backup</strong>
             <span>
                 {syncMode === "cloud"
-                  ? cloudError ? "Needs attention. Try Sync now." : cloudMessage
+                  ? syncStatus
                 : supabaseConfigStatus === "configured"
                   ? "Supabase configured"
                   : "Ready for Supabase config"}
@@ -3097,93 +3243,97 @@ function SettingsView({
       </section>
 
       <section className="panel settings-panel category-settings-panel">
-        <div className="panel-heading">
-          <h2>Categories</h2>
-          <span>{visibleCategories.length} visible</span>
-        </div>
-        <p className="panel-intro">Manage expense categories used by your budget and transactions.</p>
-        <div className="category-list">
-          {visibleCategories.map((category) => {
-            const isBuiltIn = expenseCategories.some((candidate) => candidate.id === category.id);
-            const isProtected = category.id === "other";
-            return (
-              <div key={category.id} className="category-management-row">
-                <span className="category-management-emoji" aria-hidden="true">
-                  {settings.categoryEmojis[category.id] ?? "•"}
-                </span>
-                <div>
-                  <strong>{category.name}</strong>
-                  <span>{isBuiltIn ? "Built-in" : "Custom"}</span>
-                </div>
-                <div className="category-management-actions">
-                  <button className="ghost-button small" type="button" onClick={() => editCategory(category)}>
-                    Edit
-                  </button>
-                  <button
-                    className="ghost-button small"
-                    type="button"
-                    disabled={isProtected}
-                    title={isProtected ? "Other is protected" : undefined}
-                    onClick={() => handleRemoveCategory(category.id)}
-                  >
-                    {isBuiltIn ? "Hide" : "Remove"}
-                  </button>
-                </div>
+        <details className="settings-category-disclosure">
+          <summary>
+            <strong>Manage categories ({visibleCategories.length})</strong>
+            <span>Show built-in and custom categories</span>
+          </summary>
+          <div className="settings-category-content">
+            <p className="panel-intro">Manage expense categories used by your budget and transactions.</p>
+            <div className="category-list">
+              {visibleCategories.map((category) => {
+                const isBuiltIn = expenseCategories.some((candidate) => candidate.id === category.id);
+                const isProtected = category.id === "other";
+                return (
+                  <div key={category.id} className="category-management-row">
+                    <span className="category-management-emoji" aria-hidden="true">
+                      {settings.categoryEmojis[category.id] ?? "•"}
+                    </span>
+                    <div>
+                      <strong>{category.name}</strong>
+                      <span>{isBuiltIn ? "Built-in" : "Custom"}</span>
+                    </div>
+                    <div className="category-management-actions">
+                      <button className="ghost-button small" type="button" onClick={() => editCategory(category)}>
+                        Edit
+                      </button>
+                      <button
+                        className="ghost-button small"
+                        type="button"
+                        disabled={isProtected}
+                        title={isProtected ? "Other is protected" : undefined}
+                        onClick={() => handleRemoveCategory(category.id)}
+                      >
+                        {isBuiltIn ? "Hide" : "Remove"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {hiddenCategories.length > 0 && (
+              <div className="category-hidden-list">
+                <p className="form-note">Hidden built-in categories</p>
+                {hiddenCategories.map((category) => (
+                  <div key={category.id} className="category-management-row">
+                    <span className="category-management-emoji muted-emoji" aria-hidden="true">•</span>
+                    <div>
+                      <strong>{category.name}</strong>
+                      <span>Hidden built-in</span>
+                    </div>
+                    <button className="ghost-button small" type="button" onClick={() => handleUnhideCategory(category.id)}>
+                      Unhide
+                    </button>
+                  </div>
+                ))}
               </div>
-            );
-          })}
-        </div>
-        {hiddenCategories.length > 0 && (
-          <div className="category-hidden-list">
-            <p className="form-note">Hidden built-in categories</p>
-            {hiddenCategories.map((category) => (
-              <div key={category.id} className="category-management-row">
-                <span className="category-management-emoji muted-emoji" aria-hidden="true">•</span>
-                <div>
-                  <strong>{category.name}</strong>
-                  <span>Hidden built-in</span>
-                </div>
-                <button className="ghost-button small" type="button" onClick={() => handleUnhideCategory(category.id)}>
-                  Unhide
+            )}
+            <form className="member-form category-form" onSubmit={handleSaveCategory}>
+              <input
+                value={categoryNameInput}
+                onChange={(event) => {
+                  setCategoryNameInput(event.target.value);
+                  setCategoryMessage("");
+                }}
+                placeholder="Category name"
+                aria-label="Category name"
+                disabled={editingCategoryId === "other"}
+              />
+              <input
+                value={categoryEmojiInput}
+                onChange={(event) => {
+                  setCategoryEmojiInput(event.target.value);
+                  setCategoryMessage("");
+                }}
+                placeholder="Optional emoji"
+                aria-label="Optional category emoji"
+                maxLength={12}
+              />
+              <button className="secondary-action" type="submit" disabled={!categoryNameInput.trim()}>
+                <Plus size={17} aria-hidden="true" />
+                {editingCategoryId ? "Save category" : "Add category"}
+              </button>
+              {editingCategoryId && (
+                <button className="ghost-button" type="button" onClick={resetCategoryForm}>
+                  Cancel
                 </button>
-              </div>
-            ))}
+              )}
+            </form>
+            <p className="form-note" role="status" aria-live="polite">
+              {categoryMessage || "Use a display name. An optional icon must be one emoji."}
+            </p>
           </div>
-        )}
-        <form className="member-form category-form" onSubmit={handleSaveCategory}>
-          <input
-            value={categoryNameInput}
-            onChange={(event) => {
-              setCategoryNameInput(event.target.value);
-              setCategoryMessage("");
-            }}
-            placeholder="Category name"
-            aria-label="Category name"
-            disabled={editingCategoryId === "other"}
-          />
-          <input
-            value={categoryEmojiInput}
-            onChange={(event) => {
-              setCategoryEmojiInput(event.target.value);
-              setCategoryMessage("");
-            }}
-            placeholder="Optional emoji"
-            aria-label="Optional category emoji"
-            maxLength={12}
-          />
-          <button className="secondary-action" type="submit" disabled={!categoryNameInput.trim()}>
-            <Plus size={17} aria-hidden="true" />
-            {editingCategoryId ? "Save category" : "Add category"}
-          </button>
-          {editingCategoryId && (
-            <button className="ghost-button" type="button" onClick={resetCategoryForm}>
-              Cancel
-            </button>
-          )}
-        </form>
-        <p className="form-note" role="status" aria-live="polite">
-          {categoryMessage || "Use a display name. An optional icon must be one emoji."}
-        </p>
+        </details>
       </section>
 
       <section className="panel settings-panel">
@@ -3465,7 +3615,10 @@ function TransactionDialog({
     recurrenceEnabled: !!recurrence,
     recurrenceEndDate: recurrence?.until ?? ""
   }));
+  const initialForm = useRef(form);
+  const userInteractedRef = useRef(false);
   const [formError, setFormError] = useState("");
+  const [splitTouched, setSplitTouched] = useState(false);
   const dialogRef = useRef<HTMLFormElement | null>(null);
   const amountRef = useRef<HTMLInputElement | null>(null);
   const titleRef = useRef<HTMLInputElement | null>(null);
@@ -3501,6 +3654,7 @@ function TransactionDialog({
               : customSplitValidation?.status === "over"
                 ? `${formatMoney(amountFromMinorUnits(customSplitValidation.differenceMinorUnits ?? 0, effectiveCurrencyCode), effectiveCurrencyCode)} over the total.`
                 : "";
+  const showSplitValidation = splitTouched;
   useEffect(() => {
     if (!categories.some((category) => category.id === form.category)) {
       setForm((current) => ({ ...current, category: categories[0]?.id ?? "other" }));
@@ -3515,8 +3669,14 @@ function TransactionDialog({
     if (currentMemberStillExists && form.createdByMemberId === resolvedDefaultMemberId) {
       return;
     }
-    updateForm({ createdByMemberId: resolvedDefaultMemberId });
+    updateForm({ createdByMemberId: resolvedDefaultMemberId }, false);
   }, [form.createdByMemberId, members, resolvedDefaultMemberId]);
+
+  useEffect(() => {
+    if (!userInteractedRef.current) {
+      initialForm.current = form;
+    }
+  }, [form]);
 
   useEffect(() => {
     const focusId = window.requestAnimationFrame(() => amountRef.current?.focus());
@@ -3535,7 +3695,7 @@ function TransactionDialog({
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        requestClose();
         return;
       }
 
@@ -3567,9 +3727,19 @@ function TransactionDialog({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [form, onClose]);
 
-  function updateForm(patch: Partial<TransactionFormState>) {
+  function requestClose() {
+    if (draftHasChanges(initialForm.current, form) && !window.confirm("Discard transaction? Your unsaved changes will be lost.")) {
+      return;
+    }
+    onClose();
+  }
+
+  function updateForm(patch: Partial<TransactionFormState>, markDirty = true) {
+    if (markDirty) {
+      userInteractedRef.current = true;
+    }
     setFormError("");
     setForm((current) => {
       const next = { ...current, ...patch };
@@ -3583,6 +3753,7 @@ function TransactionDialog({
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setSplitTouched(true);
     const amount = normalizeAmount(Number(form.amount));
     if (!form.title.trim()) {
       setFormError("Add a title before saving this transaction.");
@@ -3619,7 +3790,7 @@ function TransactionDialog({
   }
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className="dialog-backdrop" role="presentation" onMouseDown={requestClose}>
       <form
         className={`dialog ${form.type}`}
         role="dialog"
@@ -3632,7 +3803,7 @@ function TransactionDialog({
       >
         <div className="dialog-header">
           <h2 id="transaction-dialog-title">{transaction ? "Edit transaction" : "Add transaction"}</h2>
-          <button className="icon-button" onClick={onClose} title="Close" aria-label={`Close ${transaction ? "edit" : "add"} transaction`} type="button">
+          <button className="icon-button" onClick={requestClose} title="Close" aria-label={`Close ${transaction ? "edit" : "add"} transaction`} type="button">
             <X size={18} aria-hidden="true" />
           </button>
         </div>
@@ -3775,7 +3946,13 @@ function TransactionDialog({
               <input
                 type="checkbox"
                 checked={form.splitEnabled}
-                onChange={(event) => updateForm({ splitEnabled: event.target.checked })}
+                onChange={(event) => {
+                  setSplitTouched(false);
+                  updateForm({
+                    splitEnabled: event.target.checked,
+                    splitMemberIds: event.target.checked ? activeMembers.map((member) => member.id) : []
+                  });
+                }}
               />
               <span>
                 <strong>Split this expense</strong>
@@ -3788,7 +3965,10 @@ function TransactionDialog({
                 <div className="segmented split-method" role="group" aria-label="Split method">
                   <button
                     className={form.splitMethod === "equal" ? "active" : ""}
-                    onClick={() => updateForm({ splitMethod: "equal" })}
+                    onClick={() => {
+                      setSplitTouched(true);
+                      updateForm({ splitMethod: "equal" });
+                    }}
                     aria-pressed={form.splitMethod === "equal"}
                     type="button"
                   >
@@ -3796,7 +3976,10 @@ function TransactionDialog({
                   </button>
                   <button
                     className={form.splitMethod === "custom" ? "active" : ""}
-                    onClick={() => updateForm({ splitMethod: "custom" })}
+                    onClick={() => {
+                      setSplitTouched(true);
+                      updateForm({ splitMethod: "custom" });
+                    }}
                     aria-pressed={form.splitMethod === "custom"}
                     type="button"
                   >
@@ -3815,11 +3998,14 @@ function TransactionDialog({
                             type="checkbox"
                             checked={selected}
                             disabled={member.inviteStatus !== "active"}
-                            onChange={(event) => updateForm({
-                              splitMemberIds: event.target.checked
-                                ? [...form.splitMemberIds, member.id]
-                                : form.splitMemberIds.filter((id) => id !== member.id)
-                            })}
+                            onChange={(event) => {
+                              setSplitTouched(true);
+                              updateForm({
+                                splitMemberIds: event.target.checked
+                                  ? [...form.splitMemberIds, member.id]
+                                  : form.splitMemberIds.filter((id) => id !== member.id)
+                              });
+                            }}
                           />
                           <MemberBadge member={member} />
                           <span>{member.displayName}{member.id === form.createdByMemberId ? " (paid)" : ""}</span>
@@ -3834,9 +4020,12 @@ function TransactionDialog({
                             min="0"
                             step={normalizedCurrencyCode(effectiveCurrencyCode) === "JPY" ? "1" : "0.01"}
                             value={form.splitAmounts[member.id] ?? ""}
-                            onChange={(event) => updateForm({
-                              splitAmounts: { ...form.splitAmounts, [member.id]: event.target.value }
-                            })}
+                            onChange={(event) => {
+                              setSplitTouched(true);
+                              updateForm({
+                                splitAmounts: { ...form.splitAmounts, [member.id]: event.target.value }
+                              });
+                            }}
                             placeholder={formatAmountNumber(0, effectiveCurrencyCode)}
                             aria-label={`Amount for ${member.displayName}`}
                             aria-invalid={customSplitValidation?.status === "invalid"}
@@ -3846,7 +4035,7 @@ function TransactionDialog({
                     );
                   })}
                 </div>
-                {splitValidationMessage && (
+                {showSplitValidation && splitValidationMessage && (
                   <p className="form-error" id="split-validation-error" role="alert">
                     {splitValidationMessage}
                   </p>
@@ -3863,10 +4052,10 @@ function TransactionDialog({
         )}
 
         <div className="dialog-actions">
-          <button className="ghost-button" onClick={onClose} type="button">
+          <button className="ghost-button" onClick={requestClose} type="button">
             Cancel
           </button>
-          <button className="primary-action full" type="submit" disabled={!!splitValidationMessage}>
+          <button className="primary-action full" type="submit" disabled={showSplitValidation && !!splitValidationMessage}>
             {transaction ? <CheckCircle2 size={18} aria-hidden="true" /> : <Plus size={18} aria-hidden="true" />}
             {transaction ? "Save changes" : "Add transaction"}
           </button>
@@ -4287,19 +4476,30 @@ function TransactionList({
   transactions,
   settings,
   members,
-  onOpenTransaction
+  onOpenTransaction,
+  emptyMessage,
+  emptyActionLabel,
+  onEmptyAction
 }: {
   transactions: BudgetTransaction[];
   settings: BudgetSettings;
   members: BudgetMember[];
   onOpenTransaction: (transaction: BudgetTransaction) => void;
+  emptyMessage?: string;
+  emptyActionLabel?: string;
+  onEmptyAction?: () => void;
 }) {
   const memberById = new Map(members.map((member) => [member.id, member]));
 
   return (
     <div className="compact-list">
       {transactions.length === 0 ? (
-        <div className="empty-state">No transactions in this view.</div>
+        <div className="empty-state">
+          <span>{emptyMessage ?? "No transactions in this view."}</span>
+          {emptyActionLabel && onEmptyAction && (
+            <button className="text-action" type="button" onClick={onEmptyAction}>{emptyActionLabel}</button>
+          )}
+        </div>
       ) : (
         transactions.map((transaction) => {
           const member = memberById.get(transaction.createdByMemberId);
@@ -4321,6 +4521,7 @@ function TransactionList({
                 <span>
                   {categoryName(transaction.category)} · {member ? member.displayName : "Member unavailable"}
                 </span>
+                {isUpcomingTransaction(transaction) && <small className="upcoming-inline">Upcoming</small>}
               </div>
               <b className={transaction.type}>
                 {transaction.type === "expense" ? "-" : "+"}

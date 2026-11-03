@@ -260,7 +260,7 @@ export function visibleExpenseCategories(
 }
 
 const categoryColors: Record<string, string> = {
-  rent: "#1E3A2B",
+  rent: "#6B9A63",
   bills: "#E7B84B",
   studentLoans: "#5E5D50",
   subscription: "#3F9E5E",

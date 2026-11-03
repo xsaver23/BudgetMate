@@ -7,74 +7,65 @@ struct FirstRunIntroView: View {
         ZStack {
             AppTheme.background.ignoresSafeArea()
 
-            VStack(spacing: 28) {
-                Spacer(minLength: 24)
+            ScrollView {
+                VStack(spacing: 28) {
+                    VStack(spacing: 18) {
+                        appMark
 
-                VStack(spacing: 18) {
-                    appMark
+                        VStack(spacing: 10) {
+                            Text("Welcome to BudgetMate")
+                                .font(.roundedBold(30))
+                                .foregroundStyle(BudgetBeaverPalette.ink)
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
 
-                    VStack(spacing: 10) {
-                        Text("Welcome to BudgetMate")
-                            .font(.roundedBold(30))
-                            .foregroundStyle(BudgetBeaverPalette.ink)
-                            .multilineTextAlignment(.center)
-                            .lineLimit(2)
-                            .minimumScaleFactor(0.82)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Text("A calmer place to track shared money.")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(BudgetBeaverPalette.wood)
-                            .multilineTextAlignment(.center)
-                            .lineSpacing(3)
-                            .lineLimit(2)
-                            .minimumScaleFactor(0.88)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.horizontal, 12)
+                            Text("A calmer place to track shared money.")
+                                .font(.title3.weight(.semibold))
+                                .foregroundStyle(BudgetBeaverPalette.wood)
+                                .multilineTextAlignment(.center)
+                                .lineSpacing(3)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.horizontal, 12)
+                        }
                     }
+
+                    VStack(spacing: 12) {
+                        introRow(
+                            icon: "creditcard",
+                            title: "Track the money",
+                            subtitle: "Log income and expenses without landing in a spreadsheet."
+                        )
+                        introRow(
+                            icon: "person.2",
+                            title: "Share the household view",
+                            subtitle: "Split bills between members and keep everyone visible."
+                        )
+                        introRow(
+                            icon: "checkmark.circle",
+                            title: "Settle up clearly",
+                            subtitle: "See simple balances when someone fronts a shared cost."
+                        )
+                    }
+
+                    Button {
+                        onContinue()
+                    } label: {
+                        Text("Get Started")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                            .foregroundStyle(.white)
+                    }
+                    .buttonStyle(PressableButtonStyle(scale: 0.98))
+
+                    Text("You can adjust budget, currency, and household members in Settings.")
+                        .font(.footnote)
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 8)
                 }
-
-                VStack(spacing: 12) {
-                    introRow(
-                        icon: "creditcard",
-                        title: "Track the money",
-                        subtitle: "Log income and expenses without landing in a spreadsheet."
-                    )
-                    introRow(
-                        icon: "person.2",
-                        title: "Share the household view",
-                        subtitle: "Split bills between members and keep everyone visible."
-                    )
-                    introRow(
-                        icon: "checkmark.circle",
-                        title: "Settle up clearly",
-                        subtitle: "See simple balances when someone fronts a shared cost."
-                    )
-                }
-
-                Spacer(minLength: 16)
-
-                Button {
-                    onContinue()
-                } label: {
-                    Text("Get Started")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(AppTheme.brand, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                        .foregroundStyle(.white)
-                }
-                .buttonStyle(.plain)
-                .buttonStyle(PressableButtonStyle(scale: 0.98))
-
-                Text("You can adjust budget, currency, and household members in Settings.")
-                    .font(.footnote)
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.85)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 8)
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 28)
@@ -98,7 +89,7 @@ struct FirstRunIntroView: View {
         HStack(spacing: 14) {
             Image(systemName: icon)
                 .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(AppTheme.brand)
+                .foregroundStyle(AppTheme.brandForeground)
                 .frame(width: 38, height: 38)
                 .background(Circle().fill(rowColor(for: icon)))
 

@@ -129,6 +129,9 @@ enum FinancialDataFingerprint {
             hasher.combine(transaction.amount)
             hasher.combine(transaction.amountMinorUnits)
             hasher.combine(transaction.currencyCode)
+            hasher.combine(transaction.type.rawValue)
+            hasher.combine(transaction.category.rawValue)
+            hasher.combine(transaction.createdByMemberId)
             hasher.combine(transaction.createdByUserId)
             hasher.combine(transaction.rowVersion)
             hasher.combine(transaction.lastMutationId)
@@ -137,6 +140,8 @@ enum FinancialDataFingerprint {
             if includeSplitCounts {
                 hasher.combine(transaction.splits.count)
                 for split in transaction.splits {
+                    hasher.combine(split.memberId)
+                    hasher.combine(split.amount)
                     hasher.combine(split.amountMinorUnits)
                     hasher.combine(split.currencyCode)
                 }

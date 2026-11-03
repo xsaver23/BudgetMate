@@ -25,7 +25,7 @@ struct CategoryIconView: View {
     }
 }
 
-private extension TransactionCategory {
+extension TransactionCategory {
     var systemImageName: String {
         switch self {
         case .food, .restaurant, .groceries: return "fork.knife"
@@ -58,7 +58,7 @@ private extension CategoryColor {
         case .studentLoans, .parking, .other:
             return AppTheme.textSecondary
         default:
-            return AppTheme.brand
+            return AppTheme.brandForeground
         }
     }
 }

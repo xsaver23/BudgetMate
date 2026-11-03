@@ -10,11 +10,28 @@ struct TransactionsView: View {
     @EnvironmentObject private var appRefreshStore: AppRefreshStore
     @EnvironmentObject private var transactionFlow: TransactionFlowCoordinator
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     var onOpenSettings: () -> Void = {}
     let budgetScopeId: String
     @State private var selectedMemberId: UUID? = nil
     @State private var selectedTransaction: Transaction?
+    @State private var transactionPendingDeletion: Transaction?
+    @State private var isShowingDeleteConfirmation = false
     @State private var derivedMetrics = TransactionsTabMetrics()
+
+    private var recentDayGroups: [(date: Date, items: [Transaction])] {
+        derivedMetrics.groupedByDay.compactMap { group in
+            let items = group.items.filter { !$0.isUpcomingTransaction }
+            return items.isEmpty ? nil : (date: group.date, items: items)
+        }
+    }
+
+    private var upcomingDayGroups: [(date: Date, items: [Transaction])] {
+        derivedMetrics.groupedByDay.reversed().compactMap { group in
+            let items = Array(group.items.filter(\.isUpcomingTransaction).reversed())
+            return items.isEmpty ? nil : (date: group.date, items: items)
+        }
+    }
 
     init(budgetScopeId: String, onOpenSettings: @escaping () -> Void = {}) {
         self.budgetScopeId = budgetScopeId
@@ -79,7 +96,10 @@ struct TransactionsView: View {
                     VStack(spacing: 16) {
                         MonthSliderView()
                         if !derivedMetrics.summaryTotals.anomalies.isEmpty {
-                            Label("Some money records need attention", systemImage: "exclamationmark.triangle.fill")
+                            Label(
+                                "A money record needs review. Open its details and check the amount and currency before using this total.",
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(BudgetBeaverPalette.amountRed)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -90,13 +110,24 @@ struct TransactionsView: View {
 
                         summaryCard
 
+                        if !upcomingDayGroups.isEmpty {
+                            Label(
+                                "Totals include projected upcoming transactions.",
+                                systemImage: "calendar.badge.clock"
+                            )
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AppTheme.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
                         if derivedMetrics.filteredTransactions.isEmpty {
                             emptyStateCard
                         } else {
-                    LazyVStack(spacing: 24) {
-                                ForEach(derivedMetrics.groupedByDay, id: \.date) { group in
-                                    dayCard(date: group.date, items: group.items)
-                                }
+                            if !recentDayGroups.isEmpty {
+                                transactionGroup("Recent activity", groups: recentDayGroups)
+                            }
+                            if !upcomingDayGroups.isEmpty {
+                                transactionGroup("Upcoming", groups: upcomingDayGroups)
                             }
                         }
                     }
@@ -126,22 +157,58 @@ struct TransactionsView: View {
                     selectedMemberId = nil
                 }
             }
+            .confirmationDialog("Delete Transaction", isPresented: $isShowingDeleteConfirmation) {
+                Button("Delete Transaction", role: .destructive) {
+                    if let transactionPendingDeletion {
+                        delete(transactionPendingDeletion)
+                    }
+                    transactionPendingDeletion = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    transactionPendingDeletion = nil
+                }
+            } message: {
+                if let transactionPendingDeletion {
+                    Text("Delete “\(transactionPendingDeletion.title)” from this budget? This cannot be undone.")
+                }
+            }
         }
+    }
+
+    private func transactionGroup(
+        _ title: String,
+        groups: [(date: Date, items: [Transaction])]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.textPrimary)
+
+            LazyVStack(spacing: 24) {
+                ForEach(groups, id: \.date) { group in
+                    dayCard(date: group.date, items: group.items)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var summaryCard: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
+            let metricLayout: AnyLayout = dynamicTypeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(spacing: 10))
+                : AnyLayout(HStackLayout(spacing: 0))
+            metricLayout {
                 summaryMetric(
-                    title: "Income",
+                    title: upcomingDayGroups.isEmpty ? "Income" : "Projected income",
                     value: amount(derivedMetrics.summaryTotals.totalIncome)
                 )
                 summaryMetric(
-                    title: "Expenses",
+                    title: upcomingDayGroups.isEmpty ? "Expenses" : "Projected expenses",
                     value: amount(derivedMetrics.summaryTotals.totalExpenses)
                 )
                 summaryMetric(
-                    title: "Net",
+                    title: upcomingDayGroups.isEmpty ? "Net" : "Projected net",
                     value: signedAmount(derivedMetrics.summaryTotals.currentBalance)
                 )
             }
@@ -164,7 +231,7 @@ struct TransactionsView: View {
     ) -> some View {
         VStack(spacing: 5) {
             Text(value)
-                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .font(.subheadline.weight(.bold))
                 .monospacedDigit()
                 .foregroundStyle(AppTheme.textPrimary)
                 .lineLimit(1)
@@ -172,11 +239,13 @@ struct TransactionsView: View {
                 .allowsTightening(true)
 
             Text(title)
-                .font(.caption2.weight(.bold))
-                .tracking(2.1)
+                .font(.caption.weight(.bold))
+                .tracking(0.8)
                 .textCase(.uppercase)
                 .foregroundStyle(AppTheme.textMuted)
-                .lineLimit(1)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 2)
@@ -246,19 +315,28 @@ struct TransactionsView: View {
             }
 
             ForEach(items) { transaction in
-                CompactTransactionRow(
-                    transaction: transaction,
-                    currencySymbol: currencySymbol,
-                    members: memberViewModel.members
-                )
-                    .padding(12)
-                .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .onTapGesture {
+                Button {
                     selectedTransaction = transaction
+                } label: {
+                    CompactTransactionRow(
+                        transaction: transaction,
+                        currencySymbol: currencySymbol,
+                        members: memberViewModel.members
+                    )
+                    .padding(12)
                 }
+                .buttonStyle(.plain)
+                .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .accessibilityHint("Opens transaction details. Use the actions menu to delete this transaction.")
                 .contextMenu {
                     if transaction.isGeneratedRecurringOccurrence {
                         Text("Recurring occurrence")
+                    } else if transaction.isMonthlyRecurring {
+                        Button {
+                            selectedTransaction = transaction
+                        } label: {
+                            Label("Manage Recurring Transaction", systemImage: "arrow.triangle.2.circlepath")
+                        }
                     } else if SharedRecordMutationCapability.decision(
                         currentUserScopeId: authStore.currentUserScopeId,
                         activeBudgetScopeId: authStore.currentBudgetScopeId,
@@ -267,7 +345,8 @@ struct TransactionsView: View {
                         recordCreatorUserId: transaction.createdByUserId
                     ).isAllowed {
                         Button(role: .destructive) {
-                            delete(transaction)
+                            transactionPendingDeletion = transaction
+                            isShowingDeleteConfirmation = true
                         } label: {
                             Label("Delete", systemImage: "trash")
                         }
@@ -285,7 +364,7 @@ struct TransactionsView: View {
             VStack(spacing: 10) {
                 Image(systemName: "tray")
                     .font(.system(size: 38, weight: .semibold))
-                    .foregroundStyle(AppTheme.brand)
+                    .foregroundStyle(AppTheme.brandForeground)
                 Text("No transactions yet")
                     .font(.roundedBold(18))
                     .foregroundStyle(AppTheme.textPrimary)
@@ -302,7 +381,7 @@ struct TransactionsView: View {
                     }
                 }
                 .font(.subheadline.weight(.bold))
-                .foregroundStyle(AppTheme.brand)
+                .foregroundStyle(AppTheme.brandForeground)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 24)
@@ -318,17 +397,22 @@ struct TransactionsView: View {
             recordCreatorUserId: transaction.createdByUserId
         ).isAllowed else { return }
         guard transaction.ownerUserId == authStore.currentBudgetScopeId else { return }
-        cloudSyncStore.deleteTransaction(
-            transaction,
-            userScopeId: authStore.currentUserScopeId,
-            budgetScopeId: authStore.currentBudgetScopeId
-        )
+        let transactionId = transaction.id
+        let expectedRowVersion = transaction.rowVersion
         modelContext.delete(transaction)
         do {
             try modelContext.save()
         } catch {
+            modelContext.rollback()
             cloudSyncStore.recordSyncIssue(error, context: "Deleting transaction locally")
+            return
         }
+        cloudSyncStore.deleteTransaction(
+            id: transactionId,
+            expectedRowVersion: expectedRowVersion,
+            userScopeId: authStore.currentUserScopeId,
+            budgetScopeId: authStore.currentBudgetScopeId
+        )
     }
 
     private var emptyStateMessage: String {

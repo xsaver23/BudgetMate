@@ -2,6 +2,12 @@ import SwiftData
 import SwiftUI
 
 struct BudgetView: View {
+    private struct PendingCategoryRename {
+        let oldCategory: TransactionCategory
+        let newCategory: TransactionCategory
+        let emoji: String?
+    }
+
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settingsStore: SettingsStore
     @EnvironmentObject private var memberViewModel: MemberViewModel
@@ -9,6 +15,7 @@ struct BudgetView: View {
     @EnvironmentObject private var authStore: AuthSessionStore
     @EnvironmentObject private var cloudSyncStore: CloudSyncStore
     @EnvironmentObject private var appRefreshStore: AppRefreshStore
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     var onOpenSettings: () -> Void = {}
     let budgetScopeId: String
 
@@ -20,6 +27,10 @@ struct BudgetView: View {
     @State private var isShowingCategoryEditor = false
     @State private var saveMessage: String?
     @State private var tabMetrics = BudgetTabMetrics()
+    @State private var categoryPendingRemoval: TransactionCategory?
+    @State private var isShowingCategoryRemovalConfirmation = false
+    @State private var pendingCategoryRename: PendingCategoryRename?
+    @State private var isShowingCategoryRenameConfirmation = false
 
     init(budgetScopeId: String, onOpenSettings: @escaping () -> Void = {}) {
         self.budgetScopeId = budgetScopeId
@@ -39,6 +50,10 @@ struct BudgetView: View {
     private var scopedSettlementRecords: [Settlement] { settlementRecords }
 
     private var totalExpenses: Double { tabMetrics.totalExpenses }
+
+    private var hasProjectedTransactions: Bool {
+        tabMetrics.monthlyExpenseTransactions.contains { $0.isUpcomingTransaction }
+    }
 
     private var remainingBudget: Double {
         monthlyBudget - totalExpenses
@@ -102,7 +117,10 @@ struct BudgetView: View {
                     VStack(spacing: 16) {
                         MonthSliderView()
                         if !tabMetrics.anomalies.isEmpty {
-                            Label("Some money records need attention", systemImage: "exclamationmark.triangle.fill")
+                            Label(
+                                "A money record needs review. Check its amount and currency before changing this budget.",
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(BudgetBeaverPalette.amountRed)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -140,10 +158,44 @@ struct BudgetView: View {
                     }
                 )
             }
-            .alert("Budget", isPresented: saveAlertBinding) {
+            .alert("BudgetMate", isPresented: saveAlertBinding) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(saveMessage ?? "")
+            }
+            .confirmationDialog("Remove Category", isPresented: $isShowingCategoryRemovalConfirmation) {
+                Button("Remove Category", role: .destructive) {
+                    if let categoryPendingRemoval {
+                        removeCategory(categoryPendingRemoval)
+                    }
+                    categoryPendingRemoval = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    categoryPendingRemoval = nil
+                }
+            } message: {
+                if let categoryPendingRemoval {
+                    Text("Remove \(categoryPendingRemoval.displayName)? Existing transactions in this category will be moved to Other.")
+                }
+            }
+            .confirmationDialog("Rename Category", isPresented: $isShowingCategoryRenameConfirmation) {
+                Button("Rename and Reassign", role: .destructive) {
+                    if let pendingCategoryRename {
+                        applyCategoryName(
+                            from: pendingCategoryRename.oldCategory,
+                            to: pendingCategoryRename.newCategory,
+                            emoji: pendingCategoryRename.emoji
+                        )
+                    }
+                    pendingCategoryRename = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingCategoryRename = nil
+                }
+            } message: {
+                if let pendingCategoryRename {
+                    Text("Rename \(pendingCategoryRename.oldCategory.displayName) to \(pendingCategoryRename.newCategory.displayName)? Existing transactions will be reassigned to the new category.")
+                }
             }
         }
     }
@@ -154,14 +206,14 @@ struct BudgetView: View {
                 HStack(alignment: .top, spacing: 14) {
                     Image(systemName: "calendar.badge.clock")
                         .font(.headline.weight(.bold))
-                        .foregroundStyle(AppTheme.brand)
+                        .foregroundStyle(AppTheme.brandForeground)
                         .frame(width: 44, height: 44)
                         .background(AppTheme.brandSoft, in: Circle())
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("MONTHLY BUDGET")
                             .font(.caption2.weight(.bold))
-                            .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.6))
+                            .foregroundStyle(AppTheme.textSecondary)
 
                         Text(formattedAmount(monthlyBudget))
                             .font(.largeTitle.weight(.black))
@@ -173,14 +225,19 @@ struct BudgetView: View {
                     Spacer(minLength: 0)
                 }
 
-                HStack(spacing: 12) {
+                let summaryLayout: AnyLayout = dynamicTypeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(spacing: 12))
+                    : AnyLayout(HStackLayout(spacing: 12))
+                summaryLayout {
                     budgetSummaryTile(
-                        title: "Spent",
+                        title: hasProjectedTransactions ? "Projected spent" : "Spent",
                         value: totalExpenses,
                         tint: AppTheme.expense
                     )
                     budgetSummaryTile(
-                        title: remainingBudget >= 0 ? "Remaining" : "Over by",
+                        title: remainingBudget >= 0
+                            ? (hasProjectedTransactions ? "Projected remaining" : "Remaining")
+                            : (hasProjectedTransactions ? "Projected over by" : "Over by"),
                         value: remainingBudget >= 0 ? remainingBudget : abs(remainingBudget),
                         tint: remainingBudget >= 0 ? AppTheme.income : AppTheme.expense
                     )
@@ -206,6 +263,10 @@ struct BudgetView: View {
                     Spacer()
 
                     Button(isEditingCategories ? "Done" : "Edit") {
+                        guard settingsStore.hasObservedCloudSettingsBaseline else {
+                            saveMessage = "Sync this budget before editing category budgets."
+                            return
+                        }
                         withAnimation(.easeInOut(duration: 0.2)) {
                             if isEditingCategories {
                                 saveCategoryBudgets(showMessage: false)
@@ -216,21 +277,51 @@ struct BudgetView: View {
                         }
                     }
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.brand)
+                    .tint(AppTheme.brandForeground)
                     .buttonStyle(PressableButtonStyle(scale: 0.97))
+                    .disabled(!settingsStore.hasObservedCloudSettingsBaseline)
                 }
 
-                Text("Spending is tracked month by month.")
+                Text(
+                    hasProjectedTransactions
+                        ? "Projected figures include upcoming transactions."
+                        : "Spending is tracked month by month."
+                )
                     .font(.caption)
-                    .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.7))
+                    .foregroundStyle(AppTheme.textSecondary)
+
+                if !settingsStore.hasObservedCloudSettingsBaseline {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(
+                            "Sync this budget before editing category budgets.",
+                            systemImage: "lock.fill"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.textSecondary)
+
+                        Button {
+                            Task {
+                                await appRefreshStore.refreshCurrentBudget(forceSync: true)
+                            }
+                        } label: {
+                            Label(
+                                cloudSyncStore.hasSyncIssue ? "Retry Sync" : "Sync Now",
+                                systemImage: "arrow.triangle.2.circlepath"
+                            )
+                        }
+                        .font(.caption.weight(.semibold))
+                        .disabled(cloudSyncStore.isSyncing)
+                    }
+                    .accessibilityIdentifier("budget.categoryAmountsUnavailable")
+                }
 
                 if isEditingCategories, !recordMutationDecision.isAllowed {
                     Label(
-                        "Only the household owner can rename or remove shared transaction categories.",
+                        "Only the household owner can add, rename, remove, or change shared transaction categories.",
                         systemImage: "lock.fill"
                     )
                     .font(.caption)
-                    .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.78))
+                    .foregroundStyle(AppTheme.textSecondary)
                     .accessibilityIdentifier("budget.sharedCategoryReadOnly")
                 }
 
@@ -254,7 +345,7 @@ struct BudgetView: View {
                     }
                 }
 
-                if isEditingCategories {
+                if isEditingCategories, recordMutationDecision.isAllowed {
                     Button {
                         categoryBeingEdited = nil
                         isShowingCategoryEditor = true
@@ -262,7 +353,7 @@ struct BudgetView: View {
                         Label("Add Category", systemImage: "plus.circle.fill")
                     }
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.brand)
+                    .foregroundStyle(AppTheme.brandForeground)
                     .buttonStyle(PressableButtonStyle(scale: 0.97))
                 }
             }
@@ -312,7 +403,8 @@ struct BudgetView: View {
                    !category.isProtectedCategory,
                    recordMutationDecision.isAllowed {
                     Button(role: .destructive) {
-                        removeCategory(category)
+                        categoryPendingRemoval = category
+                        isShowingCategoryRemovalConfirmation = true
                     } label: {
                         Image(systemName: "minus.circle.fill")
                             .font(.title3)
@@ -333,6 +425,7 @@ struct BudgetView: View {
                         .multilineTextAlignment(.trailing)
                         .frame(width: 96)
                         .textFieldStyle(.roundedBorder)
+                        .disabled(!settingsStore.hasObservedCloudSettingsBaseline)
                 } else {
                     Text(budgetDisplayValue(for: category))
                         .font(.subheadline.weight(.semibold))
@@ -344,13 +437,16 @@ struct BudgetView: View {
             }
 
             HStack {
-                Text("Spent: \(formattedAmount(monthlySpent(for: category)))")
+                Text(
+                    "\(hasProjectedTransactions ? "Projected spent" : "Spent"): " +
+                        formattedAmount(monthlySpent(for: category))
+                )
                     .font(.caption)
-                    .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.7))
+                    .foregroundStyle(AppTheme.textSecondary)
                 Spacer()
                 Text(categoryBalanceText(for: category))
                     .font(.caption)
-                    .foregroundStyle(remainingAmount(for: category) >= 0 ? BudgetBeaverPalette.wood.opacity(0.7) : BudgetBeaverPalette.amountRed)
+                    .foregroundStyle(remainingAmount(for: category) >= 0 ? AppTheme.textSecondary : BudgetBeaverPalette.amountRed)
             }
 
             ProgressView(value: budgetProgress(for: category))
@@ -381,7 +477,8 @@ struct BudgetView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("\(category.displayName) budget category")
         .accessibilityValue(
-            "\(formattedAmount(monthlySpent(for: category))) spent, " +
+            "\(formattedAmount(monthlySpent(for: category))) " +
+                (hasProjectedTransactions ? "projected spent, " : "spent, ") +
                 "\(formattedAmount(configuredBudget(for: category))) budget"
         )
         .accessibilityHint(
@@ -403,9 +500,9 @@ struct BudgetView: View {
 
                     Spacer()
 
-                    Text("THIS MONTH")
+                    Text(hasProjectedTransactions ? "PROJECTED MONTH" : "THIS MONTH")
                         .font(.caption2.weight(.bold))
-                        .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.6))
+                        .foregroundStyle(AppTheme.textSecondary)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(AppTheme.warningTint, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -468,6 +565,8 @@ struct BudgetView: View {
             Text(title)
                 .font(.subheadline.weight(.bold))
                 .foregroundStyle(BudgetBeaverPalette.ink)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
 
             Text(formattedAmount(value))
                 .font(.title3.weight(.black))
@@ -526,6 +625,11 @@ struct BudgetView: View {
     }
 
     private func saveCategoryBudgets(showMessage: Bool = true) {
+        guard settingsStore.hasObservedCloudSettingsBaseline else {
+            saveMessage = "Sync this budget before saving money changes."
+            return
+        }
+
         var updates: [TransactionCategory: Double] = [:]
         for category in categories {
             let raw = categoryBudgetInputs[category.rawValue]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -534,6 +638,24 @@ struct BudgetView: View {
             } else if let value = Double(raw) {
                 updates[category] = value
             }
+        }
+
+        let currencyCode = settingsStore.settings.currencyCode
+        let hasChanges = categories.contains { category in
+            let currentMinorUnits = MoneyAccounting.materialize(
+                legacyAmount: configuredBudget(for: category),
+                currencyCode: currencyCode
+            )?.minorUnits
+            let updatedMinorUnits = MoneyAccounting.materialize(
+                legacyAmount: updates[category] ?? 0,
+                currencyCode: currencyCode
+            )?.minorUnits
+            return currentMinorUnits != updatedMinorUnits
+        }
+
+        guard hasChanges else {
+            loadCategoryBudgetInputs()
+            return
         }
 
         settingsStore.updateCategoryBudgets(updates, in: monthSelectionStore.selectedMonthDate)
@@ -545,6 +667,11 @@ struct BudgetView: View {
     }
 
     private func saveCategoryName(_ name: String, emoji: String?) {
+        guard recordMutationDecision.isAllowed else {
+            saveMessage = recordMutationDecision.readOnlyMessage
+            return
+        }
+
         guard let rawValue = TransactionCategory.customRawValue(from: name) else {
             saveMessage = "Enter a category name."
             return
@@ -575,13 +702,36 @@ struct BudgetView: View {
             return
         }
 
+        let normalizedCategoryEmoji = normalizedEmoji.isEmpty ? nil : normalizedEmoji
+        if let oldCategory, oldCategory != newCategory {
+            pendingCategoryRename = PendingCategoryRename(
+                oldCategory: oldCategory,
+                newCategory: newCategory,
+                emoji: normalizedCategoryEmoji
+            )
+            isShowingCategoryRenameConfirmation = true
+            return
+        }
+
+        applyCategoryName(
+            from: oldCategory,
+            to: newCategory,
+            emoji: normalizedCategoryEmoji
+        )
+    }
+
+    private func applyCategoryName(
+        from oldCategory: TransactionCategory?,
+        to newCategory: TransactionCategory,
+        emoji: String?
+    ) {
         if let oldCategory, oldCategory == newCategory {
-            settingsStore.updateCategoryEmoji(normalizedEmoji.isEmpty ? nil : normalizedEmoji, for: oldCategory)
+            settingsStore.updateCategoryEmoji(emoji, for: oldCategory)
         } else if let oldCategory {
-            settingsStore.renameCategory(from: oldCategory, to: newCategory, emoji: normalizedEmoji.isEmpty ? nil : normalizedEmoji)
+            settingsStore.renameCategory(from: oldCategory, to: newCategory, emoji: emoji)
             reassignTransactions(from: oldCategory, to: newCategory)
         } else {
-            settingsStore.upsertCategory(newCategory, emoji: normalizedEmoji.isEmpty ? nil : normalizedEmoji)
+            settingsStore.upsertCategory(newCategory, emoji: emoji)
         }
 
         loadCategoryBudgetInputs()
@@ -609,16 +759,19 @@ struct BudgetView: View {
         changedTransactions.forEach { transaction in
             transaction.category = newCategory
         }
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            cloudSyncStore.recordSyncIssue(error, context: "Saving reassigned categories")
+            return
+        }
+
         cloudSyncStore.saveTransactions(
             changedTransactions,
             userScopeId: authStore.currentUserScopeId,
             budgetScopeId: authStore.currentBudgetScopeId
         )
-        do {
-            try modelContext.save()
-        } catch {
-            cloudSyncStore.recordSyncIssue(error, context: "Saving reassigned categories")
-        }
         refreshTabMetrics()
     }
 
@@ -708,9 +861,11 @@ struct BudgetView: View {
     private func categoryBalanceText(for category: TransactionCategory) -> String {
         let remaining = remainingAmount(for: category)
         if remaining < 0 {
-            return "Over by: \(formattedAmount(abs(remaining)))"
+            let label = hasProjectedTransactions ? "Projected over by" : "Over by"
+            return "\(label): \(formattedAmount(abs(remaining)))"
         }
-        return "Remaining: \(formattedAmount(remaining))"
+        let label = hasProjectedTransactions ? "Projected remaining" : "Remaining"
+        return "\(label): \(formattedAmount(remaining))"
     }
 
     private func budgetProgress(for category: TransactionCategory) -> Double {
@@ -745,13 +900,15 @@ struct BudgetView: View {
         VStack(spacing: 8) {
             Image(systemName: systemImage)
                 .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(AppTheme.brand)
+                .foregroundStyle(AppTheme.brandForeground)
             Text(title)
                 .font(.subheadline.weight(.bold))
                 .foregroundStyle(BudgetBeaverPalette.ink)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
             Text(message)
                 .font(.caption)
-                .foregroundStyle(BudgetBeaverPalette.wood.opacity(0.75))
+                .foregroundStyle(AppTheme.textSecondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
@@ -904,7 +1061,7 @@ private struct CategoryEditorView: View {
                         focusedField = nil
                     }
                     .fontWeight(.bold)
-                    .foregroundStyle(AppTheme.brand)
+                    .foregroundStyle(AppTheme.brandForeground)
                 }
             }
             .task {
@@ -934,10 +1091,10 @@ private struct CategoryEditorView: View {
 
                 Button(mode.saveTitle, action: save)
                     .font(.system(size: 18, weight: .bold, design: .rounded))
-                    .foregroundStyle(canSave ? AppTheme.brand : BudgetBeaverPalette.wood.opacity(0.45))
                     .frame(width: 92, height: 52)
                     .background(AppTheme.surface, in: Capsule())
                     .buttonStyle(PressableButtonStyle(scale: 0.96))
+                    .opacity(canSave ? 1 : 0.42)
                     .disabled(!canSave)
             }
         }
@@ -970,13 +1127,13 @@ struct BudgetCategoryTransactionListView: View {
             LazyVStack(alignment: .leading, spacing: 16) {
                 if !breakdown.anomalies.isEmpty {
                     Label(
-                        "Some category money records need attention",
+                        "A category record needs review. Check its amount and currency before relying on this total.",
                         systemImage: "exclamationmark.triangle.fill"
                     )
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(BudgetBeaverPalette.amountRed)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityLabel("Some category money records need attention")
+                    .accessibilityLabel("A category record needs review. Check its amount and currency before relying on this total.")
                 }
                 summaryCard
                 if breakdown.transactions.isEmpty { emptyCard } else { transactionCard }
@@ -984,7 +1141,10 @@ struct BudgetCategoryTransactionListView: View {
             .padding()
         }
         .background(AppTheme.background)
-        .navigationTitle("\(category.displayName) Expenses")
+        .navigationTitle(
+            "\(category.displayName) " +
+                (breakdown.transactions.contains { $0.isUpcomingTransaction } ? "Projected Expenses" : "Expenses")
+        )
         .navigationBarTitleDisplayMode(.inline)
         .accessibilityIdentifier(
             "budget-category-transaction-list-\(categoryRawValue)-\(selectedMonthKey)"
@@ -999,7 +1159,11 @@ struct BudgetCategoryTransactionListView: View {
                     Text(selectedMonthTitle)
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(BudgetBeaverPalette.wood)
-                    Text("Spent")
+                    Text(
+                        breakdown.transactions.contains { $0.isUpcomingTransaction }
+                            ? "Projected spent"
+                            : "Spent"
+                    )
                         .font(.roundedBold(24))
                         .foregroundStyle(BudgetBeaverPalette.ink)
                     Text("\(breakdown.transactions.count) expense\(breakdown.transactions.count == 1 ? "" : "s")")
@@ -1018,7 +1182,9 @@ struct BudgetCategoryTransactionListView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(category.displayName) spending for \(selectedMonthTitle)")
         .accessibilityValue(
-            "\(breakdown.transactions.count) expenses, \(formattedAmount(breakdown.total)) spent"
+            "\(breakdown.transactions.count) expenses, " +
+                "\(formattedAmount(breakdown.total)) " +
+                (breakdown.transactions.contains { $0.isUpcomingTransaction } ? "projected spent" : "spent")
         )
     }
 
@@ -1036,6 +1202,11 @@ struct BudgetCategoryTransactionListView: View {
                             Text(transaction.date.formatted(.dateTime.month(.abbreviated).day().year()))
                                 .font(.subheadline)
                                 .foregroundStyle(BudgetBeaverPalette.wood)
+                            if transaction.isUpcomingTransaction {
+                                Text("Upcoming")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(AppTheme.brandForeground)
+                            }
                         }
                         Spacer(minLength: 8)
                         Text(formattedAmount(transaction))

@@ -10,10 +10,31 @@ export function cloudStateStorageKey(userId: string): string {
   return `${baseStorageKey}:cloud:${userId}`;
 }
 
+export function cloudSelectedBudgetStorageKey(userId: string): string {
+  return `${baseStorageKey}:cloud-selected-budget:${userId}`;
+}
+
+function cloudUserIdForStorageKey(storageKey: string): string | undefined {
+  const prefix = `${baseStorageKey}:cloud:`;
+  if (!storageKey.startsWith(prefix)) return undefined;
+  const userId = storageKey.slice(prefix.length);
+  return userId && !userId.includes(":") ? userId : undefined;
+}
+
 export function loadCloudState(userId: string): AppState {
   const cached = loadState(cloudStateStorageKey(userId));
   if (cached.currentUserId === userId) {
-    return cached;
+    const selectionKey = cloudSelectedBudgetStorageKey(userId);
+    const storedSelection = window.localStorage.getItem(selectionKey);
+    // Migrate pre-selection caches without treating a brand-new account's
+    // seed placeholder as a user choice.
+    if (!storedSelection && cached.budgets.some((budget) => budget.id === cached.currentBudgetId)) {
+      window.localStorage.setItem(selectionKey, cached.currentBudgetId);
+    }
+    const selectedBudgetId = storedSelection ?? cached.currentBudgetId;
+    return selectedBudgetId && cached.budgets.some((budget) => budget.id === selectedBudgetId)
+      ? { ...cached, currentBudgetId: selectedBudgetId }
+      : cached;
   }
 
   const now = new Date().toISOString();
@@ -60,11 +81,22 @@ export function loadState(storageKey = localStateStorageKey): AppState {
 }
 
 export function saveState(state: AppState, storageKey = localStateStorageKey): void {
-  window.localStorage.setItem(storageKey, JSON.stringify(sanitizeState(state)));
+  const sanitized = sanitizeState(state);
+  window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
+  const userId = cloudUserIdForStorageKey(storageKey);
+  if (userId && sanitized.currentUserId === userId && sanitized.budgets.some((budget) => budget.id === sanitized.currentBudgetId)) {
+    const selectionKey = cloudSelectedBudgetStorageKey(userId);
+    const priorSelection = window.localStorage.getItem(selectionKey);
+    if (sanitized.currentBudgetId !== userId || priorSelection !== null) {
+      window.localStorage.setItem(selectionKey, sanitized.currentBudgetId);
+    }
+  }
 }
 
 export function clearState(storageKey: string): void {
   window.localStorage.removeItem(storageKey);
+  const userId = cloudUserIdForStorageKey(storageKey);
+  if (userId) window.localStorage.removeItem(cloudSelectedBudgetStorageKey(userId));
 }
 
 export function resetState(storageKey = localStateStorageKey): AppState {

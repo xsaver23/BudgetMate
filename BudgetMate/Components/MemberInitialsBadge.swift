@@ -7,6 +7,10 @@ struct MemberInitialsBadge: View {
     var accessibilityLabel: String?
     var showsShadow: Bool = false
 
+    private var initialsForeground: Color {
+        Color.accessibleForeground(forHex: colorHex)
+    }
+
     var body: some View {
         Circle()
             .fill(Color(hex: colorHex))
@@ -14,7 +18,7 @@ struct MemberInitialsBadge: View {
             .overlay(
                 Text(initials)
                     .font(.system(size: size * 0.45, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.accessibleForeground(forHex: colorHex))
+                    .foregroundStyle(initialsForeground)
             )
             .overlay(
                 Circle().stroke(AppTheme.background, lineWidth: max(2, size * 0.07))
@@ -57,7 +61,7 @@ struct MemberAvatarCluster: View {
                     .overlay(
                         Text("+\(overflow)")
                             .font(.system(size: size * 0.4, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Color.accessibleForeground(forHex: "#9CA3AF"))
                     )
                     .overlay(Circle().stroke(AppTheme.background, lineWidth: max(2, size * 0.07)))
             }

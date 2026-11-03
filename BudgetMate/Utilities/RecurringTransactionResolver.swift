@@ -57,7 +57,7 @@ enum RecurringTransactionResolver {
         }
 
         if let endDate = transaction.recurrenceEndDate,
-           occurrenceDate > calendar.startOfDay(for: endDate) {
+           calendar.startOfDay(for: occurrenceDate) > calendar.startOfDay(for: endDate) {
             return []
         }
 
