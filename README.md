@@ -10,6 +10,8 @@ The project includes:
 
 Live web app: [budgetmate.pages.dev](https://budgetmate.pages.dev)
 
+Update history: [Changelog](CHANGELOG.md) · [GitHub releases](https://github.com/xsaver23/BudgetMate/releases)
+
 ## Features
 
 - Email and password authentication with Supabase.
