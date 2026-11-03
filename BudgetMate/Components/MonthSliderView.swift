@@ -37,7 +37,7 @@ struct MonthSliderView: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(enabled ? AppTheme.brand : AppTheme.textSecondary.opacity(0.42))
+                .foregroundStyle(enabled ? AppTheme.brandForeground : AppTheme.textSecondary.opacity(0.42))
                 .frame(width: 34, height: 34)
                 .background(Circle().fill(enabled ? AppTheme.background : AppTheme.surfaceAlt.opacity(0.6)))
                 .frame(width: 44, height: 44)

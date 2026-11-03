@@ -184,6 +184,20 @@ final class CloudSyncStore: ObservableObject {
                     for: request.userScopeId,
                     budgetScopeId: request.budgetScopeId ?? request.userScopeId
                 )
+                let scopeUserId = request.userScopeId
+                let scopeBudgetId = request.budgetScopeId ?? request.userScopeId
+                let pendingDeletedTransactionIDs = Set<UUID>(self.pendingCloudDeletions.compactMap { deletion -> UUID? in
+                    guard case .transaction = deletion.entity,
+                          deletion.userScopeId == scopeUserId,
+                          deletion.budgetScopeId == scopeBudgetId else { return nil }
+                    return deletion.recordId
+                })
+                let pendingDeletedSettlementIDs = Set<UUID>(self.pendingCloudDeletions.compactMap { deletion -> UUID? in
+                    guard case .settlement = deletion.entity,
+                          deletion.userScopeId == scopeUserId,
+                          deletion.budgetScopeId == scopeBudgetId else { return nil }
+                    return deletion.recordId
+                })
                 return try await self.service.sync(
                     settings: request.settings,
                     shouldPushSettings: request.shouldPushSettings,
@@ -194,7 +208,9 @@ final class CloudSyncStore: ObservableObject {
                     into: request.context,
                     userScopeId: request.userScopeId,
                     userEmail: request.userEmail,
-                    budgetScopeId: request.budgetScopeId
+                    budgetScopeId: request.budgetScopeId,
+                    pendingDeletedTransactionIDs: pendingDeletedTransactionIDs,
+                    pendingDeletedSettlementIDs: pendingDeletedSettlementIDs
                 )
             }
             do {
@@ -802,6 +818,12 @@ final class CloudSyncStore: ObservableObject {
         operation: @escaping () async throws -> Void,
         onSuccess: (() -> Void)? = nil
     ) {
+#if DEBUG
+        if SyntheticUITestScenario.isRequested {
+            onSuccess?()
+            return
+        }
+#endif
         let precedingMutation = pendingMutationTask
         let activeSync = activeFullSync?.task
         let token = UUID()
@@ -1071,6 +1093,8 @@ final class CloudSyncStore: ObservableObject {
              .invalidCloudDate,
              .invalidCloudMoneyContract:
             return false
+        case .incompleteCloudPage:
+            return true
         }
     }
 

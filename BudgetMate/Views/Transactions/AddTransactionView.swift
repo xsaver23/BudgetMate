@@ -11,6 +11,8 @@ struct AddTransactionView: View {
     @EnvironmentObject private var memberViewModel: MemberViewModel
     @EnvironmentObject private var settingsStore: SettingsStore
     @EnvironmentObject private var authStore: AuthSessionStore
+    @EnvironmentObject private var cloudSyncStore: CloudSyncStore
+    @EnvironmentObject private var appRefreshStore: AppRefreshStore
     @EnvironmentObject private var transactionFlow: TransactionFlowCoordinator
     @StateObject private var viewModel: AddTransactionViewModel
     private let transactionToEdit: Transaction?
@@ -19,6 +21,8 @@ struct AddTransactionView: View {
     @State private var saveErrorMessage: String?
     @State private var isSaving = false
     @State private var isShowingTransactionDatePicker = false
+    @State private var isShowingDiscardConfirmation = false
+    @State private var initialDraft: TransactionDraft?
     @State private var editorAppearedAtUptime: TimeInterval?
     @State private var hasLoggedFirstKeyboard = false
     @FocusState private var focusedInput: FocusedInput?
@@ -29,6 +33,23 @@ struct AddTransactionView: View {
         case amount
         case title
         case customSplit(UUID)
+    }
+
+    private struct TransactionDraft: Equatable {
+        let type: TransactionType
+        let title: String
+        let amountText: String
+        let category: TransactionCategory
+        let paymentMethod: PaymentMethod
+        let date: Date
+        let repeatsMonthly: Bool
+        let hasRecurrenceEndDate: Bool
+        let recurrenceEndDate: Date
+        let isSplit: Bool
+        let splitMethod: SplitMethod
+        let participants: Set<UUID>
+        let customAmounts: [UUID: String]
+        let selectedMemberId: UUID?
     }
 
     init(
@@ -105,11 +126,65 @@ struct AddTransactionView: View {
         )
     }
 
+    private var currentDraft: TransactionDraft {
+        TransactionDraft(
+            type: viewModel.type,
+            title: viewModel.title,
+            amountText: viewModel.amountText,
+            category: viewModel.category,
+            paymentMethod: viewModel.paymentMethod,
+            date: viewModel.date,
+            repeatsMonthly: viewModel.repeatsMonthly,
+            hasRecurrenceEndDate: viewModel.hasRecurrenceEndDate,
+            recurrenceEndDate: viewModel.recurrenceEndDate,
+            isSplit: viewModel.isSplit,
+            splitMethod: viewModel.splitMethod,
+            participants: viewModel.participants,
+            customAmounts: viewModel.customAmounts,
+            selectedMemberId: selectedMemberId
+        )
+    }
+
+    private var hasUnsavedChanges: Bool {
+        guard let initialDraft else { return false }
+        return currentDraft != initialDraft
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 amountHero
                     .disabled(isEditingRestrictedSharedRecord)
+
+                if !settingsStore.hasObservedCloudSettingsBaseline {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(
+                            "Sync this budget before saving money changes.",
+                            systemImage: "lock.fill"
+                        )
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(BudgetBeaverPalette.wood)
+
+                        Button {
+                            Task {
+                                await appRefreshStore.refreshCurrentBudget(forceSync: true)
+                            }
+                        } label: {
+                            Label(syncRecoveryTitle, systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .font(.footnote.weight(.semibold))
+                        .disabled(cloudSyncStore.isSyncing)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .background(
+                        AppTheme.surfaceAlt,
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    )
+                    .padding(.horizontal, 16)
+                    .accessibilityIdentifier("transactionEditor.syncRecovery")
+                }
 
                 if let saveErrorMessage {
                     Label(saveErrorMessage, systemImage: "exclamationmark.triangle.fill")
@@ -162,7 +237,7 @@ struct AddTransactionView: View {
                                 Text(viewModel.date.formatted(date: .abbreviated, time: .omitted))
                                     .foregroundStyle(AppTheme.textSecondary)
                                 Image(systemName: "calendar")
-                                    .foregroundStyle(AppTheme.brand)
+                                    .foregroundStyle(AppTheme.brandForeground)
                             }
                         }
                         .accessibilityIdentifier("transactionEditor.date")
@@ -201,7 +276,7 @@ struct AddTransactionView: View {
                 // deterministic Next/Done controls.
                 .scrollDismissesKeyboard(.immediately)
                 .background(AppTheme.background)
-                .tint(AppTheme.brand)
+                .tint(AppTheme.brandForeground)
             }
             .background(AppTheme.background)
             .navigationTitle(transactionToEdit == nil ? "Add Transaction" : "Edit Transaction")
@@ -209,11 +284,13 @@ struct AddTransactionView: View {
             .onAppear {
                 editorAppearedAtUptime = ProcessInfo.processInfo.systemUptime
                 Self.interactionSignposter.emitEvent("Transaction Editor Appeared")
-                viewModel.normalizeInput(currencyCode: settingsStore.settings.currencyCode)
                 if !hasInitialSettings {
                     viewModel.updateAvailableExpenseCategories(from: settingsStore.settings)
                 }
                 ensureSelectedMemberIsValid()
+                if initialDraft == nil {
+                    initialDraft = currentDraft
+                }
             }
             .onDisappear {
                 focusedInput = nil
@@ -235,7 +312,7 @@ struct AddTransactionView: View {
             }
             .onChange(of: viewModel.isSplit) { _, splitOn in
                 if splitOn, viewModel.participants.isEmpty {
-                    viewModel.participants = Set(memberViewModel.members.map(\.id))
+                    viewModel.participants = Self.defaultSplitParticipantIDs(from: memberViewModel.members)
                 }
             }
             .onChange(of: scenePhase) { _, newPhase in
@@ -261,7 +338,11 @@ struct AddTransactionView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         focusedInput = nil
-                        dismiss()
+                        if hasUnsavedChanges {
+                            isShowingDiscardConfirmation = true
+                        } else {
+                            dismiss()
+                        }
                     }
                     .foregroundStyle(BudgetBeaverPalette.wood)
                 }
@@ -271,6 +352,7 @@ struct AddTransactionView: View {
                         title: transactionToEdit == nil ? "Save" : "Update",
                         isEnabled: !isSaving &&
                             viewModel.canSave(currencyCode: settingsStore.settings.currencyCode) &&
+                            settingsStore.hasObservedCloudSettingsBaseline &&
                             !isEditingRestrictedSharedRecord
                     ) { cloudSyncStore in
                         saveTransaction(using: cloudSyncStore)
@@ -287,11 +369,34 @@ struct AddTransactionView: View {
                         }
                     }
                     .fontWeight(.bold)
-                    .foregroundStyle(AppTheme.brand)
+                    .foregroundStyle(AppTheme.brandForeground)
                 }
+            }
+            .confirmationDialog(
+                "Discard transaction?",
+                isPresented: $isShowingDiscardConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Discard Changes", role: .destructive) {
+                    dismiss()
+                }
+                Button("Keep Editing", role: .cancel) { }
+            } message: {
+                Text("Your changes will be lost.")
             }
             .background(TransactionEditorActivityReporter())
         }
+    }
+
+    static func defaultSplitParticipantIDs(from members: [BudgetMember]) -> Set<UUID> {
+        Set(members.filter { $0.inviteStatus == .active }.map(\.id))
+    }
+
+    private var syncRecoveryTitle: String {
+        if cloudSyncStore.isSyncing {
+            return "Syncing…"
+        }
+        return cloudSyncStore.hasSyncIssue ? "Retry Sync" : "Sync Now"
     }
 
     private var amountHero: some View {
@@ -302,7 +407,7 @@ struct AddTransactionView: View {
                 }
             }
             .pickerStyle(.segmented)
-            .tint(viewModel.type == .income ? AppTheme.brand : AppTheme.danger)
+            .tint(viewModel.type == .income ? AppTheme.brandForeground : AppTheme.danger)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 20)
 
@@ -353,11 +458,11 @@ struct AddTransactionView: View {
     private var recurringSection: some View {
         Section("Recurring") {
             Toggle("Repeat monthly", isOn: $viewModel.repeatsMonthly)
-                .tint(AppTheme.brand)
+                .tint(AppTheme.brandForeground)
 
             if viewModel.repeatsMonthly {
                 Toggle("Add stop date", isOn: $viewModel.hasRecurrenceEndDate)
-                    .tint(AppTheme.brand)
+                    .tint(AppTheme.brandForeground)
 
                 if viewModel.hasRecurrenceEndDate {
                     DatePicker("Stop Date", selection: $viewModel.recurrenceEndDate, displayedComponents: .date)
@@ -381,7 +486,7 @@ struct AddTransactionView: View {
     private var splitSection: some View {
         Section("Split") {
             Toggle("Split this expense", isOn: $viewModel.isSplit)
-                .tint(AppTheme.brand)
+                .tint(AppTheme.brandForeground)
 
             if viewModel.isSplit {
                 Picker("Method", selection: $viewModel.splitMethod) {
@@ -428,7 +533,7 @@ struct AddTransactionView: View {
             } label: {
                 Image(systemName: isIncluded ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 20))
-                    .foregroundStyle(isIncluded ? AppTheme.brand : BudgetBeaverPalette.wood.opacity(0.45))
+                    .foregroundStyle(isIncluded ? AppTheme.brandForeground : BudgetBeaverPalette.wood.opacity(0.45))
                     .frame(width: 44, height: 44)
                     .contentShape(Circle())
             }
@@ -633,7 +738,7 @@ struct AddTransactionView: View {
                     .frame(maxWidth: 150, alignment: .trailing)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppTheme.brand)
+                    .foregroundStyle(AppTheme.brandForeground)
             }
             .contentShape(Rectangle())
         }
@@ -724,7 +829,6 @@ private struct TransactionSaveToolbarButton: View {
             action(cloudSyncStore)
         }
         .fontWeight(.bold)
-        .foregroundStyle(AppTheme.brand)
         .disabled(!isEnabled)
     }
 }
@@ -749,6 +853,7 @@ private struct TransactionEditorActivityReporter: View {
         .environmentObject(SettingsStore())
         .environmentObject(AuthSessionStore())
         .environmentObject(CloudSyncStore())
+        .environmentObject(AppRefreshStore())
         .environmentObject(TransactionFlowCoordinator())
         .modelContainer(PreviewContainer.seeded)
 }

@@ -2,15 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>BUDGETMATE_SUPABASE_URL</key>
-	<string>$(SUPABASE_PROJECT_URL)</string>
-	<key>BUDGETMATE_SUPABASE_PUBLISHABLE_KEY</key>
-	<string>$(SUPABASE_PUBLISHABLE_KEY)</string>
-	<key>BUDGETMATE_GATE_C_SERVER_READY</key>
-	<string>$(BUDGETMATE_GATE_C_SERVER_READY)</string>
 	<key>BUDGETMATE_GATE_C_ENABLED</key>
 	<string>$(BUDGETMATE_GATE_C_ENABLED)</string>
+	<key>BUDGETMATE_GATE_C_SERVER_READY</key>
+	<string>$(BUDGETMATE_GATE_C_SERVER_READY)</string>
 	<key>BUDGETMATE_MONEY_SERVER_BRIDGE_ENABLED</key>
 	<string>$(BUDGETMATE_MONEY_SERVER_BRIDGE_ENABLED)</string>
+	<key>BUDGETMATE_SUPABASE_PUBLISHABLE_KEY</key>
+	<string>$(SUPABASE_PUBLISHABLE_KEY)</string>
+	<key>BUDGETMATE_SUPABASE_URL</key>
+	<string>$(SUPABASE_PROJECT_URL)</string>
 </dict>
 </plist>

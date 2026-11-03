@@ -154,7 +154,7 @@ struct ProfileSetupView: View {
                     .foregroundStyle(AppTheme.textSecondary)
                 Button("Retry cloud recovery", action: onRetryRecovery)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.brand)
+                    .foregroundStyle(AppTheme.brandForeground)
                     .accessibilityIdentifier("profileRecovery.retry")
             }
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -4,6 +4,9 @@ import Supabase
 
 @MainActor
 final class AuthSessionStore: ObservableObject {
+    static let passwordResetConfirmation = "If an account matches that email, check your inbox for a password reset link."
+    private static let passwordResetFailure = "We couldn't send a reset email right now. Please try again."
+
     @Published private(set) var isLoading = true
     @Published private(set) var isAuthenticated = false
     @Published private(set) var userId: String?
@@ -147,6 +150,13 @@ final class AuthSessionStore: ObservableObject {
         }
     }
 
+    func requestPasswordReset(email: String) async {
+        await runAuthAction(failureMessage: Self.passwordResetFailure) {
+            try await client.auth.resetPasswordForEmail(normalized(email))
+            errorMessage = Self.passwordResetConfirmation
+        }
+    }
+
     func signOut() async {
         guard configurationIssue == nil else {
             errorMessage = configurationIssue
@@ -180,7 +190,10 @@ final class AuthSessionStore: ObservableObject {
         }
     }
 
-    private func runAuthAction(_ action: () async throws -> Void) async {
+    private func runAuthAction(
+        failureMessage: String? = nil,
+        _ action: () async throws -> Void
+    ) async {
         guard configurationIssue == nil else {
             errorMessage = configurationIssue
             return
@@ -193,7 +206,7 @@ final class AuthSessionStore: ObservableObject {
         do {
             try await action()
         } catch {
-            errorMessage = friendlyMessage(for: error)
+            errorMessage = failureMessage ?? friendlyMessage(for: error)
         }
     }
 

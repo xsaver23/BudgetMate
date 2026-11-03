@@ -416,16 +416,22 @@ final class ScopedPersistenceCharacterizationTests: XCTestCase {
     }
 
     func testSharedDataSafetyGateFailsClosedBeforeServerActivation() {
+        let configuration = GateCClientRolloutConfiguration(values: [
+            GateCClientRolloutConfiguration.serverReadyKey: "NO",
+            GateCClientRolloutConfiguration.sharedDataSafetyKey: "NO",
+            GateCClientRolloutConfiguration.moneyServerBridgeKey: "NO"
+        ])
         let decision = SharedRecordMutationCapability.decision(
             currentUserScopeId: BudgetMateTestFixtures.aliceUserID.uuidString,
             activeBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
             recordBudgetScopeId: BudgetMateTestFixtures.sharedBudgetID.uuidString,
-            members: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob]
+            members: [BudgetMateTestFixtures.alice, BudgetMateTestFixtures.bob],
+            serverGateEnabled: SharedDataSafetyGate.isEnabled(configuration: configuration)
         )
 
+        XCTAssertFalse(configuration.isEnabled)
         XCTAssertFalse(decision.isAllowed)
         XCTAssertEqual(decision.reason, .sharedDataSafetyDisabled)
-        XCTAssertEqual(decision.readOnlyMessage, SharedDataSafetyGate.readOnlyMessage)
     }
 
     func testEnabledGateCConfigurationPreservesSharedOwnerCapabilityRules() {

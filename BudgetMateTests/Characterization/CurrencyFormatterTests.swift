@@ -1,7 +1,100 @@
 import XCTest
 @testable import BudgetMate
 
+@MainActor
 final class CurrencyFormatterTests: XCTestCase {
+    func testEditingSplitTransactionPrefillsAndParsesInInjectedLocale() throws {
+        let transaction = BudgetMateTestFixtures.customSplitExpense(amount: 1_234.56)
+
+        for localeID in ["en_US", "de_DE", "fr_CA", "de_CH"] {
+            let locale = Locale(identifier: localeID)
+            let viewModel = AddTransactionViewModel(transaction: transaction, locale: locale)
+
+            let parsedAmount = try XCTUnwrap(
+                viewModel.parsedAmount(currencyCode: "USD", locale: locale),
+                localeID
+            )
+            XCTAssertEqual(
+                viewModel.amountText,
+                ["de_DE", "fr_CA"].contains(localeID) ? "1234,56" : "1234.56",
+                localeID
+            )
+            XCTAssertEqual(parsedAmount, 1_234.56, accuracy: 0.001, localeID)
+            XCTAssertEqual(
+                viewModel.customSplitMoneyTotal(currencyCode: "USD", locale: locale)?.minorUnits,
+                Int64(123_456),
+                localeID
+            )
+            XCTAssertTrue(viewModel.canSave(currencyCode: "USD", locale: locale), localeID)
+            XCTAssertTrue(viewModel.isSplitValid(currencyCode: "USD", locale: locale), localeID)
+        }
+    }
+
+    func testGroupedAmountInputUsesLocaleGroupingAndDecimalRules() {
+        let viewModel = AddTransactionViewModel()
+
+        viewModel.updateAmountText("1,234.56", currencyCode: "USD")
+        XCTAssertEqual(viewModel.amountText, "1,234.56")
+        XCTAssertEqual(
+            viewModel.parsedAmount(currencyCode: "USD", locale: Locale(identifier: "en_US")),
+            1234.56
+        )
+
+        viewModel.updateAmountText("1.234,56", currencyCode: "USD")
+        XCTAssertEqual(viewModel.amountText, "1.234,56")
+        XCTAssertEqual(
+            viewModel.parsedAmount(currencyCode: "USD", locale: Locale(identifier: "de_DE")),
+            1234.56
+        )
+
+        viewModel.updateAmountText("1\u{00A0}234,56", currencyCode: "CAD")
+        XCTAssertEqual(
+            viewModel.parsedAmount(currencyCode: "CAD", locale: Locale(identifier: "fr_CA")),
+            1234.56
+        )
+    }
+
+    func testMalformedGroupedAmountRemainsUnparseable() {
+        let viewModel = AddTransactionViewModel()
+        viewModel.updateAmountText("1,23,4.56", currencyCode: "USD")
+
+        XCTAssertNil(viewModel.parsedAmount(currencyCode: "USD"))
+
+        viewModel.updateAmountText("1 2", currencyCode: "USD")
+        XCTAssertNil(viewModel.parsedAmount(currencyCode: "USD", locale: Locale(identifier: "fr_CA")))
+    }
+
+    func testSingleGroupingAndExcessPrecisionAreNotSilentlyRewritten() {
+        let viewModel = AddTransactionViewModel()
+
+        viewModel.updateAmountText("1,234", currencyCode: "USD")
+        XCTAssertEqual(viewModel.amountText, "1,234")
+        XCTAssertEqual(
+            viewModel.parsedAmount(currencyCode: "USD", locale: Locale(identifier: "en_US")),
+            1234
+        )
+
+        viewModel.updateAmountText("12.345", currencyCode: "USD")
+        XCTAssertEqual(viewModel.amountText, "12.345")
+        XCTAssertNil(viewModel.parsedAmount(currencyCode: "USD", locale: Locale(identifier: "en_US")))
+    }
+
+    func testJPYExcessFractionRemainsInvalidInsteadOfBecomingWholeYen() {
+        let viewModel = AddTransactionViewModel()
+        viewModel.updateAmountText("100.5", currencyCode: "JPY")
+
+        XCTAssertEqual(viewModel.amountText, "100.5")
+        XCTAssertNil(viewModel.parsedAmount(currencyCode: "JPY", locale: Locale(identifier: "ja_JP")))
+    }
+
+    func testSignsAndLettersAreNotStrippedIntoAnotherAmount() {
+        let viewModel = AddTransactionViewModel()
+        viewModel.updateAmountText("-$1,234.56", currencyCode: "USD")
+
+        XCTAssertEqual(viewModel.amountText, "-$1,234.56")
+        XCTAssertNil(viewModel.parsedAmount(currencyCode: "USD", locale: Locale(identifier: "en_US")))
+    }
+
     func testCADUsesPlainDollarAcrossLocalesAndValues() {
         let values = [1_234.56, 0, -42.75, 1_234_567.89]
         let locales = ["en_CA", "fr_CA", "en_US"]

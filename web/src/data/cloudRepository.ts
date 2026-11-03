@@ -4,6 +4,7 @@ import { defaultBudgetSettings } from "../domain/defaults";
 import { monthlyBudget, uniqueTransactions } from "../domain/budgetMath";
 import { localDateKey, localNoonISOString } from "../domain/dates";
 import { amountFromMinorUnits, normalizedCurrencyCode } from "../domain/currency";
+import { cloudSelectedBudgetStorageKey } from "./storage";
 import { gateCFinancialWritesEnabled, gateCFinancialWritesReadOnlyMessage } from "./gateCRollout";
 import {
   GateCFinancialOutbox,
@@ -119,6 +120,7 @@ type InviteRow = {
 };
 
 const palette = ["#3B8FE2", "#E2572E", "#1FA37D", "#7B6EE6"];
+const cloudPageSize = 1000;
 const ensuredPersonalBudgets = new Map<string, Promise<void>>();
 const gateCFinancialOutbox = new GateCFinancialOutbox();
 
@@ -777,6 +779,61 @@ async function performEnsurePersonalBudget(user: User) {
   }
 }
 
+export async function fetchCloudPages<Row>(
+  fetchPage: (afterId?: string) => PromiseLike<{
+    data: Row[] | null;
+    error: unknown;
+    count?: number | null;
+    nextCursor?: string | null;
+  }>
+): Promise<Row[]> {
+  const rows: Row[] = [];
+  let cursor: string | undefined;
+  while (true) {
+    // Keyset paging prevents inserts/deletes before the cursor from shifting later pages.
+    // This is not an atomic snapshot: rows inserted behind the cursor or deleted after
+    // being fetched reconcile on the next sync; strict snapshots need a server RPC.
+    const { data, error, count, nextCursor } = await fetchPage(cursor);
+    if (error) throw error;
+    if (count === undefined || count === null || !Number.isInteger(count) || count < 0) {
+      throw new Error("Cloud data could not be read completely.");
+    }
+    const page = data ?? [];
+    rows.push(...page);
+    // PostgREST counts rows remaining after the cursor's filter, not the original table.
+    // Exhaust the cursor so a short server page cannot be mistaken for EOF.
+    if (page.length === 0) {
+      if (count !== 0) throw new Error("Cloud data could not be read completely.");
+      return rows;
+    }
+    if (count < page.length) throw new Error("Cloud data could not be read completely.");
+    if (!nextCursor || nextCursor === cursor) {
+      throw new Error("Cloud data could not be read completely.");
+    }
+    cursor = nextCursor;
+  }
+}
+
+export function selectCloudBudgetId(
+  userId: string,
+  budgetIds: string[],
+  preferredBudgetId?: string,
+  savedBudgetId?: string
+): string {
+  const sharedBudgetIds = budgetIds.filter((budgetId) => budgetId !== userId);
+  const requestedBudgetId = preferredBudgetId && preferredBudgetId !== userId
+    ? preferredBudgetId
+    : savedBudgetId;
+
+  return requestedBudgetId && budgetIds.includes(requestedBudgetId)
+    ? requestedBudgetId
+    : sharedBudgetIds.length === 1
+      ? sharedBudgetIds[0]
+      : budgetIds.includes(userId)
+        ? userId
+        : budgetIds[0] ?? userId;
+}
+
 export async function fetchCloudState(user: User, preferredBudgetId?: string): Promise<AppState> {
   const client = requireSupabase();
   await ensurePersonalBudget(user);
@@ -791,21 +848,30 @@ export async function fetchCloudState(user: User, preferredBudgetId?: string): P
   const memberships = (membershipData ?? []) as MembershipRow[];
   const budgetIds = Array.from(new Set([user.id, ...memberships.map((membership) => membership.budget_id)]));
 
-  const [budgetsResult, settingsResult, membersResult, membershipsResult, transactionsResult, settlementsResult] = await Promise.all([
+  const [budgetsResult, settingsResult, membersResult, membershipsResult, transactionRows, settlementRows] = await Promise.all([
     client.from("budgets").select().in("id", budgetIds),
     client.from("budget_settings").select().in("budget_id", budgetIds),
     client.from("budget_members").select().in("budget_id", budgetIds),
     client.from("budget_memberships").select().in("budget_id", budgetIds).eq("status", "active"),
-    client.from("budget_transactions").select().in("budget_id", budgetIds),
-    client.from("budget_settlements").select().in("budget_id", budgetIds)
+    fetchCloudPages<TransactionRow>(async (afterId) => {
+      let query = client.from("budget_transactions").select("*", { count: "exact" }).in("budget_id", budgetIds);
+      if (afterId) query = query.gt("id", afterId);
+      const response = await query.order("id", { ascending: true }).limit(cloudPageSize);
+      return { ...response, nextCursor: response.data?.[response.data.length - 1]?.id };
+    }),
+    fetchCloudPages<SettlementRow>(async (afterId) => {
+      let query = client.from("budget_settlements").select("*", { count: "exact" }).in("budget_id", budgetIds);
+      if (afterId) query = query.gt("id", afterId);
+      const response = await query.order("id", { ascending: true }).limit(cloudPageSize);
+      return { ...response, nextCursor: response.data?.[response.data.length - 1]?.id };
+    })
   ]);
 
   if (budgetsResult.error) throw budgetsResult.error;
   if (settingsResult.error) throw settingsResult.error;
   if (membersResult.error) throw membersResult.error;
   if (membershipsResult.error) throw membershipsResult.error;
-  if (transactionsResult.error) throw transactionsResult.error;
-  if (settlementsResult.error) throw settlementsResult.error;
+  // Paged financial reads throw from fetchCloudPages when any page fails.
 
   const budgetsById = new Map(((budgetsResult.data ?? []) as BudgetRow[]).map((row) => [row.id, mapBudget(row)]));
   if (!budgetsById.has(user.id)) {
@@ -832,12 +898,10 @@ export async function fetchCloudState(user: User, preferredBudgetId?: string): P
     return left.name.localeCompare(right.name);
   });
 
-  const currentBudgetId =
-    preferredBudgetId && budgetIds.includes(preferredBudgetId)
-      ? preferredBudgetId
-      : budgetIds.includes(user.id)
-        ? user.id
-        : budgetIds[0];
+  const savedBudgetId = typeof window === "undefined"
+    ? undefined
+    : window.localStorage.getItem(cloudSelectedBudgetStorageKey(user.id)) ?? undefined;
+  const currentBudgetId = selectCloudBudgetId(user.id, budgetIds, preferredBudgetId, savedBudgetId);
 
   const cloudMembers = ((membersResult.data ?? []) as MemberRow[]).map(mapMember);
   const allMemberships = (membershipsResult.data ?? []) as MembershipRow[];
@@ -846,7 +910,7 @@ export async function fetchCloudState(user: User, preferredBudgetId?: string): P
   const memberScopes = memberIdentityScopesByBudget(membersWithRoles, normalizedMembers, user.id, user.email);
 
   const transactions = uniqueTransactions(
-    ((transactionsResult.data ?? []) as TransactionRow[])
+    transactionRows
       .map(mapTransaction)
       .map((transaction) => {
         const scope = memberScopes.get(transaction.budgetId);
@@ -862,7 +926,7 @@ export async function fetchCloudState(user: User, preferredBudgetId?: string): P
     currentUserId: user.id,
     members: normalizedMembers,
     transactions,
-    settlements: ((settlementsResult.data ?? []) as SettlementRow[]).map(mapSettlement).map((settlement) => {
+    settlements: settlementRows.map(mapSettlement).map((settlement) => {
       const scope = memberScopes.get(settlement.budgetId);
       return scope ? remapSettlementMembers(settlement, scope.aliases) : settlement;
     }),

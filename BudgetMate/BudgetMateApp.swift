@@ -490,6 +490,11 @@ struct BudgetMateApp: App {
         force: Bool,
         allowWhileEditing: Bool = false
     ) async {
+#if DEBUG
+        // Synthetic UI scenarios use an in-memory fixture, not a remote
+        // household. A normal empty-cloud pull would prune that fixture.
+        if SyntheticUITestScenario.isRequested { return }
+#endif
         let syncKey = makeSyncKey(userScopeId: userScopeId, budgetScopeId: budgetScopeId)
         guard memberViewModel.isProfileComplete else { return }
 
@@ -856,7 +861,7 @@ enum SyntheticUITestScenario: String {
 @MainActor
 struct SyntheticUITestFixtureView: View {
     private let seed: SyntheticUITestSeed
-    private let modelContainer: ModelContainer
+    @State private var modelContainer: ModelContainer
     @StateObject private var settingsStore: SettingsStore
     @StateObject private var memberViewModel: MemberViewModel
     @StateObject private var transactionFlow = TransactionFlowCoordinator()
@@ -875,7 +880,7 @@ struct SyntheticUITestFixtureView: View {
         repository.saveCurrentBudget(seed.budget)
 
         self.seed = seed
-        modelContainer = try! PersistenceController(inMemory: true).container
+        _modelContainer = State(initialValue: try! PersistenceController(inMemory: true).container)
         _settingsStore = StateObject(wrappedValue: SettingsStore(userDefaults: seed.userDefaults))
         _memberViewModel = StateObject(
             wrappedValue: MemberViewModel(
@@ -908,6 +913,7 @@ struct SyntheticUITestFixtureView: View {
             appRefreshStore: appRefreshStore
         )
         .modelContainer(modelContainer)
+        .preferredColorScheme(settingsStore.settings.appearance.colorScheme)
     }
 }
 
@@ -991,20 +997,40 @@ private struct SyntheticUITestSeededContent: View {
         .task {
             guard !isSeeded else { return }
             settingsStore.switchUser(to: seed.budget.id.uuidString)
-            settingsStore.updateCategoryBudgets(BudgetSampleData.categoryBudgets)
+            settingsStore.updateCategoryBudgets(
+                BudgetSampleData.categoryBudgets,
+                in: monthSelectionStore.selectedMonthDate
+            )
+            // Synthetic UI tests are offline, so provide the same local
+            // baseline that a successful cloud observation would establish.
+            // This does not enable any production mutation gate.
+            settingsStore.recordCloudSettingsBaseline(
+                settingsStore.settings,
+                hasRemoteFinancialRecords: true
+            )
             memberViewModel.switchUser(
                 to: seed.userId.uuidString,
                 budgetScopeId: seed.budget.id.uuidString,
                 email: seed.email
             )
             _ = memberViewModel.completeProfile(displayName: seed.activeMemberName)
-            SampleDataSeeder.seed(
+            let seededTransactionCount = SampleDataSeeder.seed(
                 into: modelContext,
-                members: memberViewModel.members,
+                members: seed.budget.members,
                 ownerUserId: seed.budget.id.uuidString,
-                mode: .household
+                mode: .household,
+                referenceDate: monthSelectionStore.selectedMonthDate,
+                calendar: monthSelectionStore.selectionCalendar
             )
-            try? modelContext.save()
+            guard seededTransactionCount > 0 else {
+                fatalError("Synthetic fixture did not seed any transactions.")
+            }
+            do {
+                try modelContext.save()
+            } catch {
+                fatalError("Synthetic fixture could not save seeded transactions: \(error)")
+            }
+            await Task.yield()
             isSeeded = true
         }
     }

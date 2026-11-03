@@ -1,14 +1,20 @@
 import SwiftUI
+import UIKit
 
 /// Central design tokens for the Ledger direction shared by iOS and web.
 /// Change a value here and it propagates everywhere.
 enum AppTheme {
     // Brand
-    static let brand = Color(hex: "#1E3A2B")
-    static let brandAlt = Color(hex: "#2C4A39")
-    static let brandSoft = Color(hex: "#E8F2EA")
-    static let secondaryAction = Color(hex: "#E7B84B")
-    static let secondaryActionText = Color(hex: "#1F2419")
+    static let brand = Color(light: "#1E3A2B", dark: "#1E3A2B")
+    static let brandAlt = Color(light: "#2C4A39", dark: "#315541")
+    static let brandSoft = Color(light: "#E8F2EA", dark: "#203326")
+    static let secondaryAction = Color(light: "#E7B84B", dark: "#F0C66A")
+    static let secondaryActionText = Color(light: "#1F2419", dark: "#1F2419")
+
+    // Foregrounds stay distinct from forest fills when they sit on dark surfaces.
+    static let brandForeground = Color(light: "#1E3A2B", dark: "#B5DFB6")
+    static let link = brandForeground
+    static let selection = Color(light: "#8A650E", dark: "#F0C66A")
 
     // Surfaces
     static let background = Color(light: "#F8F4EC", dark: "#121710")
@@ -19,14 +25,14 @@ enum AppTheme {
     static let track = Color(light: "#EEE6D7", dark: "#32382F")
 
     // Semantic
-    static let income = Color(hex: "#3F9E5E")
-    static let incomeTint = Color(hex: "#E8F2EA")
-    static let expense = Color(hex: "#D6694C")
-    static let expenseTint = Color(hex: "#FBEEEA")
-    static let positive = Color(hex: "#3F9E5E")
-    static let warning = Color(hex: "#A6781C")
-    static let warningTint = Color(hex: "#FBF1DC")
-    static let danger = Color(hex: "#8A2F1F")
+    static let income = Color(light: "#3F9E5E", dark: "#79C992")
+    static let incomeTint = Color(light: "#E8F2EA", dark: "#203326")
+    static let expense = Color(light: "#D6694C", dark: "#F19981")
+    static let expenseTint = Color(light: "#FBEEEA", dark: "#3A241F")
+    static let positive = income
+    static let warning = Color(light: "#A6781C", dark: "#E7C36C")
+    static let warningTint = Color(light: "#FBF1DC", dark: "#352C18")
+    static let danger = Color(light: "#8A2F1F", dark: "#F19981")
 
     // Text
     static let textPrimary = Color(light: "#1F2419", dark: "#F7F2E7")
@@ -54,7 +60,7 @@ enum BudgetBeaverPalette {
     static let innerSurface = AppTheme.surface
     static let pill = AppTheme.brandSoft
     static let border = AppTheme.surfaceStroke
-    static let water = AppTheme.brand
+    static let water = AppTheme.link
     static let rebBrown = AppTheme.warning
     static let jenBlue = Color(hex: "#3B8FE2")
     static let darkButton = AppTheme.textPrimary
@@ -63,7 +69,7 @@ enum BudgetBeaverPalette {
     static let grayText = AppTheme.textSecondary
     static let muted = AppTheme.textMuted
     static let forest = AppTheme.income
-    static let forestText = AppTheme.brand
+    static let forestText = AppTheme.link
     static let forestSoft = AppTheme.incomeTint
     static let clay = AppTheme.expense
     static let amber = AppTheme.secondaryAction
@@ -75,7 +81,11 @@ enum BudgetBeaverPalette {
 extension Font {
     /// Rounded + bold display font used for amounts and primary headers.
     static func roundedBold(_ size: CGFloat) -> Font {
-        .system(size: size, weight: .bold, design: .rounded)
+        .system(
+            size: UIFontMetrics.default.scaledValue(for: size),
+            weight: .bold,
+            design: .rounded
+        )
     }
 }
 

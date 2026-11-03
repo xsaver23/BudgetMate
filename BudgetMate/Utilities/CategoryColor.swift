@@ -10,13 +10,13 @@ enum CategoryColor {
         case .groceries:
             return AppTheme.income
         case .rent:
-            return AppTheme.brand
+            return AppTheme.brandForeground
         case .subscription:
             return AppTheme.warning
         case .health:
             return AppTheme.expense
         case .household:
-            return AppTheme.brandAlt
+            return AppTheme.brandForeground
         case .gift:
             return AppTheme.expense
         case .studentLoans:
@@ -30,7 +30,7 @@ enum CategoryColor {
         case .gas:
             return AppTheme.warning
         case .transportation:
-            return AppTheme.brandAlt
+            return AppTheme.brandForeground
         case .shopping:
             return AppTheme.secondaryAction
         case .entertainment:
@@ -42,7 +42,7 @@ enum CategoryColor {
         case .refund:
             return AppTheme.income
         case .work:
-            return AppTheme.brandAlt
+            return AppTheme.brandForeground
         case .eTransfer:
             return AppTheme.income
         case .other:
@@ -54,7 +54,7 @@ enum CategoryColor {
 
     private static func customColor(for rawValue: String) -> Color {
         let palette: [Color] = [
-            AppTheme.brand,
+            AppTheme.brandForeground,
             AppTheme.income,
             AppTheme.expense,
             AppTheme.secondaryAction,

@@ -341,6 +341,7 @@ enum SupabaseBudgetSyncError: LocalizedError {
     case sharedBudgetInvitesUnavailable
     case sharedBudgetLeaveUnavailable
     case invalidCloudDate(String)
+    case incompleteCloudPage
     case invalidCloudMoneyContract
     case invalidLocalMoneyAmount
     case sharedDataSafetyDisabled
@@ -364,6 +365,8 @@ enum SupabaseBudgetSyncError: LocalizedError {
             return "Leaving a shared budget is temporarily unavailable in this beta."
         case .invalidCloudDate(let value):
             return "Cloud data has an invalid date: \(value)."
+        case .incompleteCloudPage:
+            return "Cloud data could not be read completely. Refresh before trying again."
         case .invalidCloudMoneyContract:
             return "Cloud data has inconsistent exact-money fields."
         case .invalidLocalMoneyAmount:
@@ -987,11 +990,15 @@ struct CloudTransactionRow: Codable {
         validMemberIds: Set<UUID> = [],
         rolloutEnabled: Bool = MoneyServerBridgeRollout.isEnabled
     ) {
+        let amountChanged = transaction.amount != amount
         transaction.title = title
         transaction.amount = amount
         if rolloutEnabled {
             transaction.amountMinorUnits = amountMinorUnits
             transaction.currencyCode = currencyCode
+        } else if amountChanged {
+            transaction.amountMinorUnits = nil
+            transaction.currencyCode = nil
         }
         transaction.type = TransactionType(rawValue: type) ?? .expense
         transaction.category = TransactionCategory(rawValue: category)
@@ -1288,6 +1295,7 @@ struct CloudSettlementRow: Codable {
         memberAliases: [UUID: UUID] = [:],
         rolloutEnabled: Bool = MoneyServerBridgeRollout.isEnabled
     ) {
+        let amountChanged = settlement.amount != amount
         settlement.fromMemberId = CloudTransactionRow.resolvedMemberId(fromMemberId, aliases: memberAliases)
         settlement.toMemberId = CloudTransactionRow.resolvedMemberId(toMemberId, aliases: memberAliases)
         settlement.createdByUserId = createdByUserId
@@ -1297,6 +1305,9 @@ struct CloudSettlementRow: Codable {
         if rolloutEnabled {
             settlement.amountMinorUnits = amountMinorUnits
             settlement.currencyCode = currencyCode
+        } else if amountChanged {
+            settlement.amountMinorUnits = nil
+            settlement.currencyCode = nil
         }
         settlement.date = resolvedDate
         settlement.ownerUserId = ownerUserId
@@ -1427,7 +1438,9 @@ final class SupabaseBudgetSyncService {
         into context: ModelContext,
         userScopeId: String,
         userEmail: String? = nil,
-        budgetScopeId: String? = nil
+        budgetScopeId: String? = nil,
+        pendingDeletedTransactionIDs: Set<UUID> = [],
+        pendingDeletedSettlementIDs: Set<UUID> = []
     ) async throws -> CloudBudgetSyncSummary {
         guard let userId = UUID(uuidString: userScopeId) else {
             throw SupabaseBudgetSyncError.missingUser
@@ -1494,18 +1507,8 @@ final class SupabaseBudgetSyncService {
             budgetId: budgetId,
             signedInMemberIds: signedInMemberIds
         ) : []
-        let cloudTransactions: [CloudTransactionRow] = try await client
-            .from("budget_transactions")
-            .select()
-            .eq("budget_id", value: budgetId)
-            .execute()
-            .value
-        let cloudSettlements: [CloudSettlementRow] = try await client
-            .from("budget_settlements")
-            .select()
-            .eq("budget_id", value: budgetId)
-            .execute()
-            .value
+        let cloudTransactions = try await fetchAllTransactionRows(budgetId: budgetId)
+        let cloudSettlements = try await fetchAllSettlementRows(budgetId: budgetId)
         try cloudTransactions.forEach { try $0.validateDates() }
         try cloudSettlements.forEach { try $0.validateDate() }
         let cloudTransactionsByID = Dictionary(cloudTransactions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -1598,20 +1601,10 @@ final class SupabaseBudgetSyncService {
         // full-table reads after every sync.
         let pulledTransactions: [CloudTransactionRow] = !financialWritesEnabled || transactionRows.isEmpty
             ? cloudTransactions
-            : try await client
-                .from("budget_transactions")
-                .select()
-                .eq("budget_id", value: budgetId)
-                .execute()
-                .value
+            : try await fetchAllTransactionRows(budgetId: budgetId)
         let pulledSettlements: [CloudSettlementRow] = !financialWritesEnabled || settlementRows.isEmpty
             ? cloudSettlements
-            : try await client
-                .from("budget_settlements")
-                .select()
-                .eq("budget_id", value: budgetId)
-                .execute()
-                .value
+            : try await fetchAllSettlementRows(budgetId: budgetId)
 
         pruneLocalRowsMissingFromCloud(
             localTransactions: transactions,
@@ -1620,6 +1613,8 @@ final class SupabaseBudgetSyncService {
             pulledSettlements: pulledSettlements,
             pushedTransactionIDs: pushedTransactionIDs,
             pushedSettlementIDs: pushedSettlementIDs,
+            pendingDeletedTransactionIDs: pendingDeletedTransactionIDs,
+            pendingDeletedSettlementIDs: pendingDeletedSettlementIDs,
             in: context
         )
         merge(
@@ -1628,9 +1623,17 @@ final class SupabaseBudgetSyncService {
             existing: transactions,
             ownerUserId: budgetId.uuidString,
             memberAliases: memberAliases,
-            validMemberIds: validMemberIds
+            validMemberIds: validMemberIds,
+            pendingDeletedIDs: pendingDeletedTransactionIDs
         )
-        merge(pulledSettlements, into: context, existing: settlements, ownerUserId: budgetId.uuidString, memberAliases: memberAliases)
+        merge(
+            pulledSettlements,
+            into: context,
+            existing: settlements,
+            ownerUserId: budgetId.uuidString,
+            memberAliases: memberAliases,
+            pendingDeletedIDs: pendingDeletedSettlementIDs
+        )
         let pulledMembers = try await fetchMembers(userScopeId: userScopeId, budgetScopeId: budgetId.uuidString)
 
         return CloudBudgetSyncSummary(
@@ -1645,6 +1648,91 @@ final class SupabaseBudgetSyncService {
             settings: didPushSettings ? settings : existingSettings,
             members: pulledMembers
         )
+    }
+
+    static let cloudPageSize = 1000
+
+    private func fetchAllTransactionRows(budgetId: UUID) async throws -> [CloudTransactionRow] {
+        try await Self.fetchAllPages { afterID in
+            let response: PostgrestResponse<[CloudTransactionRow]>
+            if let afterID {
+                response = try await client
+                    .from("budget_transactions")
+                    .select("*", count: .exact)
+                    .eq("budget_id", value: budgetId)
+                    .gt("id", value: afterID)
+                    .order("id", ascending: true)
+                    .limit(Self.cloudPageSize)
+                    .execute()
+            } else {
+                response = try await client
+                    .from("budget_transactions")
+                    .select("*", count: .exact)
+                    .eq("budget_id", value: budgetId)
+                    .order("id", ascending: true)
+                    .limit(Self.cloudPageSize)
+                    .execute()
+            }
+            return (response.value, response.count, response.value.last?.id)
+        }
+    }
+
+    private func fetchAllSettlementRows(budgetId: UUID) async throws -> [CloudSettlementRow] {
+        try await Self.fetchAllPages { afterID in
+            let response: PostgrestResponse<[CloudSettlementRow]>
+            if let afterID {
+                response = try await client
+                    .from("budget_settlements")
+                    .select("*", count: .exact)
+                    .eq("budget_id", value: budgetId)
+                    .gt("id", value: afterID)
+                    .order("id", ascending: true)
+                    .limit(Self.cloudPageSize)
+                    .execute()
+            } else {
+                response = try await client
+                    .from("budget_settlements")
+                    .select("*", count: .exact)
+                    .eq("budget_id", value: budgetId)
+                    .order("id", ascending: true)
+                    .limit(Self.cloudPageSize)
+                    .execute()
+            }
+            return (response.value, response.count, response.value.last?.id)
+        }
+    }
+
+    static func fetchAllPages<Row>(
+        _ fetchPage: (UUID?) async throws -> (rows: [Row], total: Int?, lastID: UUID?)
+    ) async throws -> [Row] {
+        var rows: [Row] = []
+        var lastID: UUID?
+        while true {
+            // Keyset paging prevents inserts/deletes before the cursor from shifting later pages.
+            // This is not an atomic snapshot: rows inserted behind the cursor or deleted after
+            // being fetched reconcile on the next sync; strict snapshots need a server RPC.
+            let page = try await fetchPage(lastID)
+            guard let total = page.total, total >= 0 else {
+                throw SupabaseBudgetSyncError.incompleteCloudPage
+            }
+            rows.append(contentsOf: page.rows)
+            // PostgREST counts rows remaining after the cursor's filter, not
+            // the original unfiltered table. Exhaust the cursor so a short
+            // server page cannot be mistaken for EOF.
+            if page.rows.isEmpty {
+                guard total == 0 else {
+                    throw SupabaseBudgetSyncError.incompleteCloudPage
+                }
+                return rows
+            }
+            guard total >= page.rows.count else {
+                throw SupabaseBudgetSyncError.incompleteCloudPage
+            }
+            guard let nextID = page.lastID, nextID != lastID else {
+                throw SupabaseBudgetSyncError.incompleteCloudPage
+            }
+            lastID = nextID
+        }
     }
 
     func fetchSettings(userScopeId: String, budgetScopeId: String? = nil) async throws -> BudgetSettings? {
@@ -2734,7 +2822,8 @@ final class SupabaseBudgetSyncService {
         existing transactions: [Transaction],
         ownerUserId: String,
         memberAliases: [UUID: UUID] = [:],
-        validMemberIds: Set<UUID> = []
+        validMemberIds: Set<UUID> = [],
+        pendingDeletedIDs: Set<UUID> = []
     ) {
         // Keep the first row per id and delete any duplicates, healing stores
         // that accumulated duplicate rows before ids were deduplicated on sync.
@@ -2748,6 +2837,7 @@ final class SupabaseBudgetSyncService {
         }
 
         for row in rows {
+            guard !pendingDeletedIDs.contains(row.id) else { continue }
             // Only touch the store when the cloud row actually differs from
             // the local one. Unconditional writes here used to dirty every
             // transaction (and delete/reinsert every split) on each sync
@@ -2834,6 +2924,8 @@ final class SupabaseBudgetSyncService {
         pulledSettlements: [CloudSettlementRow],
         pushedTransactionIDs: Set<UUID>,
         pushedSettlementIDs: Set<UUID>,
+        pendingDeletedTransactionIDs: Set<UUID>,
+        pendingDeletedSettlementIDs: Set<UUID>,
         in context: ModelContext
     ) {
         let pulledTransactionIDs = Set(pulledTransactions.map(\.id))
@@ -2845,6 +2937,7 @@ final class SupabaseBudgetSyncService {
         for transaction in localTransactions
         where !pulledTransactionIDs.contains(transaction.id)
             && !pushedTransactionIDs.contains(transaction.id)
+            && !pendingDeletedTransactionIDs.contains(transaction.id)
             && !transaction.needsSync {
             context.delete(transaction)
         }
@@ -2852,6 +2945,7 @@ final class SupabaseBudgetSyncService {
         for settlement in localSettlements
         where !pulledSettlementIDs.contains(settlement.id)
             && !pushedSettlementIDs.contains(settlement.id)
+            && !pendingDeletedSettlementIDs.contains(settlement.id)
             && !settlement.needsSync {
             context.delete(settlement)
         }
@@ -2862,7 +2956,8 @@ final class SupabaseBudgetSyncService {
         into context: ModelContext,
         existing settlements: [Settlement],
         ownerUserId: String,
-        memberAliases: [UUID: UUID] = [:]
+        memberAliases: [UUID: UUID] = [:],
+        pendingDeletedIDs: Set<UUID> = []
     ) {
         // Keep the first row per id and delete any duplicates (see transaction
         // merge above).
@@ -2876,6 +2971,7 @@ final class SupabaseBudgetSyncService {
         }
 
         for row in rows {
+            guard !pendingDeletedIDs.contains(row.id) else { continue }
             if let settlement = existingById[row.id] {
                 let fieldsMatch = row.matches(
                     settlement,

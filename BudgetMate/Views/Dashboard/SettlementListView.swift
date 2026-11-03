@@ -24,7 +24,7 @@ struct SettlementListView: View {
                 .padding(.vertical, 18)
             }
             .background(AppTheme.background)
-            .navigationTitle("Who Owes Who")
+            .navigationTitle("Who owes whom")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -73,9 +73,9 @@ struct SettlementListView: View {
                             .font(.headline.weight(.bold))
                             .foregroundStyle(BudgetBeaverPalette.ink)
 
-                        Text("Tap for breakdown")
+                        Text("All-time balance · Why this amount ›")
                             .font(.subheadline.weight(.bold))
-                            .foregroundStyle(BudgetBeaverPalette.jenBlue)
+                            .foregroundStyle(AppTheme.link)
                     }
 
                     Spacer(minLength: 8)
@@ -96,7 +96,7 @@ struct SettlementListView: View {
             Button {
                 onSettle(settlement)
             } label: {
-                Label("Settle Balance", systemImage: "checkmark")
+                Label("Settle up", systemImage: "checkmark")
                     .font(.headline.weight(.bold))
                     .foregroundStyle(Color.white)
                     .frame(maxWidth: .infinity, minHeight: 46)
@@ -113,12 +113,12 @@ struct SettlementListView: View {
     }
 
     private func avatar(for member: BudgetMember) -> some View {
-        Text(member.displayInitials)
-            .font(.system(size: 20, weight: .black, design: .rounded))
-            .foregroundStyle(Color.white)
-            .frame(width: 44, height: 44)
-            .background(Color(hex: member.colorHex), in: Circle())
-            .overlay(Circle().stroke(BudgetBeaverPalette.paper, lineWidth: 3))
+        MemberInitialsBadge(
+            initials: member.displayInitials,
+            colorHex: member.colorHex,
+            size: 44,
+            accessibilityLabel: "Member \(member.displayName)"
+        )
     }
 
     private func amount(_ value: Double) -> String {

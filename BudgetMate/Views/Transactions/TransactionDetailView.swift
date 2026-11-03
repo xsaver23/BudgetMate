@@ -21,6 +21,7 @@ struct TransactionDetailView: View {
     @Query private var allTransactions: [Transaction]
     @State private var isEditing = false
     @State private var isShowingDeleteOptions = false
+    @State private var isShowingDeleteConfirmation = false
 
     init(
         transaction: Transaction,
@@ -127,6 +128,14 @@ struct TransactionDetailView: View {
             } message: {
                 Text("Choose what should happen to this monthly recurring transaction.")
             }
+            .confirmationDialog("Delete Transaction", isPresented: $isShowingDeleteConfirmation) {
+                Button("Delete Transaction", role: .destructive) {
+                    deleteTransaction(transaction)
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("Delete “\(transaction.title)” from this budget? This cannot be undone.")
+            }
         }
     }
 
@@ -172,6 +181,12 @@ struct TransactionDetailView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 5)
                     .background(Capsule().fill(amountTint))
+
+                if transaction.isUpcomingTransaction {
+                    Label("Upcoming", systemImage: "calendar.badge.clock")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.textSecondary)
+                }
             }
             .frame(maxWidth: .infinity)
         }
@@ -286,7 +301,7 @@ struct TransactionDetailView: View {
                     .foregroundStyle(BudgetBeaverPalette.ink)
                 Text(splitCaption(for: member, isPayer: isPayer))
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(isPayer ? AppTheme.brand : BudgetBeaverPalette.wood)
+                    .foregroundStyle(isPayer ? AppTheme.brandForeground : BudgetBeaverPalette.wood)
             }
 
             Spacer()
@@ -321,7 +336,7 @@ struct TransactionDetailView: View {
             if shouldShowRecurringActions {
                 isShowingDeleteOptions = true
             } else {
-                deleteTransaction(transaction)
+                isShowingDeleteConfirmation = true
             }
         } label: {
             Label(shouldShowRecurringActions ? "Manage Recurring Transaction" : "Delete Transaction", systemImage: "trash")

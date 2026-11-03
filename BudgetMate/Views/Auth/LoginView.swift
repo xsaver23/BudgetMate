@@ -77,9 +77,20 @@ struct LoginView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .textContentType(.emailAddress)
+                        .submitLabel(.next)
                         .focused($focusedField, equals: .email)
+                        .onSubmit { focusedField = .password }
                         .padding(12)
+                        .foregroundStyle(BudgetBeaverPalette.ink)
+                        .tint(AppTheme.incomeText)
                         .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(
+                                    focusedField == .email ? AppTheme.incomeText : AppTheme.surfaceStroke,
+                                    lineWidth: focusedField == .email ? 2 : 1
+                                )
+                        }
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -88,12 +99,40 @@ struct LoginView: View {
                         .foregroundStyle(BudgetBeaverPalette.wood)
                     SecureField("", text: $password)
                         .textContentType(isCreatingAccount ? .newPassword : .password)
+                        .submitLabel(isCreatingAccount ? .next : .done)
                         .focused($focusedField, equals: .password)
+                        .onSubmit {
+                            if isCreatingAccount {
+                                focusedField = .confirmPassword
+                            } else {
+                                submit()
+                            }
+                        }
                         .padding(12)
+                        .foregroundStyle(BudgetBeaverPalette.ink)
+                        .tint(AppTheme.incomeText)
                         .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(
+                                    focusedField == .password ? AppTheme.incomeText : AppTheme.surfaceStroke,
+                                    lineWidth: focusedField == .password ? 2 : 1
+                                )
+                        }
                         .onChange(of: password) { _, _ in
                             updatePasswordMismatchMessage()
                         }
+                }
+
+                if !isCreatingAccount {
+                    Button("Forgot password?") {
+                        requestPasswordReset()
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.incomeText)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .buttonStyle(PressableButtonStyle(scale: 0.98, pressedOpacity: 0.82))
+                    .disabled(authStore.isLoading)
                 }
 
                 if isCreatingAccount {
@@ -103,9 +142,20 @@ struct LoginView: View {
                             .foregroundStyle(BudgetBeaverPalette.wood)
                         SecureField("", text: $confirmPassword)
                             .textContentType(.newPassword)
+                            .submitLabel(.done)
                             .focused($focusedField, equals: .confirmPassword)
+                            .onSubmit { submit() }
                             .padding(12)
+                            .foregroundStyle(BudgetBeaverPalette.ink)
+                            .tint(AppTheme.incomeText)
                             .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .stroke(
+                                        focusedField == .confirmPassword ? AppTheme.incomeText : AppTheme.surfaceStroke,
+                                        lineWidth: focusedField == .confirmPassword ? 2 : 1
+                                    )
+                            }
                             .onChange(of: confirmPassword) { _, _ in
                                 updatePasswordMismatchMessage()
                             }
@@ -123,7 +173,12 @@ struct LoginView: View {
                 if let message = authStore.configurationIssue ?? authStore.errorMessage {
                     Text(message)
                         .font(.caption)
-                        .foregroundStyle(message.localizedCaseInsensitiveContains("check your email") ? AppTheme.income : AppTheme.expense)
+                        .foregroundStyle(
+                            message == AuthSessionStore.passwordResetConfirmation ||
+                                message.localizedCaseInsensitiveContains("check your email")
+                                ? AppTheme.incomeText
+                                : AppTheme.expenseText
+                        )
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
@@ -162,7 +217,7 @@ struct LoginView: View {
         } label: {
             Text(isCreatingAccount ? "Already have an account? Sign in" : "New here? Create an account")
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AppTheme.brand)
+                .foregroundStyle(AppTheme.incomeText)
         }
         .buttonStyle(PressableButtonStyle(scale: 0.98, pressedOpacity: 0.82))
     }
@@ -178,6 +233,20 @@ struct LoginView: View {
             } else {
                 await authStore.signIn(email: email, password: password)
             }
+        }
+    }
+
+    private func requestPasswordReset() {
+        focusedField = nil
+        validationMessage = nil
+        guard Self.isValidEmail(email) else {
+            validationMessage = "Enter a valid email address."
+            focusedField = .email
+            return
+        }
+
+        Task {
+            await authStore.requestPasswordReset(email: email)
         }
     }
 
@@ -205,7 +274,7 @@ struct LoginView: View {
         return true
     }
 
-    private static func isValidEmail(_ email: String) -> Bool {
+    static func isValidEmail(_ email: String) -> Bool {
         let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
         let pattern = #"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$"#
         return trimmed.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil

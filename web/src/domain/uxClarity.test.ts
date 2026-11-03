@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { monthBudgetKey, monthlyBudget, selectedCategoryBudgets } from "./budgetMath";
-import { memberFilterLabels, organizeCategoryBudgetRows } from "./uxClarity";
+import {
+  categoryBudgetStatus,
+  categoryBudgetNeedsSave,
+  categoryBudgetMinorUnits,
+  categoryBudgetStatusLabel,
+  draftHasChanges,
+  isUpcomingTransaction,
+  memberFilterLabels,
+  organizeCategoryBudgetRows,
+  syncAgeLabel
+} from "./uxClarity";
 import type { BudgetSettings } from "./types";
 
 describe("member filter labels", () => {
@@ -62,5 +72,44 @@ describe("category budget disclosure", () => {
     expect(monthlyBudget(settings, "2026-07")).toBe(800);
     expect(selectedCategoryBudgets(settings, "2026-08")).toEqual({ rent: 1000, food: 300 });
     expect(monthlyBudget(settings, "2026-08")).toBe(1300);
+  });
+});
+
+describe("clear financial state labels", () => {
+  it("distinguishes under, at-limit, and over budget", () => {
+    expect(categoryBudgetStatus(80, 100)).toBe("watch");
+    expect(categoryBudgetStatus(100, 100)).toBe("at-limit");
+    expect(categoryBudgetStatus(165.5, 100)).toBe("over");
+    expect(categoryBudgetStatus(1.1 + 2.2, 3.3)).toBe("at-limit");
+    expect(categoryBudgetStatus(100.4, 100, "JPY")).toBe("at-limit");
+    expect(categoryBudgetStatus(100.6, 100, "JPY")).toBe("over");
+    expect(categoryBudgetStatusLabel(101, 100, "JPY")).toBe("¥1 over");
+    expect(categoryBudgetStatusLabel(100, 100, "JPY")).toBe("At limit");
+  });
+
+  it("does not save a budget blur when the value is unchanged", () => {
+    expect(categoryBudgetNeedsSave("100.004", 100)).toBe(false);
+    expect(categoryBudgetNeedsSave("100.01", 100)).toBe(true);
+    expect(categoryBudgetNeedsSave("100.4", 100, "JPY")).toBe(false);
+    expect(categoryBudgetNeedsSave("101", 100, "JPY")).toBe(true);
+    expect(categoryBudgetNeedsSave("not a number", 100)).toBe(false);
+    expect(categoryBudgetMinorUnits("1e20", "USD")).toBeUndefined();
+    expect(categoryBudgetNeedsSave("1e20", 100)).toBe(false);
+  });
+
+  it("shows sync age without overstating a fresh sync", () => {
+    expect(syncAgeLabel(1_000, 1_005)).toBe("just now");
+    expect(syncAgeLabel(1_000, 62_000)).toBe("1m ago");
+    expect(syncAgeLabel(1_000, 3_661_000)).toBe("1h ago");
+  });
+
+  it("marks only dates after today as upcoming", () => {
+    expect(isUpcomingTransaction({ date: "2026-11-03T12:00:00.000Z" }, "2026-11-02")).toBe(true);
+    expect(isUpcomingTransaction({ date: "2026-11-02T12:00:00.000Z" }, "2026-11-02")).toBe(false);
+  });
+
+  it("detects a changed draft without treating equal values as dirty", () => {
+    expect(draftHasChanges({ amount: "10", title: "Rent" }, { amount: "10", title: "Rent" })).toBe(false);
+    expect(draftHasChanges({ amount: "10", title: "Rent" }, { amount: "12", title: "Rent" })).toBe(true);
   });
 });

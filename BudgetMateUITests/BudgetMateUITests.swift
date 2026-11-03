@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 
 final class BudgetMateUITests: XCTestCase {
     override func setUpWithError() throws {
@@ -41,9 +42,26 @@ final class BudgetMateUITests: XCTestCase {
         XCTAssertTrue(app.buttons["tab.dashboard"].waitForExistence(timeout: 15))
         XCTAssertTrue(app.staticTexts["Budget pacing"].waitForExistence(timeout: 5))
 
+        let settleUp = app.buttons["Settle up"].firstMatch
+        scrollToHittable(settleUp, in: app)
+        settleUp.tap()
+        XCTAssertTrue(app.buttons["Mark as paid"].waitForExistence(timeout: 5))
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["Mark as paid"].waitForNonExistence(timeout: 5))
+
         app.buttons["tab.transactions"].tap()
         XCTAssertTrue(app.buttons["tab.transactions"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Income"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.staticTexts["Income"].waitForExistence(timeout: 5) ||
+                app.staticTexts["Projected income"].waitForExistence(timeout: 5),
+            "Transactions should identify whether income includes projected occurrences."
+        )
+        let roadTripGas = app.staticTexts["Road Trip Gas"]
+        scrollToHittable(roadTripGas, in: app)
+        XCTAssertTrue(
+            roadTripGas.exists,
+            "The synthetic fixture must render its seeded current-month transactions."
+        )
 
         app.buttons["tab.budget"].tap()
         XCTAssertTrue(app.staticTexts["Category Budgets"].waitForExistence(timeout: 5))
@@ -51,9 +69,37 @@ final class BudgetMateUITests: XCTestCase {
         app.buttons["tab.settings"].tap()
         XCTAssertTrue(app.staticTexts["Currency"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Sync"].waitForExistence(timeout: 5))
+
+        let lightAppearance = app.segmentedControls.buttons["Light"]
+        XCTAssertTrue(lightAppearance.waitForExistence(timeout: 5))
+        lightAppearance.tap()
+        XCTAssertTrue(lightAppearance.isSelected)
+        XCTAssertFalse(
+            app.staticTexts["Needs attention"].waitForExistence(timeout: 5),
+            "Changing local appearance in the offline fixture must not attempt cloud sync."
+        )
+
+        let signOut = app.descendants(matching: .any)["settings.signOut"]
+        XCTAssertTrue(signOut.waitForExistence(timeout: 5))
+        signOut.tap()
+        let signOutWarning = app.staticTexts["You’ll be signed out of this device. Changes that have not synced may not be available after you sign in elsewhere."]
+        XCTAssertTrue(signOutWarning.waitForExistence(timeout: 5))
+        dismissConfirmationDialog(in: app)
+        XCTAssertTrue(signOutWarning.waitForNonExistence(timeout: 5))
+
         let advancedSupport = app.buttons["Advanced & Support"]
         XCTAssertTrue(advancedSupport.waitForExistence(timeout: 5))
         advancedSupport.tap()
+        let resetSettings = app.buttons["Reset Settings"].firstMatch
+        scrollToHittable(resetSettings, in: app)
+        resetSettings.tap()
+        let resetWarning = app.staticTexts
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "This restores appearance and budget settings"))
+            .firstMatch
+        XCTAssertTrue(resetWarning.waitForExistence(timeout: 5))
+        dismissConfirmationDialog(in: app)
+        XCTAssertTrue(resetWarning.waitForNonExistence(timeout: 5))
+
         app.swipeUp()
         XCTAssertTrue(app.descendants(matching: .any)["settings.privacyPolicy"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["settings.support"].exists)
@@ -68,6 +114,8 @@ final class BudgetMateUITests: XCTestCase {
             "Choosing a different graphical date should dismiss the date sheet."
         )
         app.buttons["Cancel"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Discard transaction?"].waitForExistence(timeout: 5))
+        app.buttons["Discard Changes"].tap()
         XCTAssertTrue(app.buttons["tab.dashboard"].waitForExistence(timeout: 5))
 
         app.buttons["tab.settings"].tap()
@@ -84,7 +132,11 @@ final class BudgetMateUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Budget pacing"].waitForExistence(timeout: 5))
 
         app.buttons["tab.transactions"].tap()
-        XCTAssertTrue(app.staticTexts["Income"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.staticTexts["Income"].waitForExistence(timeout: 5) ||
+                app.staticTexts["Projected income"].waitForExistence(timeout: 5),
+            "Transactions should identify whether income includes projected occurrences."
+        )
         app.buttons["tab.budget"].tap()
         XCTAssertTrue(app.staticTexts["Category Budgets"].waitForExistence(timeout: 5))
         app.buttons["tab.settings"].tap()
@@ -96,9 +148,76 @@ final class BudgetMateUITests: XCTestCase {
         XCTAssertFalse(app.descendants(matching: .any)["budgetMembers.invitesUnavailable"].exists)
     }
 
-    private func launchSyntheticScenario(_ argument: String) -> XCUIApplication {
+    func testSyntheticFutureMonthProjectionLabelsReachableAtDefaultAndAX3() {
+        for (name, accessibility3) in [("default", false), ("ax3", true)] {
+            let app = launchSyntheticScenario(
+                "-ui-testing-synthetic-owner",
+                accessibility3: accessibility3
+            )
+
+            XCTAssertTrue(app.buttons["tab.dashboard"].waitForExistence(timeout: 15))
+            let nextMonth = app.buttons["Next month"]
+            XCTAssertTrue(nextMonth.waitForExistence(timeout: 5))
+            nextMonth.tap()
+
+            XCTAssertTrue(app.staticTexts["Projected income"].waitForExistence(timeout: 10))
+            XCTAssertTrue(app.staticTexts["Projected expenses"].waitForExistence(timeout: 10))
+            XCTAssertTrue(
+                app.staticTexts
+                    .matching(NSPredicate(format: "label BEGINSWITH %@", "Projected net"))
+                    .firstMatch
+                    .waitForExistence(timeout: 10)
+            )
+            XCTAssertTrue(app.staticTexts["Projected spend"].waitForExistence(timeout: 10))
+
+            let projectedExpenses = app.staticTexts["Projected expenses"]
+            scrollToHittable(projectedExpenses, in: app)
+            let dashboardScreenshot = XCTAttachment(screenshot: app.screenshot())
+            dashboardScreenshot.name = "future-projection-\(name)-dashboard"
+            dashboardScreenshot.lifetime = .keepAlways
+            add(dashboardScreenshot)
+
+            app.buttons["tab.transactions"].tap()
+            let upcoming = app.staticTexts["Upcoming"]
+            XCTAssertTrue(upcoming.waitForExistence(timeout: 10))
+            scrollToHittable(upcoming, in: app)
+            XCTAssertTrue(app.staticTexts["Projected income"].waitForExistence(timeout: 10))
+            XCTAssertTrue(
+                app.staticTexts
+                    .matching(NSPredicate(format: "label BEGINSWITH %@", "Projected net"))
+                    .firstMatch
+                    .waitForExistence(timeout: 10)
+            )
+            let transactionsScreenshot = XCTAttachment(screenshot: app.screenshot())
+            transactionsScreenshot.name = "future-projection-\(name)-transactions"
+            transactionsScreenshot.lifetime = .keepAlways
+            add(transactionsScreenshot)
+
+            app.buttons["tab.budget"].tap()
+            let monthlyBudget = app.staticTexts["MONTHLY BUDGET"]
+            XCTAssertTrue(monthlyBudget.waitForExistence(timeout: 10))
+            scrollToHittable(monthlyBudget, in: app)
+            let budgetScreenshot = XCTAttachment(screenshot: app.screenshot())
+            budgetScreenshot.name = "future-projection-\(name)-budget"
+            budgetScreenshot.lifetime = .keepAlways
+            add(budgetScreenshot)
+            app.terminate()
+        }
+    }
+
+    private func launchSyntheticScenario(
+        _ argument: String,
+        accessibility3: Bool = false
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing", argument]
+        let contentSizeCategory = accessibility3
+            ? UIContentSizeCategory.accessibilityExtraLarge.rawValue
+            : UIContentSizeCategory.large.rawValue
+        app.launchArguments += [
+            "-UIPreferredContentSizeCategoryName",
+            contentSizeCategory
+        ]
         app.launch()
         return app
     }
@@ -138,5 +257,16 @@ final class BudgetMateUITests: XCTestCase {
         }
         XCTAssertNotNil(fallback, "The graphical calendar should expose a selectable date.")
         fallback?.tap()
+    }
+
+    private func scrollToHittable(_ element: XCUIElement, in app: XCUIApplication) {
+        for _ in 0..<8 where !element.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(element.isHittable)
+    }
+
+    private func dismissConfirmationDialog(in app: XCUIApplication) {
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).tap()
     }
 }
